@@ -1,0 +1,125 @@
+2026-01-05 08:54:56,802 - Goodinfo30HighCrawler - INFO - 開始抓取: 突破30日新高
+2026-01-05 08:54:56,802 - Goodinfo30HighCrawler - INFO - 第 1 次嘗試 (共 3 次)
+2026-01-05 08:56:01,784 - Goodinfo30HighCrawler - INFO - ✓ 表格載入成功
+2026-01-05 08:56:06,434 - Goodinfo30HighCrawler - INFO - ✓ 成功抓取 151 筆資料
+2026-01-05 08:56:06,443 - Goodinfo30HighCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\30high\20260102_突破30日新高.csv
+2026-01-05 08:57:15,206 - Goodinfo30HighCrawler - INFO - 開始抓取: 突破30日新高
+2026-01-05 08:57:15,206 - Goodinfo30HighCrawler - INFO - 第 1 次嘗試 (共 3 次)
+2026-01-05 08:57:57,603 - Goodinfo30HighCrawler - INFO - ✓ 表格載入成功
+2026-01-05 08:58:02,260 - Goodinfo30HighCrawler - INFO - ✓ 成功抓取 151 筆資料
+2026-01-05 08:58:02,266 - Goodinfo30HighCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\30high\20260102_突破30日新高.csv
+2026-01-05 10:46:37,267 - GoodinfoRevenueHighCrawler - INFO - 開始抓取: 月營收創新高
+2026-01-05 10:46:37,267 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試 (共 3 次)
+2026-01-05 10:46:44,748 - GoodinfoRevenueHighCrawler - INFO - ✓ 表格載入成功
+2026-01-05 10:46:49,417 - GoodinfoRevenueHighCrawler - INFO - ✓ 成功抓取 190 筆資料
+2026-01-05 10:46:49,423 - GoodinfoRevenueHighCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\revenue_high\20260105_月營收創新高.csv
+2026-01-05 10:49:40,139 - GoodinfoRevenueHighCrawler - INFO - 本機已有今日資料，跳過抓取
+2026-01-05 10:49:59,017 - GoodinfoRevenueHighCrawler - INFO - 開始抓取: 月營收創新高
+2026-01-05 10:49:59,018 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試 (共 3 次)
+2026-01-05 10:50:12,416 - GoodinfoRevenueHighCrawler - WARNING - ✗ 連線逾時
+2026-01-05 10:50:14,526 - GoodinfoRevenueHighCrawler - INFO - 等待 5 秒後重試...
+2026-01-05 10:50:19,527 - GoodinfoRevenueHighCrawler - INFO - 第 2 次嘗試 (共 3 次)
+2026-01-05 10:50:30,952 - GoodinfoRevenueHighCrawler - WARNING - ✗ 連線逾時
+2026-01-05 10:50:33,113 - GoodinfoRevenueHighCrawler - INFO - 等待 5 秒後重試...
+2026-01-05 10:50:38,113 - GoodinfoRevenueHighCrawler - INFO - 第 3 次嘗試 (共 3 次)
+2026-01-05 10:51:45,011 - GoodinfoRevenueHighCrawler - INFO - ✓ 表格載入成功
+2026-01-05 10:51:49,693 - GoodinfoRevenueHighCrawler - INFO - ✓ 成功抓取 190 筆資料
+2026-01-05 10:51:49,700 - GoodinfoRevenueHighCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\revenue_high\20260105_月營收創新高.csv
+2026-01-05 10:54:56,605 - GoodinfoRevenueHighCrawler - INFO - 本機已有今日資料，跳過抓取
+2026-01-05 10:55:13,279 - GoodinfoRevenueHighCrawler - INFO - 開始抓取: 月營收創新高
+2026-01-05 10:55:13,279 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試 (共 3 次)
+2026-01-05 10:55:28,006 - GoodinfoRevenueHighCrawler - INFO - ✓ 表格載入成功
+2026-01-05 10:55:32,679 - GoodinfoRevenueHighCrawler - INFO - ✓ 成功抓取 190 筆資料
+2026-01-05 10:55:32,685 - GoodinfoRevenueHighCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\revenue_high\20260105_月營收創新高.csv
+2026-01-05 10:57:28,012 - GoodinfoRevenueHighCrawler - INFO - 本機已有今日資料，跳過抓取
+2026-01-05 10:57:51,624 - GoodinfoRevenueHighCrawler - INFO - 開始抓取: 月營收創新高
+2026-01-05 10:57:51,624 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試 (共 3 次)
+2026-01-05 10:57:59,445 - GoodinfoRevenueHighCrawler - INFO - ✓ 表格載入成功
+2026-01-05 10:58:04,073 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 歷月 排名
+2026-01-05 10:58:04,073 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 歷年 排名
+2026-01-05 10:58:04,075 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 累月 營收 歷年 排名
+2026-01-05 10:58:04,075 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 創紀錄 月數
+2026-01-05 10:58:04,075 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 連增減 月數
+2026-01-05 10:58:04,076 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 創紀錄 年數
+2026-01-05 10:58:04,076 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 累月 營收 創紀錄 年數
+2026-01-05 10:58:04,077 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 累月 營收 連增減 年數
+2026-01-05 10:58:04,078 - GoodinfoRevenueHighCrawler - INFO - ✓ 成功抓取 190 筆資料
+2026-01-05 10:58:04,083 - GoodinfoRevenueHighCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\revenue_high\20260105_月營收創新高.csv
+2026-01-05 11:04:22,340 - GoodinfoRevenueHighCrawler - INFO - 開始抓取: 月營收創新高
+2026-01-05 11:04:22,340 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試 (共 3 次)
+2026-01-05 11:05:27,096 - GoodinfoRevenueHighCrawler - INFO - ✓ 表格載入成功
+2026-01-05 11:05:31,756 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 歷月 排名
+2026-01-05 11:05:31,756 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 歷年 排名
+2026-01-05 11:05:31,758 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 累月 營收 歷年 排名
+2026-01-05 11:05:31,758 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 創紀錄 月數
+2026-01-05 11:05:31,759 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 連增減 月數
+2026-01-05 11:05:31,759 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 創紀錄 年數
+2026-01-05 11:05:31,759 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 累月 營收 創紀錄 年數
+2026-01-05 11:05:31,760 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 累月 營收 連增減 年數
+2026-01-05 11:05:31,760 - GoodinfoRevenueHighCrawler - INFO - ✓ 成功抓取 190 筆資料
+2026-01-05 11:05:31,765 - GoodinfoRevenueHighCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\revenue_high\20260105_月營收創新高.csv
+2026-01-05 11:06:07,933 - GoodinfoRevenueHighCrawler - INFO - 開始抓取: 月營收創新高
+2026-01-05 11:06:07,933 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試 (共 3 次)
+2026-01-05 11:06:16,531 - GoodinfoRevenueHighCrawler - INFO - ✓ 表格載入成功
+2026-01-05 11:06:21,224 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 歷月 排名
+2026-01-05 11:06:21,225 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 歷年 排名
+2026-01-05 11:06:21,226 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 累月 營收 歷年 排名
+2026-01-05 11:06:21,226 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 創紀錄 月數
+2026-01-05 11:06:21,227 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 連增減 月數
+2026-01-05 11:06:21,227 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 單月 營收 創紀錄 年數
+2026-01-05 11:06:21,228 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 累月 營收 創紀錄 年數
+2026-01-05 11:06:21,228 - GoodinfoRevenueHighCrawler - INFO - 解析欄位: 累月 營收 連增減 年數
+2026-01-05 11:06:21,228 - GoodinfoRevenueHighCrawler - INFO - ✓ 成功抓取 190 筆資料
+2026-01-05 11:06:21,234 - GoodinfoRevenueHighCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\revenue_high\20260105_月營收創新高.csv
+2026-01-05 11:11:15,064 - GoodinfoRevenueHighCrawler - INFO - 開始抓取: 月營收創新高
+2026-01-05 11:11:15,065 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試 (共 3 次)
+2026-01-05 11:11:23,341 - GoodinfoRevenueHighCrawler - INFO - ✓ 表格載入成功
+2026-01-05 11:11:28,043 - GoodinfoRevenueHighCrawler - INFO - 解析排名欄位: 單月 營收 歷月 排名
+2026-01-05 11:11:28,044 - GoodinfoRevenueHighCrawler - INFO - 解析排名欄位: 單月 營收 歷年 排名
+2026-01-05 11:11:28,044 - GoodinfoRevenueHighCrawler - INFO - 解析排名欄位: 累月 營收 歷年 排名
+2026-01-05 11:11:28,046 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 單月 營收 創紀錄 月數
+2026-01-05 11:11:28,046 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 單月 營收 連增減 月數
+2026-01-05 11:11:28,047 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 單月 營收 創紀錄 年數
+2026-01-05 11:11:28,047 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 累月 營收 創紀錄 年數
+2026-01-05 11:11:28,047 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 累月 營收 連增減 年數
+2026-01-05 11:11:28,048 - GoodinfoRevenueHighCrawler - INFO - ✓ 成功抓取 190 筆資料
+2026-01-05 11:11:28,052 - GoodinfoRevenueHighCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\revenue_high\20260105_月營收創新高.csv
+2026-01-05 14:22:38,865 - GoodinfoHolderChangeCrawler - INFO - 開始抓取: 大戶持股週增減 (參數: min=0.01, max=)
+2026-01-05 14:22:38,865 - GoodinfoHolderChangeCrawler - INFO - 第 1 次嘗試 (共 3 次)
+2026-01-05 14:22:50,039 - GoodinfoHolderChangeCrawler - INFO - ✓ 表格載入成功
+2026-01-05 14:22:55,723 - GoodinfoHolderChangeCrawler - INFO - 清理文字欄位: 持股 資料 週別
+2026-01-05 14:22:55,724 - GoodinfoHolderChangeCrawler - INFO - 清理文字欄位: 更新 日期
+2026-01-05 14:22:55,724 - GoodinfoHolderChangeCrawler - INFO - ✓ 成功抓取 586 筆資料
+2026-01-05 14:22:55,733 - GoodinfoHolderChangeCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\holder_change\20260102_大戶持股週增減_min0.01.csv
+2026-01-05 17:56:27,184 - Goodinfo30HighCrawler - INFO - 開始抓取: 突破30日新高
+2026-01-05 17:56:27,184 - Goodinfo30HighCrawler - INFO - 第 1 次嘗試 (共 3 次)
+2026-01-05 17:56:36,218 - Goodinfo30HighCrawler - INFO - ✓ 表格載入成功
+2026-01-05 17:56:36,271 - GoodinfoRevenueHighCrawler - INFO - 本機已有今日資料，跳過抓取
+2026-01-05 17:56:40,808 - Goodinfo30HighCrawler - INFO - ✓ 成功抓取 129 筆資料
+2026-01-05 17:56:40,814 - Goodinfo30HighCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\30high\20260105_突破30日新高.csv
+2026-01-05 17:57:18,205 - GoodinfoRevenueHighCrawler - INFO - 開始抓取: 月營收創新高
+2026-01-05 17:57:18,205 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試 (共 3 次)
+2026-01-05 17:57:27,185 - GoodinfoRevenueHighCrawler - INFO - ✓ 表格載入成功
+2026-01-05 17:57:31,902 - GoodinfoRevenueHighCrawler - INFO - 解析排名欄位: 單月 營收 歷月 排名
+2026-01-05 17:57:31,902 - GoodinfoRevenueHighCrawler - INFO - 解析排名欄位: 單月 營收 歷年 排名
+2026-01-05 17:57:31,903 - GoodinfoRevenueHighCrawler - INFO - 解析排名欄位: 累月 營收 歷年 排名
+2026-01-05 17:57:31,905 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 單月 營收 創紀錄 月數
+2026-01-05 17:57:31,906 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 單月 營收 連增減 月數
+2026-01-05 17:57:31,906 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 單月 營收 創紀錄 年數
+2026-01-05 17:57:31,907 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 累月 營收 創紀錄 年數
+2026-01-05 17:57:31,907 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 累月 營收 連增減 年數
+2026-01-05 17:57:31,907 - GoodinfoRevenueHighCrawler - INFO - ✓ 成功抓取 190 筆資料
+2026-01-05 17:57:31,912 - GoodinfoRevenueHighCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\revenue_high\20260105_月營收創新高.csv
+2026-01-06 07:32:18,894 - GoodinfoRevenueHighCrawler - INFO - 開始抓取: 月營收創新高
+2026-01-06 07:32:18,895 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試 (共 3 次)
+2026-01-06 07:33:24,131 - GoodinfoRevenueHighCrawler - INFO - ✓ 表格載入成功
+2026-01-06 07:33:28,954 - GoodinfoRevenueHighCrawler - INFO - 解析排名欄位: 單月 營收 歷月 排名
+2026-01-06 07:33:28,954 - GoodinfoRevenueHighCrawler - INFO - 解析排名欄位: 單月 營收 歷年 排名
+2026-01-06 07:33:28,955 - GoodinfoRevenueHighCrawler - INFO - 解析排名欄位: 累月 營收 歷年 排名
+2026-01-06 07:33:28,956 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 單月 營收 創紀錄 月數
+2026-01-06 07:33:28,956 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 單月 營收 連增減 月數
+2026-01-06 07:33:28,957 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 單月 營收 創紀錄 年數
+2026-01-06 07:33:28,957 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 累月 營收 創紀錄 年數
+2026-01-06 07:33:28,957 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 累月 營收 連增減 年數
+2026-01-06 07:33:28,958 - GoodinfoRevenueHighCrawler - INFO - ✓ 成功抓取 203 筆資料
+2026-01-06 07:33:28,967 - GoodinfoRevenueHighCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\revenue_high\20260106_月營收創新高.csv
