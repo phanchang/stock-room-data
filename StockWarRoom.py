@@ -62,7 +62,7 @@ def get_stock_name(stock_code):
 # ==================================================
 # 🔄 通用函數：建立股票分析頁籤內容
 # ==================================================
-def build_stock_tabs_content(stock_code: str, selected_tab: str, period: str = "D", prefix: str = ""):
+def build_stock_tabs_content(stock_code: str, selected_tab: str, period: str = "D", prefix: str = "", compact: bool = False):
     """通用函數：根據選擇的頁籤返回對應內容"""
 
     # ========== 取得所有資料 ==========
@@ -124,7 +124,7 @@ def build_stock_tabs_content(stock_code: str, selected_tab: str, period: str = "
 
                 dcc.Graph(
                     figure=build_chart(data['k'], stock_code, period),
-                    style={"width": "100%", "height": "520px"}
+                    style={"width": "100%", "height": "400px" if compact else "520px"}  # ⭐ 動態高度
                 )
             ])
         else:
@@ -141,7 +141,7 @@ def build_stock_tabs_content(stock_code: str, selected_tab: str, period: str = "
                 build_fa_summary_table(data['fa'], stock_code),
                 dcc.Graph(
                     figure=build_fa_price_chart(data['fa'], stock_code),
-                    style={"width": "100%", "height": "400px"}
+                    style={"width": "100%", "height": "280px" if compact else "400px"}
                 ),
                 build_fa_detail_table(data['fa'])
             ])
@@ -238,7 +238,7 @@ def build_stock_tabs_content(stock_code: str, selected_tab: str, period: str = "
                     html.Div([
                         html.Label("選擇視圖:", style={"marginRight": "10px", "fontWeight": "bold"}),
                         dcc.RadioItems(
-                            id=f"{prefix}eps-view-radio",  # ⭐ 加上前綴
+                            id=f"{prefix}eps-view-radio",  # ⭐ 回到字串 ID
                             options=[
                                 {"label": "單季", "value": "quarter"},
                                 {"label": "累季", "value": "cumulative"},
@@ -252,7 +252,7 @@ def build_stock_tabs_content(stock_code: str, selected_tab: str, period: str = "
                               "backgroundColor": "#f0f0f0", "borderRadius": "5px"}),
 
                     html.Div(
-                        id=f"{prefix}eps-content-container",  # ⭐ 加上前綴
+                        id=f"{prefix}eps-content-container",  # ⭐ 回到字串 ID
                         children=build_eps_section(stock_code, view_type="quarter", n_quarters=12)
                     )
                 ]),
@@ -300,7 +300,7 @@ sys.path.insert(0, 'config')
 def load_filter_data(condition_name: str) -> pd.DataFrame:
     """
     載入指定條件的資料
-    ✅ 加入除錯訊息
+    ✅ 清理欄位名稱，移除空格
     """
     config = FILTER_CONDITIONS.get(condition_name)
     if not config:
@@ -315,11 +315,13 @@ def load_filter_data(condition_name: str) -> pd.DataFrame:
     try:
         df = pd.read_csv(filepath, encoding='utf-8-sig')
 
-        # ✅ 顯示載入資訊
-        print(f"📂 {condition_name}: 載入 {filepath.name} ({len(df)} 筆資料)")
-        print(f"   欄位: {list(df.columns[:5])}...")  # 顯示前5個欄位
+        # ✅ 清理欄位名稱：移除空格
+        df.columns = df.columns.str.replace(' ', '', regex=False)
 
-        # ✅ 檢查是否有股票代號欄位
+        print(f"📂 {condition_name}: 載入 {filepath.name} ({len(df)} 筆資料)")
+        print(f"   欄位: {list(df.columns[:10])}...")  # 顯示前10個欄位
+
+        # 檢查是否有股票代號欄位
         possible_code_columns = ['代號', '股票代號', 'code', 'stock_code', '證券代號']
         has_code_column = any(col in df.columns for col in possible_code_columns)
 
@@ -334,86 +336,118 @@ def load_filter_data(condition_name: str) -> pd.DataFrame:
         print(f"❌ 載入 {condition_name} 失敗: {e}")
         return None
 
+
 def merge_filter_results(selected_conditions: list) -> pd.DataFrame:
-    """合併多個條件的結果 (AND 邏輯)"""
+    """
+    合併多個條件的結果 (AND 邏輯)
+    ✅ 保留所有原始欄位的聯集
+    ✅ 使用簡潔的欄位別名
+    """
     if not selected_conditions:
         return pd.DataFrame()
 
-    result_df = load_filter_data(selected_conditions[0])
-    if result_df is None:
-        return pd.DataFrame()
+    # ========== 1️⃣ 載入所有條件的資料 ==========
+    dfs = []
+    all_stock_codes = []
 
-    # ✅ 統一欄位名稱：將所有可能的股票代號欄位改名為 '代號'
-    def normalize_stock_code_column(df):
-        """將各種股票代號欄位統一為 '代號'"""
+    for i, condition in enumerate(selected_conditions):
+        df = load_filter_data(condition)
+        if df is None:
+            print(f"⚠️ 警告：無法載入 {condition} 的資料")
+            continue
+
+        # 統一股票代號欄位名稱為 '代號'
         possible_columns = ['代號', '股票代號', 'code', 'stock_code', '證券代號']
         for col in possible_columns:
             if col in df.columns and col != '代號':
                 df = df.rename(columns={col: '代號'})
                 break
 
-        # 確保 '代號' 是字串型態且去除空白
-        if '代號' in df.columns:
-            df['代號'] = df['代號'].astype(str).str.strip()
-
-        return df
-
-    result_df = normalize_stock_code_column(result_df)
-
-    # ✅ 確保有 '代號' 欄位
-    if '代號' not in result_df.columns:
-        print(f"⚠️ 警告：{selected_conditions[0]} 沒有股票代號欄位")
-        return pd.DataFrame()
-
-    # 取得第一個條件的股票代號集合
-    common_codes = set(result_df['代號'])
-
-    # ✅ 依序與其他條件取交集
-    for condition in selected_conditions[1:]:
-        df = load_filter_data(condition)
-        if df is None:
-            print(f"⚠️ 警告：無法載入 {condition} 的資料")
-            continue
-
-        df = normalize_stock_code_column(df)
-
         if '代號' not in df.columns:
             print(f"⚠️ 警告：{condition} 沒有股票代號欄位")
             continue
 
-        # 取交集
-        condition_codes = set(df['代號'])
-        common_codes = common_codes & condition_codes
+        # 確保 '代號' 是字串型態且去除空白
+        df['代號'] = df['代號'].astype(str).str.strip()
 
-        print(f"📊 {condition}: {len(condition_codes)} 檔 | 交集後剩餘: {len(common_codes)} 檔")
+        # ✅ 重新命名欄位（除了 代號、名稱）
+        rename_map = {}
+        for col in df.columns:
+            if col not in ['代號', '名稱']:
+                rename_map[col] = f"{col}_{condition}"
+        df = df.rename(columns=rename_map)
 
-    # ✅ 根據交集結果篩選第一個資料集
-    result_df = result_df[result_df['代號'].isin(common_codes)]
+        dfs.append(df)
+        all_stock_codes.append(set(df['代號']))
 
-    # ✅ 只保留基本欄位
-    display_cols = ['代號', '名稱', '成交', '漲跌幅']
+        print(f"📊 {condition}: {len(df)} 檔股票")
 
-    # 處理欄位名稱變體
-    column_mapping = {
-        '股票名稱': '名稱',
-        'name': '名稱',
-        '收盤價': '成交',
-        'price': '成交',
-        '漲跌 幅': '漲跌幅',
-        '漲跌(%)': '漲跌幅',
-        'change_pct': '漲跌幅'
+    if not dfs:
+        return pd.DataFrame()
+
+    # ========== 2️⃣ 取交集的股票代號 ==========
+    common_codes = all_stock_codes[0]
+    for codes in all_stock_codes[1:]:
+        common_codes = common_codes & codes
+
+    print(f"\n✅ 交集後剩餘: {len(common_codes)} 檔股票\n")
+
+    # ========== 3️⃣ 合併所有欄位 ==========
+    result_df = dfs[0][dfs[0]['代號'].isin(common_codes)].copy()
+
+    for df in dfs[1:]:
+        df_filtered = df[df['代號'].isin(common_codes)].copy()
+        result_df = pd.merge(result_df, df_filtered, on='代號', how='outer', suffixes=('', '_dup'))
+
+        # 處理重複的 '名稱' 欄位（保留第一個非空值）
+        if '名稱_dup' in result_df.columns:
+            result_df['名稱'] = result_df['名稱'].fillna(result_df['名稱_dup'])
+            result_df = result_df.drop(columns=['名稱_dup'])
+
+    # ========== 4️⃣ 定義欄位顯示配置（原始欄位 -> 顯示別名）==========
+    column_alias = {
+        # 基本資訊
+        '代號': '代號',
+        '名稱': '名稱',
+
+        # 價格相關
+        '成交_突破30日新高': '成交價',
+        '今年累計漲跌幅_突破30日新高': '年漲幅%',
+        '3個月累計漲跌幅_突破30日新高': '3月漲幅%',
+        '半年累計漲跌價_突破30日新高': '半年漲幅%',
+
+        # 大戶相關
+        '＞1千增減(%)_大戶持股增加': '大戶%',
+        '＞1千增減(張)_大戶持股增加': '大戶(張)',
+
+        # 營收相關
+        '單月營收(億)_月營收創新高': '營收億',
+        '單月營收歷月排名_月營收創新高': '營收歷年排名',
+        '單月營收連增減月數_月營收創新高': '連增月',
+        #'單月營收創紀錄月數_月營收創新高': '創紀錄',
+        '營收月份_月營收創新高': '月份',
     }
 
-    result_df = result_df.rename(columns=column_mapping)
+    # ========== 5️⃣ 只保留配置中的欄位並重命名 ==========
+    available_cols = []
+    rename_map = {}
 
-    # 只保留存在的欄位
-    available_cols = [col for col in display_cols if col in result_df.columns]
+    for original_col, display_name in column_alias.items():
+        if original_col in result_df.columns:
+            available_cols.append(original_col)
+            rename_map[original_col] = display_name
 
     if not available_cols:
-        return result_df  # 如果沒有標準欄位，返回原始資料
+        print("\n⚠️ 未找到配置的欄位，顯示所有欄位")
+        return result_df.reset_index(drop=True)
 
-    return result_df[available_cols].reset_index(drop=True)
+    # 篩選欄位並重命名
+    result_df = result_df[available_cols].rename(columns=rename_map)
 
+    # ✅ 顯示最終欄位
+    print(f"\n📋 顯示欄位: {list(result_df.columns)}\n")
+
+    return result_df.reset_index(drop=True)
 def build_quick_filter_layout():
     """
     建立快速選股介面
@@ -2974,11 +3008,52 @@ def update_tab_content(n_clicks, selected_tab, stock_code, current_period):
         stock_code=stock_code,
         selected_tab=selected_tab,
         period=period,
-        prefix="war-"  # ⭐ 戰情室使用 "war-" 前綴
+        prefix="war-",  # ⭐ 戰情室使用 "war-" 前綴
+        compact = False  # ⭐ 維持正常大小
     )
 
     return content, period
 
+# ==================================================
+# Callback: 戰情室 - 技術面週期切換
+# ==================================================
+@app.callback(
+    Output("period-store", "data", allow_duplicate=True),
+    Output("tabs-content", "children", allow_duplicate=True),
+    Input("war-period-radio", "value"),  # ⭐ 加上 war- 前綴
+    State("stock-input", "value"),
+    prevent_initial_call=True
+)
+def update_war_period(period, stock_code):
+    """戰情室 - 切換技術面週期"""
+    if not stock_code or not period:
+        return dash.no_update, dash.no_update
+
+    try:
+        df_k = get_kline_data(stock_code, period)
+        return period, html.Div([
+            html.Div([
+                html.Label("選擇週期:", style={"marginRight": "10px", "fontWeight": "bold"}),
+                dcc.RadioItems(
+                    id="war-period-radio",  # ⭐ 確保 ID 一致
+                    options=[
+                        {"label": "日線", "value": "D"},
+                        {"label": "週線", "value": "W"},
+                        {"label": "月線", "value": "M"}
+                    ],
+                    value=period,
+                    inline=True,
+                    labelStyle={"marginRight": "15px"}
+                )
+            ], style={"marginBottom": "15px", "padding": "10px", "backgroundColor": "#f0f0f0", "borderRadius": "5px"}),
+
+            dcc.Graph(
+                figure=build_chart(df_k, stock_code, period),
+                style={"width": "100%", "height": "520px"}
+            )
+        ])
+    except Exception as e:
+        return period, html.Div(f"更新失敗: {e}")
 # ==================================================
 # 🆕 輔助函數: 建立可摺疊區塊
 # ==================================================
@@ -3256,19 +3331,17 @@ def highlight_selected_row(stock_code, table_data):
 
 
 # ==================================================
-# 🆕 Callback: EPS 視圖切換
+# 戰情室 - EPS 視圖切換
 # ==================================================
 @app.callback(
-    Output("eps-content-container", "children"),
-    Input("eps-view-radio", "value"),
+    Output("war-eps-content-container", "children"),
+    Input("war-eps-view-radio", "value"),
     State("stock-input", "value"),
     prevent_initial_call=True
 )
-def update_eps_view(view_type, stock_code):
-    """
-    根據選擇的視圖類型更新 EPS 圖表和表格
-    """
-    if not stock_code:
+def update_war_eps_view(view_type, stock_code):
+    """戰情室 - EPS 視圖切換"""
+    if not stock_code or not view_type:
         return dash.no_update
 
     return build_eps_section(stock_code, view_type=view_type, n_quarters=12)
@@ -3341,9 +3414,9 @@ def switch_entry(entry):
                     )
                 ],
                 style={
-                    "height": "40vh",
+                    "height": "46vh",
                     "overflowY": "auto",
-                    "marginBottom": "20px",
+                    "marginBottom": "10px",
                     "border": "1px solid #ddd",
                     "borderRadius": "5px",
                     "backgroundColor": "#f9f9f9"
@@ -3354,7 +3427,7 @@ def switch_entry(entry):
             html.Div(
                 id="filter-detail-tabs-container",
                 children=[],
-                style={"height": "55vh", "overflowY": "auto"}
+                style={"height": "54vh", "overflowY": "auto"}
             )
         ])
 
@@ -3620,16 +3693,87 @@ def update_filter_result(n_clicks_list, button_ids):
         dash_table.DataTable(
             id="filter-result-datatable",
             columns=[{"name": col, "id": col} for col in df_result.columns],
+            sort_action="native",  # ⭐ 啟用排序功能
+            sort_mode="multi",  # ⭐ 允許多欄位排序（可選 "single" 只允許單欄位）
             data=df_result.to_dict("records"),
             row_selectable="single",
             selected_rows=[],
-            style_table={"overflowX": "auto"},
-            style_cell={"textAlign": "center", "padding": "8px", "fontSize": "13px"},
-            style_header={"fontWeight": "bold", "backgroundColor": "#f0f0f0"},
-            page_size=10
+
+
+
+            style_table={
+                "overflowX": "auto",
+                "maxWidth": "100%",  # ⭐ 限制最大寬度
+                "height": "350px"  # ⭐ 固定高度
+            },
+            style_cell={
+                "textAlign": "center",
+                "padding": "4px 8px",  # ⭐ 減少內距 (原本 8px)
+                "fontSize": "12px",  # ⭐ 縮小字體 (原本 13px)
+                "minWidth": "60px",  # ⭐ 設定最小寬度
+                "maxWidth": "120px",  # ⭐ 設定最大寬度
+                "overflow": "hidden",
+                "textOverflow": "ellipsis",
+                "whiteSpace": "normal"  # ⭐ 允許換行
+            },
+            style_header={
+                "fontWeight": "bold",
+                "backgroundColor": "#f0f0f0",
+                "padding": "6px 8px",  # ⭐ 標題也縮小
+                "fontSize": "12px",
+                "textAlign": "center"
+            },
+            # ⭐ 針對特定欄位設定寬度
+            style_cell_conditional=[
+                {'if': {'column_id': '代號'}, 'width': '70px', 'minWidth': '70px', 'maxWidth': '70px'},
+                {'if': {'column_id': '名稱'}, 'width': '80px', 'minWidth': '80px', 'maxWidth': '80px'},
+                {'if': {'column_id': '成交價'}, 'width': '70px'},
+                {'if': {'column_id': '年漲幅%'}, 'width': '75px'},
+                {'if': {'column_id': '3月漲幅%'}, 'width': '65px'},
+                {'if': {'column_id': '半年漲幅%'}, 'width': '65px'},
+                {'if': {'column_id': '大戶%'}, 'width': '70px'},
+                {'if': {'column_id': '大戶(張)'}, 'width': '75px'},
+                {'if': {'column_id': '營收億'}, 'width': '70px'},
+                {'if': {'column_id': '營收歷年排名'}, 'width': '60px'},
+                {'if': {'column_id': '連增月'}, 'width': '70px'},
+                #{'if': {'column_id': '創紀錄'}, 'width': '70px'},
+                {'if': {'column_id': '月份'}, 'width': '60px'},
+            ],
+            page_size=10  # ⭐ 增加每頁顯示數量 (原本 10)
         )
     ])
 
+
+# ==================================================
+# 🆕 快速選股 - 整列 Highlight
+# ==================================================
+@app.callback(
+    Output("filter-result-datatable", "style_data_conditional"),
+    Input("filter-result-datatable", "selected_rows"),
+    State("filter-result-datatable", "data"),
+    prevent_initial_call=True
+)
+def highlight_selected_row(selected_rows, table_data):
+    """選中某列時，讓整列都變色"""
+    if not selected_rows or not table_data:
+        return []
+
+    selected_row_idx = selected_rows[0]
+
+    # 為選中列的每個欄位都設定樣式
+    styles = []
+    for col_id in table_data[0].keys():  # 取得所有欄位名稱
+        styles.append({
+            "if": {
+                "row_index": selected_row_idx,
+                "column_id": col_id
+            },
+            "backgroundColor": "#FFD700",
+            "color": "black",
+            "fontWeight": "bold"
+        })
+
+    return styles
 
 # 3️⃣ 點選表格 → 右下方顯示戰情室頁籤
 @app.callback(
@@ -3650,10 +3794,12 @@ def show_stock_detail_tabs(selected_rows, table_data):
         html.Div(
             f"📊 {stock_name} ({stock_code})",
             style={
-                "fontSize": "18px",
+                "fontSize": "12px",  # ⭐ 改小（原本 18px）
                 "fontWeight": "bold",
-                "marginBottom": "15px",
+                "marginBottom": "8px",  # ⭐ 改小（原本 15px）
                 "color": "#2c3e50"
+
+
             }
         ),
 
@@ -3664,7 +3810,15 @@ def show_stock_detail_tabs(selected_rows, table_data):
                 dcc.Tab(label="技術面", value="tab-tech"),
                 dcc.Tab(label="財務面", value="tab-revenue"),
                 dcc.Tab(label="籌碼面", value="tab-chips")
-            ]
+            ],
+            style={
+                "height": "16px",  # ⭐ 新增：調整頁籤高度（預設約 44px）
+                "alignItems": "center",
+            }
+            # ⭐ 新增：調整單個頁籤的樣式
+            #parent_style={
+            #    "marginBottom": "10px"  # ⭐ 減少下方間距（原本可能更大）
+            #}
         ),
 
         dcc.Loading(
@@ -3697,8 +3851,9 @@ def update_filter_detail_content(selected_tab, selected_rows, table_data):
 
     return content
 
+
 # ==================================================
-# 🆕 快速選股 - EPS 視圖切換
+# 快速選股 - EPS 視圖切換
 # ==================================================
 @app.callback(
     Output("filter-eps-content-container", "children"),
@@ -3708,14 +3863,44 @@ def update_filter_detail_content(selected_tab, selected_rows, table_data):
     prevent_initial_call=True
 )
 def update_filter_eps_view(view_type, selected_rows, table_data):
-    """快速選股 - 切換 EPS 視圖"""
+    """快速選股 - EPS 視圖切換"""
     if not selected_rows or not table_data or not view_type:
         return dash.no_update
 
     stock_code = str(table_data[selected_rows[0]]["代號"])
     return build_eps_section(stock_code, view_type=view_type, n_quarters=12)
 
+@app.callback(
+    Output({"type": "eps-content", "prefix": dash.dependencies.MATCH}, "children"),
+    Input({"type": "eps-view-radio", "prefix": dash.dependencies.MATCH}, "value"),
+    State("stock-input", "value"),
+    State("filter-result-datatable", "selected_rows"),
+    State("filter-result-datatable", "data"),
+    prevent_initial_call=True
+)
+def update_eps_view_unified(view_type, war_stock_code, selected_rows, table_data):
+    """統一處理 EPS 視圖切換"""
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update
 
+    import json
+    trigger_id = json.loads(ctx.triggered[0]["prop_id"].split(".")[0])
+    prefix = trigger_id.get("prefix", "")
+
+    if prefix == "war-":
+        stock_code = war_stock_code
+    elif prefix == "filter-":
+        if not selected_rows or not table_data:
+            return dash.no_update
+        stock_code = str(table_data[selected_rows[0]]["代號"])
+    else:
+        return dash.no_update
+
+    if not stock_code:
+        return dash.no_update
+
+    return build_eps_section(stock_code, view_type=view_type, n_quarters=12)
 # ==================================================
 # 🆕 快速選股 - 技術面週期切換
 # ==================================================
@@ -3738,7 +3923,8 @@ def update_filter_period(period, selected_rows, table_data, selected_tab):
         stock_code=stock_code,
         selected_tab=selected_tab,
         period=period,
-        prefix="filter-"
+        prefix="filter-",
+        compact=True  # ⭐ 啟用緊湊模式
     )
 
     return content

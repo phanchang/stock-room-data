@@ -123,3 +123,8 @@
 2026-01-06 07:33:28,957 - GoodinfoRevenueHighCrawler - INFO - 保留文字欄位: 累月 營收 連增減 年數
 2026-01-06 07:33:28,958 - GoodinfoRevenueHighCrawler - INFO - ✓ 成功抓取 203 筆資料
 2026-01-06 07:33:28,967 - GoodinfoRevenueHighCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\revenue_high\20260106_月營收創新高.csv
+2026-01-06 16:03:35,846 - Goodinfo30HighCrawler - INFO - 開始抓取: 突破30日新高
+2026-01-06 16:03:35,849 - Goodinfo30HighCrawler - INFO - 第 1 次嘗試 (共 3 次)
+2026-01-06 16:03:43,482 - Goodinfo30HighCrawler - INFO - ✓ 表格載入成功
+2026-01-06 16:03:48,013 - Goodinfo30HighCrawler - INFO - ✓ 成功抓取 136 筆資料
+2026-01-06 16:03:48,019 - Goodinfo30HighCrawler - INFO - ✓ 資料已儲存至: data\goodinfo\30high\20260106_突破30日新高.csv
