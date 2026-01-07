@@ -92,8 +92,11 @@ def compute_diff(df: pd.DataFrame, highlight_pct: float = 10) -> pd.DataFrame:
     latest = df[df['date'] == latest_date].copy()
     prev = df[df['date'] == prev_date].copy()
 
+    # ✅ 確保沒有重複的 stock_code
+    latest = latest.drop_duplicates(subset=['stock_code'], keep='last')
+    prev = prev.drop_duplicates(subset=['stock_code'], keep='last')
     merged = latest.merge(
-        prev[['stock_code', 'shares']],
+        prev[['stock_code', 'shares', 'stock_name']],
         on='stock_code',
         how='outer',
         suffixes=('_today', '_yesterday')
@@ -101,7 +104,11 @@ def compute_diff(df: pd.DataFrame, highlight_pct: float = 10) -> pd.DataFrame:
 
     merged['shares_today'] = merged['shares_today'].fillna(0)
     merged['shares_yesterday'] = merged['shares_yesterday'].fillna(0)
-    merged['stock_name'] = merged['stock_name'].fillna('')
+    merged['stock_name'] = merged['stock_name_today'].combine_first(merged['stock_name_yesterday']).fillna('')
+    # ✅ 清理暫時欄位
+    merged = merged.drop(columns=['stock_name_yesterday'], errors='ignore')
+    if 'stock_name_today' in merged.columns:
+        merged = merged.drop(columns=['stock_name_today'], errors='ignore')
 
     merged['shares_change'] = merged['shares_today'] - merged['shares_yesterday']
 
