@@ -417,10 +417,12 @@ def merge_filter_results(selected_conditions: list) -> pd.DataFrame:
         '半年累計漲跌價_突破30日新高': '半年漲幅%',
 
         # 大戶相關
+        '成交_大戶持股增加': '成交價',
         '＞1千增減(%)_大戶持股增加': '大戶%',
         '＞1千增減(張)_大戶持股增加': '大戶(張)',
 
         # 營收相關
+        '成交_月營收創新高': '成交價',
         '單月營收(億)_月營收創新高': '營收億',
         '單月營收歷月排名_月營收創新高': '營收歷年排名',
         '單月營收連增減月數_月營收創新高': '連增月',
@@ -432,25 +434,35 @@ def merge_filter_results(selected_conditions: list) -> pd.DataFrame:
     }
 
     # ========== 5️⃣ 只保留配置中的欄位並重命名 ==========
-    available_cols = []
-    rename_map = {}
+    # ========== 5️⃣ 依顯示名稱去重（同名欄位只留一個） ==========
+
+    display_groups = {}  # display_name -> [original_cols]
 
     for original_col, display_name in column_alias.items():
         if original_col in result_df.columns:
-            available_cols.append(original_col)
-            rename_map[original_col] = display_name
+            display_groups.setdefault(display_name, []).append(original_col)
 
-    if not available_cols:
-        print("\n⚠️ 未找到配置的欄位，顯示所有欄位")
-        return result_df.reset_index(drop=True)
+    final_df = pd.DataFrame()
+    final_df['代號'] = result_df['代號']
+    if '名稱' in result_df.columns:
+        final_df['名稱'] = result_df['名稱']
 
-    # 篩選欄位並重命名
-    result_df = result_df[available_cols].rename(columns=rename_map)
+    for display_name, cols in display_groups.items():
+        if display_name in ['代號', '名稱']:
+            continue
 
-    # ✅ 顯示最終欄位
-    print(f"\n📋 顯示欄位: {list(result_df.columns)}\n")
+        # 👉 依序取第一個非空值
+        final_df[display_name] = (
+            result_df[cols]
+            .bfill(axis=1)
+            .iloc[:, 0]
+        )
 
-    return result_df.reset_index(drop=True)
+    print(f"\n📋 最終顯示欄位: {list(final_df.columns)}\n")
+
+    return final_df.reset_index(drop=True)
+
+
 def build_quick_filter_layout():
     """
     建立快速選股介面
@@ -3698,6 +3710,7 @@ def update_filter_result(n_clicks_list, button_ids):
             columns=[{"name": col, "id": col} for col in df_result.columns],
             sort_action="native",  # ⭐ 啟用排序功能
             sort_mode="multi",  # ⭐ 允許多欄位排序（可選 "single" 只允許單欄位）
+            filter_action="native",
             data=df_result.to_dict("records"),
             row_selectable="single",
             selected_rows=[],
