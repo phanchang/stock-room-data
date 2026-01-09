@@ -425,6 +425,9 @@ def merge_filter_results(selected_conditions: list) -> pd.DataFrame:
         '單月營收歷月排名_月營收創新高': '營收歷年排名',
         '單月營收連增減月數_月營收創新高': '連增月',
         #'單月營收創紀錄月數_月營收創新高': '創紀錄',
+        '單月營收月增(%)_月營收創新高':'單月MoM(%)',
+        '單月營收年增(%)_月營收創新高': '單月YoY(%)',
+        '累月營收年增(%)_月營收創新高': '累月YoY(%)',
         '營收月份_月營收創新高': '月份',
     }
 
@@ -3735,7 +3738,10 @@ def update_filter_result(n_clicks_list, button_ids):
                 {'if': {'column_id': '大戶(張)'}, 'width': '75px'},
                 {'if': {'column_id': '營收億'}, 'width': '70px'},
                 {'if': {'column_id': '營收歷年排名'}, 'width': '60px'},
-                {'if': {'column_id': '連增月'}, 'width': '70px'},
+                {'if': {'column_id': '連增月'}, 'width': '40px'},
+                {'if': {'column_id': '單月MoM(%)'}, 'width': '40px'},
+                {'if': {'column_id': '單月YoY(%)'}, 'width': '40px'},
+                {'if': {'column_id': '累月YoY(%)'}, 'width': '40px'},
                 #{'if': {'column_id': '創紀錄'}, 'width': '70px'},
                 {'if': {'column_id': '月份'}, 'width': '60px'},
             ],
