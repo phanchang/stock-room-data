@@ -3380,33 +3380,30 @@ def switch_entry(entry):
         )
 
     # ========== B 入口：擴充模組 ==========
+    # 在 switch_entry callback 的 B 入口部分
     elif entry == "B":
-        etf_content = html.Div([
-            html.H3("🎯 主動式 ETF 分析", style={"marginBottom": "20px"}),
-
-            # ETF 選擇器
-            html.Div([
-                html.Label("選擇 ETF:", style={"marginRight": "10px", "fontWeight": "bold"}),
-                dcc.Dropdown(
-                    id="etf-selector",
-                    options=get_etf_list(),
-                    value="復華_00991A",
-                    clearable=False,
-                    style={"width": "400px"}
-                )
-            ], style={"marginBottom": "20px"}),
-
-            # 動態內容區域
-            html.Div(
-                id="etf-content-container",
-                children=build_etf_section("復華_00991A")
-            )
-        ])
-
         return (
-            html.Div(etf_content, style={"padding": "20px"}),
-            {"display": "none"},  # ✅ 隱藏戰情室左側區域
-            {"display": "none"},  # 隱藏篩選按鈕
+            html.Div([
+                # 🆕 上方：選擇功能類型
+                html.Div([
+                    dcc.RadioItems(
+                        id="module-selector",
+                        options=[
+                            {"label": "主動式 ETF", "value": "etf"},
+                            {"label": "背景任務", "value": "tasks"}  # 🆕
+                        ],
+                        value="etf",
+                        inline=True,
+                        labelStyle={"marginRight": "20px"}
+                    )
+                ], style={"marginBottom": "20px", "padding": "15px",
+                          "backgroundColor": "#f0f0f0", "borderRadius": "5px"}),
+
+                # 動態內容區域
+                html.Div(id="module-content-container")
+            ], style={"padding": "20px"}),
+            {"display": "none"},
+            {"display": "none"},
             []
         )
 
@@ -3947,6 +3944,401 @@ def update_filter_period(period, selected_rows, table_data, selected_tab):
     )
 
     return content
+
+
+# ==================================================
+# 背景任務管理介面
+# ==================================================
+
+def build_background_tasks_layout():
+    """建立背景任務管理介面"""
+
+    # 取得快取統計資訊
+    from utils.cache import CacheManager
+    cache = CacheManager()
+    cache_info = cache.get_cache_info()
+
+    return html.Div([
+        html.H3("🔧 背景任務管理", style={"marginBottom": "20px"}),
+
+        # ========== 資料更新區塊 ==========
+        html.Div([
+            html.H4("📊 資料更新", style={"marginBottom": "15px"}),
+
+            # 台股更新
+            html.Div([
+                html.Div([
+                    html.Div([
+                        html.H5("台股資料", style={"margin": "0"}),
+                        html.P(
+                            f"已快取: {cache_info['tw_stocks']} 檔 ({cache_info['tw_size_mb']:.1f} MB)",
+                            style={"margin": "5px 0", "color": "#7f8c8d"}
+                        )
+                    ], style={"flex": "1"}),
+
+                    html.Div([
+                        html.Button(
+                            "立即更新",
+                            id="btn-update-tw",
+                            n_clicks=0,
+                            style={
+                                "padding": "10px 20px",
+                                "backgroundColor": "#3498db",
+                                "color": "white",
+                                "border": "none",
+                                "borderRadius": "5px",
+                                "cursor": "pointer",
+                                "fontSize": "14px"
+                            }
+                        )
+                    ])
+                ], style={
+                    "display": "flex",
+                    "justifyContent": "space-between",
+                    "alignItems": "center",
+                    "padding": "15px",
+                    "backgroundColor": "#ecf0f1",
+                    "borderRadius": "8px",
+                    "marginBottom": "15px"
+                })
+            ]),
+
+            # 美股更新
+            html.Div([
+                html.Div([
+                    html.Div([
+                        html.H5("美股資料", style={"margin": "0"}),
+                        html.P(
+                            f"已快取: {cache_info['us_stocks']} 檔 ({cache_info['us_size_mb']:.1f} MB)",
+                            style={"margin": "5px 0", "color": "#7f8c8d"}
+                        )
+                    ], style={"flex": "1"}),
+
+                    html.Div([
+                        html.Button(
+                            "立即更新",
+                            id="btn-update-us",
+                            n_clicks=0,
+                            style={
+                                "padding": "10px 20px",
+                                "backgroundColor": "#3498db",
+                                "color": "white",
+                                "border": "none",
+                                "borderRadius": "5px",
+                                "cursor": "pointer",
+                                "fontSize": "14px"
+                            }
+                        )
+                    ])
+                ], style={
+                    "display": "flex",
+                    "justifyContent": "space-between",
+                    "alignItems": "center",
+                    "padding": "15px",
+                    "backgroundColor": "#ecf0f1",
+                    "borderRadius": "8px"
+                })
+            ])
+        ], style={
+            "marginBottom": "30px",
+            "padding": "20px",
+            "backgroundColor": "#ffffff",
+            "borderRadius": "10px",
+            "boxShadow": "0 2px 4px rgba(0,0,0,0.1)"
+        }),
+
+        # ========== 執行狀態區塊 ==========
+        html.Div([
+            html.H4("📝 執行記錄", style={"marginBottom": "15px"}),
+
+            dcc.Loading(
+                id="loading-task-status",
+                type="circle",
+                children=html.Div(
+                    id="task-status-container",
+                    children=[
+                        html.Div(
+                            "等待執行任務...",
+                            style={
+                                "padding": "30px",
+                                "textAlign": "center",
+                                "color": "#999"
+                            }
+                        )
+                    ],
+                    style={
+                        "minHeight": "200px",
+                        "maxHeight": "400px",
+                        "overflowY": "auto",
+                        "padding": "15px",
+                        "backgroundColor": "#f8f9fa",
+                        "borderRadius": "5px",
+                        "border": "1px solid #dee2e6"
+                    }
+                )
+            )
+        ], style={
+            "padding": "20px",
+            "backgroundColor": "#ffffff",
+            "borderRadius": "10px",
+            "boxShadow": "0 2px 4px rgba(0,0,0,0.1)"
+        }),
+
+        # ========== 未來擴展區域 ==========
+        html.Div([
+            html.H4("🚀 其他任務（開發中）", style={"marginBottom": "15px"}),
+
+            html.Div([
+                html.Button(
+                    "自動篩選",
+                    disabled=True,
+                    style={
+                        "padding": "10px 20px",
+                        "margin": "5px",
+                        "backgroundColor": "#95a5a6",
+                        "color": "white",
+                        "border": "none",
+                        "borderRadius": "5px",
+                        "cursor": "not-allowed"
+                    }
+                ),
+                html.Button(
+                    "定期報告",
+                    disabled=True,
+                    style={
+                        "padding": "10px 20px",
+                        "margin": "5px",
+                        "backgroundColor": "#95a5a6",
+                        "color": "white",
+                        "border": "none",
+                        "borderRadius": "5px",
+                        "cursor": "not-allowed"
+                    }
+                ),
+                html.Button(
+                    "資料庫維護",
+                    disabled=True,
+                    style={
+                        "padding": "10px 20px",
+                        "margin": "5px",
+                        "backgroundColor": "#95a5a6",
+                        "color": "white",
+                        "border": "none",
+                        "borderRadius": "5px",
+                        "cursor": "not-allowed"
+                    }
+                )
+            ])
+        ], style={
+            "marginTop": "20px",
+            "padding": "20px",
+            "backgroundColor": "#ffffff",
+            "borderRadius": "10px",
+            "boxShadow": "0 2px 4px rgba(0,0,0,0.1)"
+        })
+    ])
+
+
+# ==================================================
+# Callback: 切換擴充模組的內容
+# ==================================================
+@app.callback(
+    Output("module-content-container", "children"),
+    Input("module-selector", "value")
+)
+def update_module_content(module_type):
+    """切換擴充模組的內容（ETF / 背景任務）"""
+
+    if module_type == "etf":
+        # 原本的 ETF 分析介面
+        return html.Div([
+            html.H3("🎯 主動式 ETF 分析", style={"marginBottom": "20px"}),
+
+            html.Div([
+                html.Label("選擇 ETF:", style={"marginRight": "10px", "fontWeight": "bold"}),
+                dcc.Dropdown(
+                    id="etf-selector",
+                    options=get_etf_list(),
+                    value="復華_00991A",
+                    clearable=False,
+                    style={"width": "400px"}
+                )
+            ], style={"marginBottom": "20px"}),
+
+            html.Div(
+                id="etf-content-container",
+                children=build_etf_section("復華_00991A")
+            )
+        ])
+
+    elif module_type == "tasks":
+        # 🆕 背景任務管理介面
+        return build_background_tasks_layout()
+
+    return html.Div("未知模組")
+
+
+# ==================================================
+# Callback: 執行台股更新
+# ==================================================
+@app.callback(
+    Output("task-status-container", "children"),
+    Input("btn-update-tw", "n_clicks"),
+    prevent_initial_call=True
+)
+def run_tw_update(n_clicks):
+    """執行台股資料更新"""
+    if not n_clicks:
+        return dash.no_update
+
+    from utils.cache import CacheManager, StockDownloader
+    from datetime import datetime
+    import pandas as pd
+
+    # 初始化
+    downloader = StockDownloader()
+
+    # 讀取股票清單
+    def load_tw_symbols():
+        twse_file = "StockList/TWSE_ESVUFR.csv"
+        two_file = "StockList/TWO_ESVUFR.csv"
+
+        symbols = []
+
+        # 上市
+        if os.path.exists(twse_file):
+            df = pd.read_csv(twse_file, dtype=str)
+            codes = df['股票代號及名稱'].str.extract(r'^(\d{4,5})')[0].dropna()
+            symbols.extend([f"{c}.TW" for c in codes])
+
+        # 上櫃
+        if os.path.exists(two_file):
+            df = pd.read_csv(two_file, dtype=str)
+            codes = df['股票代號及名稱'].str.extract(r'^(\d{4,5})')[0].dropna()
+            symbols.extend([f"{c}.TWO" for c in codes])
+
+        return symbols
+
+    symbols = load_tw_symbols()
+
+    # 開始更新
+    start_time = datetime.now()
+
+    status_log = [
+        html.Div([
+            html.Span("⏳ ", style={"fontSize": "20px"}),
+            html.Span(f"開始更新台股資料... ({len(symbols)} 檔)", style={"fontWeight": "bold"})
+        ], style={"marginBottom": "10px", "color": "#3498db"}),
+
+        html.Div(
+            f"開始時間: {start_time:%Y-%m-%d %H:%M:%S}",
+            style={"marginBottom": "15px", "color": "#7f8c8d", "fontSize": "12px"}
+        )
+    ]
+
+    # 執行更新（這裡會花時間）
+    results = downloader.batch_update_with_progress(
+        symbols,
+        batch_size=200,
+        max_workers=3
+    )
+
+    end_time = datetime.now()
+    elapsed = (end_time - start_time).total_seconds()
+
+    # 更新結果
+    status_log.extend([
+        html.Hr(),
+        html.Div([
+            html.Span("✅ ", style={"fontSize": "20px"}),
+            html.Span("更新完成！", style={"fontWeight": "bold", "color": "#27ae60"})
+        ], style={"marginBottom": "10px"}),
+
+        html.Div([
+            html.Div(f"✓ 成功: {len(results['success'])} 檔", style={"color": "#27ae60"}),
+            html.Div(f"✗ 失敗: {len(results['failed'])} 檔", style={"color": "#e74c3c"}),
+            html.Div(f"⏱ 耗時: {elapsed / 60:.1f} 分鐘", style={"color": "#7f8c8d"})
+        ], style={"marginLeft": "30px", "fontSize": "14px"}),
+
+        html.Div(
+            f"完成時間: {end_time:%Y-%m-%d %H:%M:%S}",
+            style={"marginTop": "10px", "color": "#7f8c8d", "fontSize": "12px"}
+        )
+    ])
+
+    # 如果有失敗
+    if results['failed']:
+        status_log.append(
+            html.Details([
+                html.Summary(
+                    f"查看失敗清單 ({len(results['failed'])} 檔)",
+                    style={"cursor": "pointer", "marginTop": "15px", "color": "#e74c3c"}
+                ),
+                html.Div([
+                    html.Div(symbol, style={"padding": "2px 0"})
+                    for symbol in results['failed'][:20]
+                ], style={"marginTop": "10px", "marginLeft": "20px", "fontSize": "12px"})
+            ])
+        )
+
+    return html.Div(status_log)
+
+
+# ==================================================
+# Callback: 執行美股更新
+# ==================================================
+@app.callback(
+    Output("task-status-container", "children", allow_duplicate=True),
+    Input("btn-update-us", "n_clicks"),
+    prevent_initial_call=True
+)
+def run_us_update(n_clicks):
+    """執行美股資料更新"""
+    if not n_clicks:
+        return dash.no_update
+
+    from utils.cache import StockDownloader
+    from datetime import datetime
+
+    # 從 watchlist 或設定檔讀取美股清單
+    # 這裡先用範例
+    symbols = ['AAPL', 'TSLA', 'NVDA', 'GOOGL', 'MSFT', 'AMZN']
+
+    downloader = StockDownloader()
+    start_time = datetime.now()
+
+    status_log = [
+        html.Div([
+            html.Span("⏳ ", style={"fontSize": "20px"}),
+            html.Span(f"開始更新美股資料... ({len(symbols)} 檔)", style={"fontWeight": "bold"})
+        ], style={"marginBottom": "10px", "color": "#3498db"}),
+
+        html.Div(
+            f"開始時間: {start_time:%Y-%m-%d %H:%M:%S}",
+            style={"marginBottom": "15px", "color": "#7f8c8d", "fontSize": "12px"}
+        )
+    ]
+
+    results = downloader.batch_update(symbols, max_workers=3)
+
+    end_time = datetime.now()
+    elapsed = (end_time - start_time).total_seconds()
+
+    status_log.extend([
+        html.Hr(),
+        html.Div([
+            html.Span("✅ ", style={"fontSize": "20px"}),
+            html.Span("更新完成！", style={"fontWeight": "bold", "color": "#27ae60"})
+        ], style={"marginBottom": "10px"}),
+
+        html.Div([
+            html.Div(f"✓ 成功: {len(results['success'])} 檔", style={"color": "#27ae60"}),
+            html.Div(f"✗ 失敗: {len(results['failed'])} 檔", style={"color": "#e74c3c"}),
+            html.Div(f"⏱ 耗時: {elapsed:.1f} 秒", style={"color": "#7f8c8d"})
+        ], style={"marginLeft": "30px", "fontSize": "14px"})
+    ])
+
+    return html.Div(status_log)
 # ==================================================
 # 1️⃣3️⃣ Run App
 # ==================================================
