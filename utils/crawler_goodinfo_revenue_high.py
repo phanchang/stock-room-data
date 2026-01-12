@@ -27,8 +27,23 @@ import schedule
 import time
 import re
 from utils.crawler_goodinfo_base import GoodinfoBaseCrawler
+import os
+print("=" * 60, flush=True)
+print("🔍 診斷資訊:", flush=True)
+print(f"當前工作目錄: {os.getcwd()}", flush=True)
+print(f"__file__: {__file__}", flush=True)
+print(f"__file__.parent: {Path(__file__).parent}", flush=True)
+print(f"__file__.parent.parent: {Path(__file__).parent.parent}", flush=True)
 
+CHROMEDRIVER_PATH = Path(__file__).parent.parent / "chromedriver-win64" / "chromedriver.exe"
+print(f"ChromeDriver 路徑: {CHROMEDRIVER_PATH}", flush=True)
+print(f"ChromeDriver 存在: {CHROMEDRIVER_PATH.exists()}", flush=True)
 
+if not CHROMEDRIVER_PATH.exists():
+    print(f"❌ ChromeDriver 不存在!", flush=True)
+    print(f"當前目錄內容: {list(Path(os.getcwd()).iterdir())[:10]}", flush=True)
+print("=" * 60, flush=True)
+sys.stdout.flush()
 class GoodinfoRevenueHighCrawler(GoodinfoBaseCrawler):
     """月營收歷年前幾高爬蟲 (合併版)"""
 

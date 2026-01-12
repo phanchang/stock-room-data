@@ -2878,8 +2878,16 @@ def build_war_room_layout():
 # 8️⃣ Layout (左側：功能入口 + 動態區域 | 右側：主顯示區)
 # ==================================================
 app.layout = html.Div([
+    dcc.Store(id='task-trigger-store', data={}),  # 儲存任務觸發事件
+    dcc.Interval(
+        id='global-task-interval',
+        interval=1000,  # 每秒更新一次
+        n_intervals=0,
+        disabled=True  # 預設停用,有任務時才啟動
+    ),
     # 隱藏的 Store 元件用來儲存 period 狀態
     dcc.Store(id='period-store', data='D'),
+
 
     html.Div([
         # ===== 左側區域 (15%) =====
@@ -2948,7 +2956,13 @@ app.layout = html.Div([
                 "verticalAlign": "top"
             }
         )
-    ])
+    ]),
+    # 🆕 隱藏的任務狀態容器 (始終存在)
+    html.Div(id="task-status-container", style={"display": "none"}),
+
+    # 全域元件
+    dcc.Store(id="task-trigger-store", data={}),
+    dcc.Interval(id="global-task-interval", interval=1000, disabled=True),
 ])
 
 
@@ -3951,6 +3965,428 @@ def update_filter_period(period, selected_rows, table_data, selected_tab):
 
 
 # ==================================================
+# 🔧 修正版:解決 Interval 不存在的問題
+# ==================================================
+
+# ==================================================
+# 🔧 修正版:解決 Interval 不存在的問題
+# ==================================================
+
+import threading
+from datetime import datetime
+
+# 全域變數儲存各任務的進度
+task_progress = {}
+task_lock = threading.Lock()
+
+
+def run_task_background(task_id, script_path, task_name, extra_args=None):
+    """
+    背景執行任務並即時更新進度
+
+    Args:
+        task_id: 任務唯一識別碼 (例如 "etf", "30high")
+        script_path: Python 腳本路徑
+        task_name: 任務顯示名稱
+        extra_args: 額外的命令列參數 (list)
+    """
+    import subprocess
+
+    start_time = datetime.now()
+
+    # 初始化進度
+    with task_lock:
+        task_progress[task_id] = {
+            "status": "running",
+            "message": f"開始{task_name}...",
+            "logs": [],
+            "start_time": start_time
+        }
+
+    try:
+        # ✅ 使用 Popen 即時讀取輸出
+        import os
+        from pathlib import Path
+
+        # 複製完整環境變數
+        env = os.environ.copy()
+
+        # 🔧 關鍵:從 .env 讀取設定並傳給 subprocess
+        try:
+            from dotenv import load_dotenv, dotenv_values
+
+            load_dotenv()
+
+            env_file = Path('.env')
+            if env_file.exists():
+                env_config = dotenv_values(env_file)
+
+                for key, value in env_config.items():
+                    if value:
+                        env[key] = value
+
+                stock_proxy = env_config.get('STOCK_PROXY')
+                if stock_proxy:
+                    task_progress[task_id]["logs"].append(f"🌐 從 .env 載入 Proxy: {stock_proxy}")
+                else:
+                    task_progress[task_id]["logs"].append(f"⚠️ .env 中未找到 STOCK_PROXY")
+            else:
+                task_progress[task_id]["logs"].append(f"⚠️ 找不到 .env 檔案")
+
+        except ImportError:
+            task_progress[task_id]["logs"].append(f"⚠️ 未安裝 python-dotenv")
+        except Exception as e:
+            task_progress[task_id]["logs"].append(f"⚠️ 讀取 .env 失敗: {e}")
+
+        # localhost 不走 Proxy
+        env['NO_PROXY'] = 'localhost,127.0.0.1'
+        env['no_proxy'] = 'localhost,127.0.0.1'
+
+        # 🆕 組合命令列參數
+        cmd = [sys.executable, script_path]
+        if extra_args:
+            cmd.extend(extra_args)
+
+        process = subprocess.Popen(
+            cmd,  # ✅ 使用完整命令
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding='utf-8',
+            errors='replace',
+            bufsize=1,
+            universal_newlines=True,
+            env=env
+        )
+
+        # 即時讀取 stdout
+        for line in process.stdout:
+            line = line.strip()
+            if line:
+                with task_lock:
+                    task_progress[task_id]["logs"].append(line)
+                    # 更新狀態訊息
+                    if any(keyword in line for keyword in ["進度", "完成", "成功", "處理", "正在"]):
+                        task_progress[task_id]["message"] = f"🔄 {line[:60]}..."
+
+        # 等待程序結束
+        process.wait()
+
+        # 讀取 stderr
+        stderr_output = process.stderr.read()
+
+        end_time = datetime.now()
+        elapsed = (end_time - start_time).total_seconds()
+
+        with task_lock:
+            if process.returncode == 0:
+                task_progress[task_id]["status"] = "success"
+                task_progress[task_id]["message"] = f"✅ {task_name}完成! 耗時 {elapsed:.1f} 秒"
+
+                # 嘗試統計結果數量
+                count = get_result_count(script_path)
+                if count is not None:
+                    task_progress[task_id]["count"] = count
+            else:
+                task_progress[task_id]["status"] = "failed"
+                task_progress[task_id]["message"] = f"❌ {task_name}失敗 (returncode: {process.returncode})"
+
+                # 詳細錯誤診斷
+                if stderr_output:
+                    task_progress[task_id]["logs"].append("=== 錯誤訊息 ===")
+                    error_lines = [l for l in stderr_output.split('\n') if l.strip()]
+                    task_progress[task_id]["logs"].extend(error_lines[-30:])
+
+                    # 檢查是否為代理問題
+                    if any(keyword in stderr_output.lower() for keyword in
+                           ['access denied', 'policy_denied', 'proxy', 'firewall']):
+                        task_progress[task_id]["logs"].append("")
+                        task_progress[task_id]["logs"].append("⚠️ 可能是公司防火牆/代理問題:")
+                        task_progress[task_id]["logs"].append("  1. 檢查是否在公司網路內")
+                        task_progress[task_id]["logs"].append("  2. 嘗試使用手機熱點或家中網路")
+                        task_progress[task_id]["logs"].append("  3. 或直接在 Terminal 執行爬蟲")
+
+            task_progress[task_id]["elapsed"] = elapsed
+
+    except Exception as e:
+        with task_lock:
+            task_progress[task_id]["status"] = "failed"
+            task_progress[task_id]["message"] = f"❌ 執行異常: {str(e)}"
+            task_progress[task_id]["logs"].append(f"Exception: {str(e)}")
+
+
+def get_result_count(script_path):
+    """根據腳本路徑推測輸出目錄,統計結果數量"""
+    from pathlib import Path
+    import pandas as pd
+
+    mapping = {
+        "utils/etf/main.py": None,
+        "utils/crawler_goodinfo_30high.py": "data/clean/goodinfo/30high",
+        "utils/crawler_goodinfo_holder_change.py": "data/clean/goodinfo/holder_change",
+        "utils/crawler_goodinfo_revenue_high.py": "data/clean/goodinfo/revenue_high",
+        "scripts/init_cache_tw.py": None,
+    }
+
+    output_dir_str = mapping.get(script_path)
+    if not output_dir_str:
+        return None
+
+    output_dir = Path(output_dir_str)
+    if not output_dir.exists():
+        return None
+
+    files = list(output_dir.glob("*.csv"))
+    if not files:
+        return None
+
+    try:
+        latest_file = max(files, key=lambda x: x.stat().st_mtime)
+        df = pd.read_csv(latest_file)
+        return len(df)
+    except:
+        return None
+
+
+# ==================================================
+# 🆕 各任務的啟動 Callbacks
+# ==================================================
+
+# ETF 更新
+@app.callback(
+    Output("task-trigger-store", "data", allow_duplicate=True),
+    Input("btn-update-etf", "n_clicks"),
+    prevent_initial_call=True
+)
+def trigger_etf_update(n_clicks):
+    if not n_clicks:
+        return dash.no_update
+
+    with task_lock:
+        if "etf" in task_progress and task_progress["etf"]["status"] == "running":
+            return {"error": "ETF 更新正在進行中..."}
+
+    threading.Thread(
+        target=run_task_background,
+        args=("etf", "utils/etf/main.py", "ETF 持股更新"),
+        daemon=True
+    ).start()
+
+    return {"task": "etf", "timestamp": datetime.now().isoformat()}
+
+
+# 突破30日新高
+@app.callback(
+    Output("task-trigger-store", "data", allow_duplicate=True),
+    Input("btn-update-30high", "n_clicks"),
+    prevent_initial_call=True
+)
+def trigger_30high_update(n_clicks):
+    if not n_clicks:
+        return dash.no_update
+
+    with task_lock:
+        if "30high" in task_progress and task_progress["30high"]["status"] == "running":
+            return {"error": "30日新高爬取正在進行中..."}
+
+    threading.Thread(
+        target=run_task_background,
+        args=("30high", "utils/crawler_goodinfo_30high.py", "突破30日新高爬取"),
+        daemon=True
+    ).start()
+
+    return {"task": "30high", "timestamp": datetime.now().isoformat()}
+
+
+# 千張大戶異動
+@app.callback(
+    Output("task-trigger-store", "data", allow_duplicate=True),
+    Input("btn-update-holder", "n_clicks"),
+    prevent_initial_call=True
+)
+def trigger_holder_update(n_clicks):
+    if not n_clicks:
+        return dash.no_update
+
+    with task_lock:
+        if "holder" in task_progress and task_progress["holder"]["status"] == "running":
+            return {"error": "千張大戶爬取正在進行中..."}
+
+    threading.Thread(
+        target=run_task_background,
+        args=("holder", "utils/crawler_goodinfo_holder_change.py", "千張大戶異動爬取"),
+        daemon=True
+    ).start()
+
+    return {"task": "holder", "timestamp": datetime.now().isoformat()}
+
+
+# 月營收創新高
+@app.callback(
+    Output("task-trigger-store", "data", allow_duplicate=True),
+    Input("btn-update-revenue", "n_clicks"),
+    prevent_initial_call=True
+)
+def trigger_revenue_update(n_clicks):
+    if not n_clicks:
+        return dash.no_update
+
+    with task_lock:
+        if "revenue" in task_progress and task_progress["revenue"]["status"] == "running":
+            return {"error": "月營收爬取正在進行中..."}
+
+    threading.Thread(
+        target=run_task_background,
+        args=("revenue", "utils/crawler_goodinfo_revenue_high.py", "月營收創新高爬取"),
+        daemon=True
+    ).start()
+
+    return {"task": "revenue", "timestamp": datetime.now().isoformat()}
+
+
+# 台股更新
+@app.callback(
+    Output("task-trigger-store", "data", allow_duplicate=True),
+    Output("global-task-interval", "disabled", allow_duplicate=True),
+    Input("btn-update-tw", "n_clicks"),
+    prevent_initial_call=True
+)
+def trigger_tw_update(n_clicks):
+    if not n_clicks:
+        return dash.no_update, dash.no_update
+
+    with task_lock:
+        if "tw" in task_progress and task_progress["tw"]["status"] == "running":
+            return {"error": "台股更新正在進行中..."}, False
+
+    threading.Thread(
+        target=run_task_background,
+        args=("tw", "scripts/init_cache_tw.py", "台股日線更新", ["--skip-check", "--auto"]),
+        daemon=True
+    ).start()
+
+    # 啟動任務時,啟用 interval (disabled=False)
+    return {"task": "tw", "timestamp": datetime.now().isoformat()}, False
+
+
+# ==================================================
+# 📊 進度顯示 Callback
+# ==================================================
+
+# ==================================================
+# 📊 進度顯示 Callback
+# ==================================================
+@app.callback(
+    Output("task-status-container", "children"),
+    Output("global-task-interval", "disabled"),
+    [Input("global-task-interval", "n_intervals"),
+     Input("task-trigger-store", "data")],
+    prevent_initial_call=True
+)
+def update_all_tasks_display(n_intervals, trigger_data):
+    """統一的任務進度更新 - 每秒自動更新"""
+
+    # 檢查是否有錯誤訊息
+    if trigger_data and "error" in trigger_data:
+        return html.Div(f"⚠️ {trigger_data['error']}", style={"color": "#e67e22"}), True
+
+    # 找出當前任務
+    with task_lock:
+        if not task_progress:
+            return html.Div(
+                "等待執行任務...",
+                style={"padding": "30px", "textAlign": "center", "color": "#999"}
+            ), True
+
+        # 優先顯示正在執行的任務
+        running_tasks = [(task_id, info) for task_id, info in task_progress.items()
+                         if info["status"] == "running"]
+
+        if running_tasks:
+            task_id, info = running_tasks[-1]
+            keep_running = True  # 有任務在執行,繼續更新
+        else:
+            task_id, info = list(task_progress.items())[-1]
+            keep_running = False  # 沒有任務在執行,停止更新
+
+    status = info["status"]
+    message = info["message"]
+    logs = info["logs"][-50:]
+
+    # 顏色配置
+    color_map = {
+        "running": "#3498db",
+        "success": "#27ae60",
+        "failed": "#e74c3c"
+    }
+
+    # 圖示配置
+    icon_map = {
+        "running": "⏳",
+        "success": "✅",
+        "failed": "❌"
+    }
+
+    display = [
+        html.Div(
+            f"{icon_map.get(status, '📊')} {message}",
+            style={
+                "fontSize": "16px",
+                "fontWeight": "bold",
+                "marginBottom": "10px",
+                "color": color_map.get(status, "#999")
+            }
+        )
+    ]
+
+    # 顯示結果數量
+    if status == "success" and "count" in info:
+        display.append(
+            html.Div(
+                f"📊 找到 {info['count']} 檔股票",
+                style={"color": "#27ae60", "marginBottom": "10px"}
+            )
+        )
+
+    # 顯示執行時間
+    if "elapsed" in info:
+        display.append(
+            html.Div(
+                f"⏱️ 耗時: {info['elapsed']:.1f} 秒",
+                style={"color": "#7f8c8d", "fontSize": "14px", "marginBottom": "10px"}
+            )
+        )
+
+    # 顯示詳細記錄
+    if logs:
+        display.append(
+            html.Details([
+                html.Summary(
+                    f"📝 詳細記錄 (最近 {len(logs)} 行)",
+                    style={"cursor": "pointer", "color": "#7f8c8d", "marginTop": "10px"}
+                ),
+                html.Pre(
+                    "\n".join(logs),
+                    style={
+                        "fontSize": "11px",
+                        "backgroundColor": "#f8f9fa",
+                        "padding": "10px",
+                        "maxHeight": "400px",
+                        "overflow": "auto",
+                        "marginTop": "10px",
+                        "whiteSpace": "pre-wrap",
+                        "wordBreak": "break-word",
+                        "fontFamily": "Consolas, monospace"
+                    }
+                )
+            ], open=(status == "failed"))
+        )
+
+    # 返回顯示內容 + 是否停用 interval
+    # keep_running=True 時 disabled=False (繼續更新)
+    # keep_running=False 時 disabled=True (停止更新)
+    return html.Div(display), not keep_running
+
+# ==================================================
 # 背景任務管理介面
 # ==================================================
 
@@ -4141,703 +4577,84 @@ def build_background_tasks_layout():
         html.Div([
             html.H4("📝 執行記錄", style={"marginBottom": "15px"}),
 
-            dcc.Loading(
-                id="loading-task-status",
-                type="circle",
-                children=html.Div(
-                    id="task-status-container",
-                    children=[
-                        html.Div(
-                            "等待執行任務...",
-                            style={"padding": "30px", "textAlign": "center", "color": "#999"}
-                        )
-                    ],
-                    style={
-                        "minHeight": "200px",
-                        "maxHeight": "400px",
-                        "overflowY": "auto",
-                        "padding": "15px",
-                        "backgroundColor": "#f8f9fa",
-                        "borderRadius": "5px",
-                        "border": "1px solid #dee2e6"
-                    }
-                )
-            )
+            # dcc.Loading(
+            #     id="loading-task-status",
+            #     type="circle",
+            #     children=html.Div(
+            #         id="task-status-container",
+            #         children=[
+            #             html.Div(
+            #                 "等待執行任務...",
+            #                 style={"padding": "30px", "textAlign": "center", "color": "#999"}
+            #             )
+            #         ],
+            #         style={
+            #             "minHeight": "200px",
+            #             "maxHeight": "400px",
+            #             "overflowY": "auto",
+            #             "padding": "15px",
+            #             "backgroundColor": "#f8f9fa",
+            #             "borderRadius": "5px",
+            #             "border": "1px solid #dee2e6"
+            #         }
+            #     )
+            # )
+            html.Div("任務執行狀態將顯示在下方",
+                     style={"color": "#7f8c8d", "fontSize": "14px"})
         ], style={
             "padding": "20px",
             "backgroundColor": "#ffffff",
             "borderRadius": "10px",
             "boxShadow": "0 2px 4px rgba(0,0,0,0.1)"
-        })
+        }),
+
+
     ])
 
-
-# ==================================================
-# 🆕 其他任務的 Callbacks
-# ==================================================
-
-# ETF 更新
-@app.callback(
-    Output("task-status-container", "children", allow_duplicate=True),
-    Input("btn-update-etf", "n_clicks"),
-    prevent_initial_call=True
-)
-def run_etf_update(n_clicks):
-    """執行 ETF 更新"""
-    if not n_clicks:
-        return dash.no_update
-
-    import subprocess
-    from datetime import datetime
-
-    start_time = datetime.now()
-
-    log = [
-        html.Div([
-            html.Span("⏳ ", style={"fontSize": "20px"}),
-            html.Span("開始更新 ETF 持股...", style={"fontWeight": "bold"})
-        ], style={"marginBottom": "10px", "color": "#9b59b6"}),
-        html.Div(f"開始時間: {start_time:%H:%M:%S}", style={"color": "#7f8c8d", "fontSize": "12px"})
-    ]
-
-    try:
-        # 執行 utils/etf/main.py
-        result = subprocess.run(
-            [sys.executable, "utils/etf/main.py"],
-            capture_output=True,
-            text=True,
-            timeout=600  # 10分鐘超時
-        )
-
-        end_time = datetime.now()
-        elapsed = (end_time - start_time).total_seconds()
-
-        if result.returncode == 0:
-            log.extend([
-                html.Hr(),
-                html.Div([
-                    html.Span("✅ ", style={"fontSize": "20px"}),
-                    html.Span("ETF 更新完成！", style={"fontWeight": "bold", "color": "#27ae60"})
-                ]),
-                html.Div(f"⏱ 耗時: {elapsed:.1f} 秒", style={"color": "#7f8c8d", "marginLeft": "30px"}),
-                html.Details([
-                    html.Summary("查看輸出", style={"cursor": "pointer", "color": "#7f8c8d"}),
-                    html.Pre(
-                        result.stdout[-1000:],  # 最後1000字元
-                        style={"fontSize": "11px", "backgroundColor": "#f8f9fa", "padding": "10px"}
-                    )
-                ])
-            ])
-        else:
-            log.extend([
-                html.Hr(),
-                html.Div([
-                    html.Span("❌ ", style={"fontSize": "20px"}),
-                    html.Span("ETF 更新失敗", style={"fontWeight": "bold", "color": "#e74c3c"})
-                ]),
-                html.Details([
-                    html.Summary("查看錯誤", style={"cursor": "pointer", "color": "#e74c3c"}),
-                    html.Pre(result.stderr[-500:], style={"fontSize": "11px"})
-                ])
-            ])
-
-    except subprocess.TimeoutExpired:
-        log.extend([
-            html.Hr(),
-            html.Div("❌ 執行超時（超過10分鐘）", style={"color": "#e74c3c"})
-        ])
-    except Exception as e:
-        log.extend([
-            html.Hr(),
-            html.Div(f"❌ 執行異常: {str(e)}", style={"color": "#e74c3c"})
-        ])
-
-    return html.Div(log)
-
-
-# 突破30日新高
-@app.callback(
-    Output("task-status-container", "children", allow_duplicate=True),
-    Input("btn-update-30high", "n_clicks"),
-    prevent_initial_call=True
-)
-def run_30high_update(n_clicks):
-    """執行突破30日新高爬蟲"""
-    if not n_clicks:
-        return dash.no_update
-
-    import subprocess
-    from datetime import datetime
-
-    start_time = datetime.now()
-
-    log = [
-        html.Div([
-            html.Span("⏳ ", style={"fontSize": "20px"}),
-            html.Span("開始爬取突破30日新高...", style={"fontWeight": "bold"})
-        ], style={"marginBottom": "10px", "color": "#e67e22"}),
-        html.Div(f"開始時間: {start_time:%H:%M:%S}", style={"color": "#7f8c8d", "fontSize": "12px"})
-    ]
-
-    try:
-        result = subprocess.run(
-            [sys.executable, "utils/crawler_goodinfo_30high.py"],
-            capture_output=True,
-            text=True,
-            timeout=300  # 5分鐘超時
-        )
-
-        end_time = datetime.now()
-        elapsed = (end_time - start_time).total_seconds()
-
-        if result.returncode == 0:
-            # 檢查輸出檔案
-            output_dir = Path("data/clean/goodinfo/30high")
-            if output_dir.exists():
-                files = list(output_dir.glob("*.csv"))
-                if files:
-                    latest_file = max(files, key=lambda x: x.stat().st_mtime)
-                    df = pd.read_csv(latest_file)
-                    count = len(df)
-                else:
-                    count = 0
-            else:
-                count = 0
-
-            log.extend([
-                html.Hr(),
-                html.Div([
-                    html.Span("✅ ", style={"fontSize": "20px"}),
-                    html.Span("爬取完成！", style={"fontWeight": "bold", "color": "#27ae60"})
-                ]),
-                html.Div(f"找到 {count} 檔股票", style={"color": "#27ae60", "marginLeft": "30px"}),
-                html.Div(f"⏱ 耗時: {elapsed:.1f} 秒", style={"color": "#7f8c8d", "marginLeft": "30px"})
-            ])
-        else:
-            log.extend([
-                html.Hr(),
-                html.Div([
-                    html.Span("❌ ", style={"fontSize": "20px"}),
-                    html.Span("爬取失敗", style={"fontWeight": "bold", "color": "#e74c3c"})
-                ]),
-                html.Details([
-                    html.Summary("查看錯誤", style={"cursor": "pointer", "color": "#e74c3c"}),
-                    html.Pre(result.stderr[-500:], style={"fontSize": "11px"})
-                ])
-            ])
-
-    except subprocess.TimeoutExpired:
-        log.extend([
-            html.Hr(),
-            html.Div("❌ 執行超時（超過5分鐘）", style={"color": "#e74c3c"})
-        ])
-    except Exception as e:
-        log.extend([
-            html.Hr(),
-            html.Div(f"❌ 執行異常: {str(e)}", style={"color": "#e74c3c"})
-        ])
-
-    return html.Div(log)
-
-
-# 千張大戶異動
-@app.callback(
-    Output("task-status-container", "children", allow_duplicate=True),
-    Input("btn-update-holder", "n_clicks"),
-    prevent_initial_call=True
-)
-def run_holder_update(n_clicks):
-    """執行千張大戶異動爬蟲"""
-    if not n_clicks:
-        return dash.no_update
-
-    import subprocess
-    from datetime import datetime
-
-    start_time = datetime.now()
-
-    log = [
-        html.Div([
-            html.Span("⏳ ", style={"fontSize": "20px"}),
-            html.Span("開始爬取千張大戶異動...", style={"fontWeight": "bold"})
-        ], style={"marginBottom": "10px", "color": "#16a085"}),
-        html.Div(f"開始時間: {start_time:%H:%M:%S}", style={"color": "#7f8c8d", "fontSize": "12px"})
-    ]
-
-    try:
-        result = subprocess.run(
-            [sys.executable, "utils/crawler_goodinfo_holder_change.py"],
-            capture_output=True,
-            text=True,
-            timeout=600  # 10分鐘超時
-        )
-
-        end_time = datetime.now()
-        elapsed = (end_time - start_time).total_seconds()
-
-        if result.returncode == 0:
-            output_dir = Path("data/clean/goodinfo/holder_change")
-            if output_dir.exists():
-                files = list(output_dir.glob("*.csv"))
-                if files:
-                    latest_file = max(files, key=lambda x: x.stat().st_mtime)
-                    df = pd.read_csv(latest_file)
-                    count = len(df)
-                else:
-                    count = 0
-            else:
-                count = 0
-
-            log.extend([
-                html.Hr(),
-                html.Div([
-                    html.Span("✅ ", style={"fontSize": "20px"}),
-                    html.Span("爬取完成！", style={"fontWeight": "bold", "color": "#27ae60"})
-                ]),
-                html.Div(f"找到 {count} 檔股票", style={"color": "#27ae60", "marginLeft": "30px"}),
-                html.Div(f"⏱ 耗時: {elapsed / 60:.1f} 分鐘", style={"color": "#7f8c8d", "marginLeft": "30px"})
-            ])
-        else:
-            log.extend([
-                html.Hr(),
-                html.Div([
-                    html.Span("❌ ", style={"fontSize": "20px"}),
-                    html.Span("爬取失敗", style={"fontWeight": "bold", "color": "#e74c3c"})
-                ]),
-                html.Details([
-                    html.Summary("查看錯誤", style={"cursor": "pointer", "color": "#e74c3c"}),
-                    html.Pre(result.stderr[-500:], style={"fontSize": "11px"})
-                ])
-            ])
-
-    except subprocess.TimeoutExpired:
-        log.extend([
-            html.Hr(),
-            html.Div("❌ 執行超時（超過10分鐘）", style={"color": "#e74c3c"})
-        ])
-    except Exception as e:
-        log.extend([
-            html.Hr(),
-            html.Div(f"❌ 執行異常: {str(e)}", style={"color": "#e74c3c"})
-        ])
-
-    return html.Div(log)
-
-
-# 月營收創新高
-@app.callback(
-    Output("task-status-container", "children", allow_duplicate=True),
-    Input("btn-update-revenue", "n_clicks"),
-    prevent_initial_call=True
-)
-def run_revenue_update(n_clicks):
-    """執行月營收創新高爬蟲"""
-    if not n_clicks:
-        return dash.no_update
-
-    import subprocess
-    from datetime import datetime
-
-    start_time = datetime.now()
-
-    log = [
-        html.Div([
-            html.Span("⏳ ", style={"fontSize": "20px"}),
-            html.Span("開始爬取月營收創新高...", style={"fontWeight": "bold"})
-        ], style={"marginBottom": "10px", "color": "#d35400"}),
-        html.Div(f"開始時間: {start_time:%H:%M:%S}", style={"color": "#7f8c8d", "fontSize": "12px"})
-    ]
-
-    try:
-        result = subprocess.run(
-            [sys.executable, "utils/crawler_goodinfo_revenue_high.py"],
-            capture_output=True,
-            text=True,
-            timeout=600  # 10分鐘超時
-        )
-
-        end_time = datetime.now()
-        elapsed = (end_time - start_time).total_seconds()
-
-        if result.returncode == 0:
-            output_dir = Path("data/clean/goodinfo/revenue_high")
-            if output_dir.exists():
-                files = list(output_dir.glob("*.csv"))
-                if files:
-                    latest_file = max(files, key=lambda x: x.stat().st_mtime)
-                    df = pd.read_csv(latest_file)
-                    count = len(df)
-                else:
-                    count = 0
-            else:
-                count = 0
-
-            log.extend([
-                html.Hr(),
-                html.Div([
-                    html.Span("✅ ", style={"fontSize": "20px"}),
-                    html.Span("爬取完成！", style={"fontWeight": "bold", "color": "#27ae60"})
-                ]),
-                html.Div(f"找到 {count} 檔股票", style={"color": "#27ae60", "marginLeft": "30px"}),
-                html.Div(f"⏱ 耗時: {elapsed / 60:.1f} 分鐘", style={"color": "#7f8c8d", "marginLeft": "30px"})
-            ])
-        else:
-            log.extend([
-                html.Hr(),
-                html.Div([
-                    html.Span("❌ ", style={"fontSize": "20px"}),
-                    html.Span("爬取失敗", style={"fontWeight": "bold", "color": "#e74c3c"})
-                ]),
-                html.Details([
-                    html.Summary("查看錯誤", style={"cursor": "pointer", "color": "#e74c3c"}),
-                    html.Pre(result.stderr[-500:], style={"fontSize": "11px"})
-                ])
-            ])
-
-    except subprocess.TimeoutExpired:
-        log.extend([
-            html.Hr(),
-            html.Div("❌ 執行超時（超過10分鐘）", style={"color": "#e74c3c"})
-        ])
-    except Exception as e:
-        log.extend([
-            html.Hr(),
-            html.Div(f"❌ 執行異常: {str(e)}", style={"color": "#e74c3c"})
-        ])
-
-    return html.Div(log)
 
 # ==================================================
 # Callback: 切換擴充模組的內容
 # ==================================================
 @app.callback(
-    Output("module-content-container", "children"),
+    [Output("module-content-container", "children"),
+     Output("task-status-container", "style")],  # 🆕 控制顯示
     Input("module-selector", "value")
 )
 def update_module_content(module_type):
-    """切換擴充模組的內容（ETF / 背景任務）"""
-
     if module_type == "etf":
-        # 原本的 ETF 分析介面
-        return html.Div([
-            html.H3("🎯 主動式 ETF 分析", style={"marginBottom": "20px"}),
-
+        # ✅ 修正：返回完整的 ETF 模組介面（包含選擇器）
+        etf_layout = html.Div([
+            # ETF 選擇器
             html.Div([
                 html.Label("選擇 ETF:", style={"marginRight": "10px", "fontWeight": "bold"}),
                 dcc.Dropdown(
                     id="etf-selector",
                     options=get_etf_list(),
-                    value="復華_00991A",
-                    clearable=False,
+                    value="復華_00991A",  # 預設值
                     style={"width": "400px"}
                 )
             ], style={"marginBottom": "20px"}),
 
-            html.Div(
-                id="etf-content-container",
-                children=build_etf_section("復華_00991A")
-            )
+            # ETF 內容容器
+            html.Div(id="etf-content-container")
         ])
+
+        # ETF 模組:隱藏任務狀態
+        return etf_layout, {"display": "none"}
 
     elif module_type == "tasks":
-        # 🆕 背景任務管理介面
-        return build_background_tasks_layout()
+        # 背景任務模組:顯示任務狀態
+        return build_background_tasks_layout(), {
+            "minHeight": "200px",
+            "maxHeight": "400px",
+            "overflowY": "auto",
+            "padding": "15px",
+            "backgroundColor": "#f8f9fa",
+            "borderRadius": "5px",
+            "border": "1px solid #dee2e6"
+        }
 
-    return html.Div("未知模組")
+    return html.Div("未知模組"), {"display": "none"}
 
-
-# ==================================================
-# Callback: 執行台股更新
-# ==================================================
-import threading
-import queue
-
-# 全域變數儲存進度
-update_progress = {"status": "idle", "message": "", "logs": []}
-update_lock = threading.Lock()
-
-
-@app.callback(
-    Output("task-status-container", "children", allow_duplicate=True),
-    Input("btn-update-tw", "n_clicks"),
-    prevent_initial_call=True
-)
-def run_tw_update(n_clicks):
-    """啟動台股更新"""
-    if not n_clicks:
-        return dash.no_update
-
-    # 檢查是否已在執行中
-    with update_lock:
-        if update_progress["status"] == "running":
-            return html.Div("⚠️ 更新正在進行中，請稍候...", style={"color": "#e67e22"})
-
-        # 重置進度
-        update_progress["status"] = "running"
-        update_progress["message"] = "準備開始..."
-        update_progress["logs"] = []
-
-    # 在背景執行
-    threading.Thread(target=run_update_background, daemon=True).start()
-
-    return html.Div([
-        html.Div("⏳ 更新已啟動，請等待進度更新...", style={"color": "#3498db"}),
-        dcc.Interval(id="update-progress-interval", interval=500, n_intervals=0)  # 每 0.5 秒更新
-    ])
-
-
-def run_update_background():
-    """背景執行更新"""
-    import subprocess
-    from datetime import datetime
-
-    start_time = datetime.now()
-
-    try:
-        # ✅ 使用 Popen 即時讀取輸出
-        process = subprocess.Popen(
-            [sys.executable, "scripts/init_cache_tw.py", "--skip-check"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            encoding='utf-8',
-            errors='replace',
-            bufsize=1,  # 行緩衝
-            universal_newlines=True
-        )
-
-        # 即時讀取輸出
-        for line in process.stdout:
-            line = line.strip()
-            if line:
-                with update_lock:
-                    update_progress["logs"].append(line)
-                    # 解析關鍵訊息
-                    if "檢查進度:" in line:
-                        update_progress["message"] = f"🔍 {line}"
-                    elif "真正需要更新:" in line:
-                        update_progress["message"] = f"✓ {line}"
-                    elif "下載進度:" in line:
-                        update_progress["message"] = f"⬇️ {line}"
-                    elif "成功:" in line:
-                        update_progress["message"] = "✅ 更新完成"
-
-        process.wait()
-
-        end_time = datetime.now()
-        elapsed = (end_time - start_time).total_seconds()
-
-        with update_lock:
-            update_progress["status"] = "completed"
-            update_progress["message"] = f"✅ 完成！耗時 {elapsed / 60:.1f} 分鐘"
-
-    except Exception as e:
-        with update_lock:
-            update_progress["status"] = "failed"
-            update_progress["message"] = f"❌ 錯誤: {str(e)}"
-
-
-@app.callback(
-    Output("task-status-container", "children"),
-    Input("update-progress-interval", "n_intervals"),
-    prevent_initial_call=True
-)
-def update_progress_display(n):
-    """更新進度顯示"""
-    with update_lock:
-        status = update_progress["status"]
-        message = update_progress["message"]
-        logs = update_progress["logs"][-20:]  # 只顯示最近 20 行
-
-    if status == "idle":
-        return dash.no_update
-
-    # 組合顯示
-    display = [
-        html.Div(message, style={
-            "fontSize": "16px",
-            "fontWeight": "bold",
-            "marginBottom": "10px",
-            "color": "#3498db" if status == "running" else "#27ae60"
-        })
-    ]
-
-    if logs:
-        display.append(
-            html.Details([
-                html.Summary(f"詳細記錄（最近 {len(logs)} 行）",
-                             style={"cursor": "pointer", "color": "#7f8c8d"}),
-                html.Pre(
-                    "\n".join(logs),
-                    style={
-                        "fontSize": "11px",
-                        "backgroundColor": "#f8f9fa",
-                        "padding": "10px",
-                        "maxHeight": "300px",
-                        "overflow": "auto"
-                    }
-                )
-            ])
-        )
-
-    # 完成後移除 Interval
-    if status in ["completed", "failed"]:
-        return html.Div(display)
-    else:
-        return html.Div([
-            *display,
-            dcc.Interval(id="update-progress-interval", interval=500, n_intervals=0)
-        ])
-
-    from utils.cache import CacheManager, StockDownloader
-    from datetime import datetime
-    import pandas as pd
-
-    # 初始化
-    downloader = StockDownloader()
-
-    # 讀取股票清單
-    def load_tw_symbols():
-        twse_file = "StockList/TWSE_ESVUFR.csv"
-        two_file = "StockList/TWO_ESVUFR.csv"
-
-        symbols = []
-
-        # 上市
-        if os.path.exists(twse_file):
-            df = pd.read_csv(twse_file, dtype=str)
-            codes = df['股票代號及名稱'].str.extract(r'^(\d{4,5})')[0].dropna()
-            symbols.extend([f"{c}.TW" for c in codes])
-
-        # 上櫃
-        if os.path.exists(two_file):
-            df = pd.read_csv(two_file, dtype=str)
-            codes = df['股票代號及名稱'].str.extract(r'^(\d{4,5})')[0].dropna()
-            symbols.extend([f"{c}.TWO" for c in codes])
-
-        return symbols
-
-    symbols = load_tw_symbols()
-
-    # 開始更新
-    start_time = datetime.now()
-
-    status_log = [
-        html.Div([
-            html.Span("⏳ ", style={"fontSize": "20px"}),
-            html.Span(f"開始更新台股資料... ({len(symbols)} 檔)", style={"fontWeight": "bold"})
-        ], style={"marginBottom": "10px", "color": "#3498db"}),
-
-        html.Div(
-            f"開始時間: {start_time:%Y-%m-%d %H:%M:%S}",
-            style={"marginBottom": "15px", "color": "#7f8c8d", "fontSize": "12px"}
-        )
-    ]
-
-    # 執行更新（這裡會花時間）
-    results = downloader.batch_update_with_progress(
-        symbols,
-        batch_size=200,
-        max_workers=3
-    )
-
-    end_time = datetime.now()
-    elapsed = (end_time - start_time).total_seconds()
-
-    # 更新結果
-    status_log.extend([
-        html.Hr(),
-        html.Div([
-            html.Span("✅ ", style={"fontSize": "20px"}),
-            html.Span("更新完成！", style={"fontWeight": "bold", "color": "#27ae60"})
-        ], style={"marginBottom": "10px"}),
-
-        html.Div([
-            html.Div(f"✓ 成功: {len(results['success'])} 檔", style={"color": "#27ae60"}),
-            html.Div(f"✗ 失敗: {len(results['failed'])} 檔", style={"color": "#e74c3c"}),
-            html.Div(f"⏱ 耗時: {elapsed / 60:.1f} 分鐘", style={"color": "#7f8c8d"})
-        ], style={"marginLeft": "30px", "fontSize": "14px"}),
-
-        html.Div(
-            f"完成時間: {end_time:%Y-%m-%d %H:%M:%S}",
-            style={"marginTop": "10px", "color": "#7f8c8d", "fontSize": "12px"}
-        )
-    ])
-
-    # 如果有失敗
-    if results['failed']:
-        status_log.append(
-            html.Details([
-                html.Summary(
-                    f"查看失敗清單 ({len(results['failed'])} 檔)",
-                    style={"cursor": "pointer", "marginTop": "15px", "color": "#e74c3c"}
-                ),
-                html.Div([
-                    html.Div(symbol, style={"padding": "2px 0"})
-                    for symbol in results['failed'][:20]
-                ], style={"marginTop": "10px", "marginLeft": "20px", "fontSize": "12px"})
-            ])
-        )
-
-    return html.Div(status_log)
-
-
-# ==================================================
-# Callback: 執行美股更新
-# ==================================================
-@app.callback(
-    Output("task-status-container", "children", allow_duplicate=True),
-    Input("btn-update-us", "n_clicks"),
-    prevent_initial_call=True
-)
-def run_us_update(n_clicks):
-    """執行美股資料更新"""
-    if not n_clicks:
-        return dash.no_update
-
-    from utils.cache import StockDownloader
-    from datetime import datetime
-
-    # 從 watchlist 或設定檔讀取美股清單
-    # 這裡先用範例
-    symbols = ['AAPL', 'TSLA', 'NVDA', 'GOOGL', 'MSFT', 'AMZN']
-
-    downloader = StockDownloader()
-    start_time = datetime.now()
-
-    status_log = [
-        html.Div([
-            html.Span("⏳ ", style={"fontSize": "20px"}),
-            html.Span(f"開始更新美股資料... ({len(symbols)} 檔)", style={"fontWeight": "bold"})
-        ], style={"marginBottom": "10px", "color": "#3498db"}),
-
-        html.Div(
-            f"開始時間: {start_time:%Y-%m-%d %H:%M:%S}",
-            style={"marginBottom": "15px", "color": "#7f8c8d", "fontSize": "12px"}
-        )
-    ]
-
-    results = downloader.batch_update(symbols, max_workers=3)
-
-    end_time = datetime.now()
-    elapsed = (end_time - start_time).total_seconds()
-
-    status_log.extend([
-        html.Hr(),
-        html.Div([
-            html.Span("✅ ", style={"fontSize": "20px"}),
-            html.Span("更新完成！", style={"fontWeight": "bold", "color": "#27ae60"})
-        ], style={"marginBottom": "10px"}),
-
-        html.Div([
-            html.Div(f"✓ 成功: {len(results['success'])} 檔", style={"color": "#27ae60"}),
-            html.Div(f"✗ 失敗: {len(results['failed'])} 檔", style={"color": "#e74c3c"}),
-            html.Div(f"⏱ 耗時: {elapsed:.1f} 秒", style={"color": "#7f8c8d"})
-        ], style={"marginLeft": "30px", "fontSize": "14px"})
-    ])
-
-    return html.Div(status_log)
-# ==================================================
-# 1️⃣3️⃣ Run App
-# ==================================================
 if __name__ == "__main__":
     app.run(debug=True)

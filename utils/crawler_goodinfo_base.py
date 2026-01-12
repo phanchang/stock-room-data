@@ -37,8 +37,11 @@ class GoodinfoBaseCrawler:
     """Goodinfo 爬蟲基礎類別"""
 
     # 共用設定 - 請根據你的環境修改
-    CHROMEDRIVER_PATH = r"C:\Users\andychang\Desktop\每日選股\chromedriver-win64\chromedriver.exe"
-    DATA_ROOT_DIR = Path("data/goodinfo")
+    #CHROMEDRIVER_PATH = r"C:\Users\andychang\Desktop\每日選股\chromedriver-win64\chromedriver.exe"
+    #DATA_ROOT_DIR = Path("data/goodinfo")
+    # 共用設定
+    CHROMEDRIVER_PATH = Path(__file__).parent.parent / "chromedriver-win64" / "chromedriver.exe"
+    DATA_ROOT_DIR = Path(__file__).parent / "data" / "goodinfo"
     MAX_RETRIES = 3
     RETRY_DELAY = 5
     WAIT_TIMEOUT = 10
@@ -58,24 +61,39 @@ class GoodinfoBaseCrawler:
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def _setup_driver(self):
-        """初始化 WebDriver (所有 Goodinfo 爬蟲共用)"""
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--lang=zh-TW")
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
-        chrome_options.add_argument(
-            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-        )
+        """設定 Chrome driver"""
+        options = webdriver.ChromeOptions()
 
+        # 基本設定
+        options.add_argument('--headless=new')  # 使用新版 headless 模式
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+
+        # SSL/TLS 相關設定
+        options.add_argument('--ignore-certificate-errors')
+        options.add_argument('--ignore-ssl-errors')
+        options.add_argument('--disable-web-security')
+
+        # 更真實的瀏覽器特徵
+        options.add_argument(
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36')
+
+        # 禁用自動化標記
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+
+        # 設定頁面載入策略
+        options.page_load_strategy = 'eager'  # 不等待所有資源載入完成
+
+        # 使用指定的 ChromeDriver 路徑
         service = Service(self.CHROMEDRIVER_PATH)
-        self.driver = webdriver.Chrome(service=service, options=chrome_options)
-        self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        driver = webdriver.Chrome(service=service, options=options)
 
+        # 移除 webdriver 標記
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+        return driver
     def _cleanup_driver(self):
         """清理 WebDriver"""
         if self.driver:
@@ -199,14 +217,22 @@ class GoodinfoBaseCrawler:
             try:
                 self.logger.info(f"第 {attempt + 1} 次嘗試 (共 {self.MAX_RETRIES} 次)")
 
-                self._setup_driver()
+                self.driver = self._setup_driver()  # 加上 self.driver =
+
+                # 增加隱式等待時間
+                self.driver.implicitly_wait(20)
+
+                # 設定頁面載入超時
+                self.driver.set_page_load_timeout(60)
+
                 self.driver.get(url)
 
                 wait = WebDriverWait(self.driver, self.WAIT_TIMEOUT)
                 wait.until(EC.presence_of_element_located((By.ID, table_id)))
                 self.logger.info("✓ 表格載入成功")
 
-                time.sleep(2)
+                # 增加等待時間
+                time.sleep(5 + attempt * 2)  # 第1次等5秒,第2次等7秒,第3次等9秒
 
                 df = self._parse_goodinfo_table(table_id)
                 self._cleanup_driver()
@@ -221,11 +247,11 @@ class GoodinfoBaseCrawler:
                 self._cleanup_driver()
 
             if attempt < self.MAX_RETRIES - 1:
-                self.logger.info(f"等待 {self.RETRY_DELAY} 秒後重試...")
-                time.sleep(self.RETRY_DELAY)
+                wait_time = self.RETRY_DELAY * (attempt + 1)  # 5秒、10秒、15秒
+                self.logger.info(f"等待 {wait_time} 秒後重試...")
+                time.sleep(wait_time)
 
-        raise Exception("已達最大重試次數，抓取失敗")
-
+        raise Exception("已達最大重試次數,抓取失敗")
     def load_data(self, date: str = None, suffix: str = None) -> pd.DataFrame:
         """
         載入本機資料
