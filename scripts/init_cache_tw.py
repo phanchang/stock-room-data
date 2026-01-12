@@ -149,15 +149,19 @@ def main():
     # 參數解析
     parser = argparse.ArgumentParser(description='台股資料初始化')
     parser.add_argument('--batch-size', type=int, default=200,
-                       help='每批次下載數量（預設 200）')
+                        help='每批次下載數量（預設 200）')
     parser.add_argument('--workers', type=int, default=3,
-                       help='平行下載數量（預設 3，建議 3-5）')
+                        help='平行下載數量（預設 3，建議 3-5）')
     parser.add_argument('--force', action='store_true',
-                       help='強制重新下載全部（忽略已快取）')
+                        help='強制重新下載全部（忽略已快取）')
     parser.add_argument('--limit', type=int, default=None,
-                       help='限制下載數量（測試用）')
+                        help='限制下載數量（測試用）')
     parser.add_argument('--start-from', type=int, default=0,
-                       help='從第 N 檔開始（用於中斷後繼續）')
+                        help='從第 N 檔開始（用於中斷後繼續）')
+    parser.add_argument('--skip-check', action='store_true',
+                        help='跳過已是最新的股票（加速每日更新）')
+    parser.add_argument('--auto', action='store_true',           # ✅ 加這行
+                        help='自動執行，不等待使用者確認')        # ✅ 加這行
 
     args = parser.parse_args()
 
@@ -169,6 +173,8 @@ def main():
     print(f"批次大小: {args.batch_size} 檔")
     print(f"平行數量: {args.workers}")
     print(f"強制下載: {'是' if args.force else '否'}")
+    print(f"跳過檢查: {'是' if args.skip_check else '否'}")
+    print(f"自動模式: {'是' if args.auto else '否'}")  # ✅ 加這行
     if args.limit:
         print(f"限制數量: {args.limit} 檔（測試模式）")
     if args.start_from > 0:
@@ -188,9 +194,40 @@ def main():
     # 過濾已存在的股票
     symbols_to_download = filter_existing_symbols(downloader, symbols, args.force)
 
+    # 🆕 如果啟用 skip_check，進一步過濾出真正需要更新的
+    # 在 main() 函數中
+    if args.skip_check and symbols_to_download:
+        print("檢查哪些股票需要更新...")
+        need_update = []
+        total = len(symbols_to_download)
+
+        for idx, symbol in enumerate(symbols_to_download, 1):
+            # ✅ 每 100 檔輸出一次進度
+            if idx % 100 == 0 or idx == total:
+                print(f"  檢查進度: {idx}/{total} ({idx / total * 100:.1f}%)")
+
+            last_date = downloader.cache.get_last_date(symbol)
+            if last_date:
+                today = pd.Timestamp.now().normalize()
+                if last_date < today - pd.Timedelta(days=1):
+                    need_update.append(symbol)
+            else:
+                need_update.append(symbol)
+
+        symbols_to_download = need_update
+        print(f"  ✓ 檢查完成！真正需要更新: {len(symbols_to_download)} 檔\n")
     if not symbols_to_download:
-        print("✅ 所有股票都已快取！")
-        print("\n提示：使用 --force 可強制重新下載")
+        # 即使沒有需要更新的，也輸出統計格式
+        print("=" * 70)
+        print(" " * 25 + "完成")
+        print("=" * 70)
+        print(f"✓ 成功: 0 檔")
+        print(f"✗ 失敗: 0 檔")
+        print(f"⏱ 總耗時: 0.0 分鐘")
+        print(f"完成時間: {datetime.now():%Y-%m-%d %H:%M:%S}")
+        print("\n💡 所有股票都已是最新！")
+        print("提示：使用 --force 可強制重新下載")
+        print("=" * 70 + "\n")
         return
 
     # 處理起始位置
@@ -203,20 +240,35 @@ def main():
         symbols_to_download = symbols_to_download[:args.limit]
         print(f"測試模式：只下載前 {args.limit} 檔\n")
 
-    # 確認
-    print(f"即將下載 {len(symbols_to_download)} 檔台股資料")
-    print(f"預估時間: {len(symbols_to_download) * 0.5 / 60:.1f} 分鐘")
-    print("\n按 Ctrl+C 可隨時中斷（已下載的資料會保留）\n")
+        # 確認
+        print(f"即將下載 {len(symbols_to_download)} 檔台股資料")
+        print(f"預估時間: {len(symbols_to_download) * 0.5 / 60:.1f} 分鐘")
 
-    try:
-        input("按 Enter 開始，或 Ctrl+C 取消...")
-    except KeyboardInterrupt:
-        print("\n\n已取消")
-        return
+        # ✅ 加入這段
+        if not args.auto:
+            print("\n按 Ctrl+C 可隨時中斷（已下載的資料會保留）\n")
+            try:
+                input("按 Enter 開始，或 Ctrl+C 取消...")
+            except KeyboardInterrupt:
+                print("\n\n已取消")
+                return
+        else:
+            print("\n自動模式：立即開始下載...\n")
 
-    print("\n" + "=" * 70)
-    print("開始下載...")
-    print("=" * 70 + "\n")
+        # ✅ 只有非自動模式才等待確認
+        if not args.auto:
+            print("\n按 Ctrl+C 可隨時中斷（已下載的資料會保留）\n")
+            try:
+                input("按 Enter 開始，或 Ctrl+C 取消...")
+            except KeyboardInterrupt:
+                print("\n\n已取消")
+                return
+        else:
+            print("\n自動模式：立即開始下載...\n")
+
+        print("\n" + "=" * 70)
+        print("開始下載...")
+        print("=" * 70 + "\n")
 
     # 開始下載
     start_time = datetime.now()
@@ -264,7 +316,8 @@ def main():
         print(" " * 22 + "使用者中斷")
         print("=" * 70)
         print("已下載的資料已保存")
-        print(f"下次執行時使用 --start-from {args.start_from + len(downloader.cache.get_all_symbols(market='tw'))} 繼續")
+        print(
+            f"下次執行時使用 --start-from {args.start_from + len(downloader.cache.get_all_symbols(market='tw'))} 繼續")
         print("=" * 70 + "\n")
 
 

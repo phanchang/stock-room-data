@@ -155,7 +155,7 @@ class StockDownloader:
             self.logger.error(f"下載失敗 {symbol}: {e}")
             return None
 
-    def update_single(self, symbol: str, force: bool = False) -> Optional[pd.DataFrame]:
+    def update_single(self, symbol: str, force: bool = False, check_today: bool = True) -> Optional[pd.DataFrame]:
         """
         更新單一股票（智慧增量更新）
 
@@ -168,6 +168,7 @@ class StockDownloader:
         Args:
             symbol: 股票代號
             force: 強制重新下載全部
+            check_today: 是否檢查今天有無交易（避免非交易日重複下載）
 
         Returns:
             更新後的 DataFrame
@@ -188,11 +189,37 @@ class StockDownloader:
             # 檢查最後更新日期
             last_date = existing_df.index[-1]
             today = pd.Timestamp.now().normalize()
+
+            # ✅ 嚴格判斷：如果是今天或昨天（週末），就不用更新
+            if check_today:
+                # 判斷今天是否為交易日（台股：週一到週五）
+                weekday = today.weekday()  # 0=週一, 6=週日
+
+                # 如果是週末，最新資料應該是週五
+                if weekday == 5:  # 週六
+                    expected_last_date = today - pd.Timedelta(days=1)  # 週五
+                elif weekday == 6:  # 週日
+                    expected_last_date = today - pd.Timedelta(days=2)  # 週五
+                else:  # 週間
+                    # 如果現在還沒收盤（14:30前），最新應該是昨天
+                    import datetime
+                    now = datetime.datetime.now()
+                    if now.hour < 14 or (now.hour == 14 and now.minute < 30):
+                        expected_last_date = today - pd.Timedelta(days=1)
+                    else:
+                        expected_last_date = today
+
+                # ✅ 如果已經有預期日期的資料，就不用更新
+                if last_date >= expected_last_date:
+                    self.logger.info(f"✓ 資料已是最新 (最後日期: {last_date.date()})")
+                    return existing_df
+
+            # 計算缺失天數
             missing_days = (today - last_date).days
 
             self.logger.info(f"最後更新: {last_date.date()}, 缺失 {missing_days} 天")
 
-            # 情境2: 已是最新
+            # 情境2: 已是最新（保留原邏輯作為備用）
             if missing_days <= 1:
                 self.logger.info("✓ 資料已是最新，無需更新")
                 return existing_df
@@ -220,8 +247,12 @@ class StockDownloader:
             # 品質檢查
             quality = self.cache.check_data_quality(df, symbol)
 
-            # 儲存
-            if self.cache.save(symbol, df):
+            # ✅ 只有在資料真的有變化時才儲存
+            if existing_df is None or not existing_df.equals(df):
+                if self.cache.save(symbol, df):
+                    return df
+            else:
+                self.logger.info("✓ 資料無變化，不更新檔案")
                 return df
 
         return None

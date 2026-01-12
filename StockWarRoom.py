@@ -21,9 +21,13 @@ from config.quick_filter_config import FILTER_CONDITIONS, get_latest_file
 # ==================================================
 # 1. Proxy 設定
 # ==================================================
-PROXY = "http://10.160.3.88:8080"
-os.environ["HTTP_PROXY"] = PROXY
-os.environ["HTTPS_PROXY"] = PROXY
+
+ENV_HOME = os.getenv('ENV_HOME')
+
+if not ENV_HOME:
+    PROXY = "http://10.160.3.88:8080"
+    os.environ["HTTP_PROXY"] = PROXY
+    os.environ["HTTPS_PROXY"] = PROXY
 
 # ==================================================
 # 2. 載入股票清單
@@ -424,7 +428,7 @@ def merge_filter_results(selected_conditions: list) -> pd.DataFrame:
         # 營收相關
         '成交_月營收創新高': '成交價',
         '單月營收(億)_月營收創新高': '營收億',
-        '單月營收歷月排名_月營收創新高': '營收歷年排名',
+        '單月營收歷月排名_月營收創新高': '營收歷月排名',
         '單月營收連增減月數_月營收創新高': '連增月',
         #'單月營收創紀錄月數_月營收創新高': '創紀錄',
         '單月營收月增(%)_月營收創新高':'單月MoM(%)',
@@ -3747,7 +3751,7 @@ def update_filter_result(n_clicks_list, button_ids):
                 {'if': {'column_id': '大戶%'}, 'width': '70px'},
                 {'if': {'column_id': '大戶(張)'}, 'width': '75px'},
                 {'if': {'column_id': '營收億'}, 'width': '70px'},
-                {'if': {'column_id': '營收歷年排名'}, 'width': '60px'},
+                {'if': {'column_id': '營收歷月排名'}, 'width': '10px'},
                 {'if': {'column_id': '連增月'}, 'width': '40px'},
                 {'if': {'column_id': '單月MoM(%)'}, 'width': '40px'},
                 {'if': {'column_id': '單月YoY(%)'}, 'width': '40px'},
@@ -3951,94 +3955,110 @@ def update_filter_period(period, selected_rows, table_data, selected_tab):
 # ==================================================
 
 def build_background_tasks_layout():
-    """建立背景任務管理介面"""
-
-    # 取得快取統計資訊
+    """簡化版背景任務介面"""
     from utils.cache import CacheManager
+
     cache = CacheManager()
     cache_info = cache.get_cache_info()
 
     return html.Div([
         html.H3("🔧 背景任務管理", style={"marginBottom": "20px"}),
 
-        # ========== 資料更新區塊 ==========
+        # ========== 每日任務 ==========
         html.Div([
-            html.H4("📊 資料更新", style={"marginBottom": "15px"}),
+            html.H4("📊 每日更新", style={"marginBottom": "15px"}),
 
-            # 台股更新
+            # 台股
             html.Div([
                 html.Div([
-                    html.Div([
-                        html.H5("台股資料", style={"margin": "0"}),
-                        html.P(
-                            f"已快取: {cache_info['tw_stocks']} 檔 ({cache_info['tw_size_mb']:.1f} MB)",
-                            style={"margin": "5px 0", "color": "#7f8c8d"}
-                        )
-                    ], style={"flex": "1"}),
+                    html.H5("台股日線更新", style={"margin": "0"}),
+                    html.P(
+                        f"已快取: {cache_info['tw_stocks']} 檔 ({cache_info['tw_size_mb']:.1f} MB)",
+                        style={"margin": "5px 0", "color": "#7f8c8d"}
+                    )
+                ], style={"flex": "1"}),
 
-                    html.Div([
-                        html.Button(
-                            "立即更新",
-                            id="btn-update-tw",
-                            n_clicks=0,
-                            style={
-                                "padding": "10px 20px",
-                                "backgroundColor": "#3498db",
-                                "color": "white",
-                                "border": "none",
-                                "borderRadius": "5px",
-                                "cursor": "pointer",
-                                "fontSize": "14px"
-                            }
-                        )
-                    ])
-                ], style={
-                    "display": "flex",
-                    "justifyContent": "space-between",
-                    "alignItems": "center",
-                    "padding": "15px",
-                    "backgroundColor": "#ecf0f1",
-                    "borderRadius": "8px",
-                    "marginBottom": "15px"
-                })
-            ]),
+                html.Button(
+                    "立即更新",
+                    id="btn-update-tw",
+                    n_clicks=0,
+                    style={
+                        "padding": "10px 20px",
+                        "backgroundColor": "#3498db",
+                        "color": "white",
+                        "border": "none",
+                        "borderRadius": "5px",
+                        "cursor": "pointer"
+                    }
+                )
+            ], style={
+                "display": "flex",
+                "justifyContent": "space-between",
+                "alignItems": "center",
+                "padding": "15px",
+                "backgroundColor": "#ecf0f1",
+                "borderRadius": "8px",
+                "marginBottom": "10px"
+            }),
 
-            # 美股更新
+            # ETF
             html.Div([
                 html.Div([
-                    html.Div([
-                        html.H5("美股資料", style={"margin": "0"}),
-                        html.P(
-                            f"已快取: {cache_info['us_stocks']} 檔 ({cache_info['us_size_mb']:.1f} MB)",
-                            style={"margin": "5px 0", "color": "#7f8c8d"}
-                        )
-                    ], style={"flex": "1"}),
+                    html.H5("ETF 持股更新", style={"margin": "0"}),
+                    html.P("00981A, 00991A", style={"margin": "5px 0", "color": "#7f8c8d"})
+                ], style={"flex": "1"}),
 
-                    html.Div([
-                        html.Button(
-                            "立即更新",
-                            id="btn-update-us",
-                            n_clicks=0,
-                            style={
-                                "padding": "10px 20px",
-                                "backgroundColor": "#3498db",
-                                "color": "white",
-                                "border": "none",
-                                "borderRadius": "5px",
-                                "cursor": "pointer",
-                                "fontSize": "14px"
-                            }
-                        )
-                    ])
-                ], style={
-                    "display": "flex",
-                    "justifyContent": "space-between",
-                    "alignItems": "center",
-                    "padding": "15px",
-                    "backgroundColor": "#ecf0f1",
-                    "borderRadius": "8px"
-                })
-            ])
+                html.Button(
+                    "立即更新",
+                    id="btn-update-etf",
+                    n_clicks=0,
+                    style={
+                        "padding": "10px 20px",
+                        "backgroundColor": "#9b59b6",
+                        "color": "white",
+                        "border": "none",
+                        "borderRadius": "5px",
+                        "cursor": "pointer"
+                    }
+                )
+            ], style={
+                "display": "flex",
+                "justifyContent": "space-between",
+                "alignItems": "center",
+                "padding": "15px",
+                "backgroundColor": "#ecf0f1",
+                "borderRadius": "8px",
+                "marginBottom": "10px"
+            }),
+
+            # 突破30日新高
+            html.Div([
+                html.Div([
+                    html.H5("突破30日新高", style={"margin": "0"}),
+                    html.P("Goodinfo 資料", style={"margin": "5px 0", "color": "#7f8c8d"})
+                ], style={"flex": "1"}),
+
+                html.Button(
+                    "立即更新",
+                    id="btn-update-30high",
+                    n_clicks=0,
+                    style={
+                        "padding": "10px 20px",
+                        "backgroundColor": "#e67e22",
+                        "color": "white",
+                        "border": "none",
+                        "borderRadius": "5px",
+                        "cursor": "pointer"
+                    }
+                )
+            ], style={
+                "display": "flex",
+                "justifyContent": "space-between",
+                "alignItems": "center",
+                "padding": "15px",
+                "backgroundColor": "#ecf0f1",
+                "borderRadius": "8px"
+            })
         ], style={
             "marginBottom": "30px",
             "padding": "20px",
@@ -4047,7 +4067,77 @@ def build_background_tasks_layout():
             "boxShadow": "0 2px 4px rgba(0,0,0,0.1)"
         }),
 
-        # ========== 執行狀態區塊 ==========
+        # ========== 每週/每月任務 ==========
+        html.Div([
+            html.H4("📅 每週/每月更新", style={"marginBottom": "15px"}),
+
+            # 千張大戶
+            html.Div([
+                html.Div([
+                    html.H5("千張大戶異動（每週）", style={"margin": "0"}),
+                    html.P("Goodinfo 資料", style={"margin": "5px 0", "color": "#7f8c8d"})
+                ], style={"flex": "1"}),
+
+                html.Button(
+                    "立即更新",
+                    id="btn-update-holder",
+                    n_clicks=0,
+                    style={
+                        "padding": "10px 20px",
+                        "backgroundColor": "#16a085",
+                        "color": "white",
+                        "border": "none",
+                        "borderRadius": "5px",
+                        "cursor": "pointer"
+                    }
+                )
+            ], style={
+                "display": "flex",
+                "justifyContent": "space-between",
+                "alignItems": "center",
+                "padding": "15px",
+                "backgroundColor": "#ecf0f1",
+                "borderRadius": "8px",
+                "marginBottom": "10px"
+            }),
+
+            # 月營收
+            html.Div([
+                html.Div([
+                    html.H5("月營收創新高（每月）", style={"margin": "0"}),
+                    html.P("Goodinfo 資料", style={"margin": "5px 0", "color": "#7f8c8d"})
+                ], style={"flex": "1"}),
+
+                html.Button(
+                    "立即更新",
+                    id="btn-update-revenue",
+                    n_clicks=0,
+                    style={
+                        "padding": "10px 20px",
+                        "backgroundColor": "#d35400",
+                        "color": "white",
+                        "border": "none",
+                        "borderRadius": "5px",
+                        "cursor": "pointer"
+                    }
+                )
+            ], style={
+                "display": "flex",
+                "justifyContent": "space-between",
+                "alignItems": "center",
+                "padding": "15px",
+                "backgroundColor": "#ecf0f1",
+                "borderRadius": "8px"
+            })
+        ], style={
+            "marginBottom": "30px",
+            "padding": "20px",
+            "backgroundColor": "#ffffff",
+            "borderRadius": "10px",
+            "boxShadow": "0 2px 4px rgba(0,0,0,0.1)"
+        }),
+
+        # ========== 執行記錄 ==========
         html.Div([
             html.H4("📝 執行記錄", style={"marginBottom": "15px"}),
 
@@ -4059,11 +4149,7 @@ def build_background_tasks_layout():
                     children=[
                         html.Div(
                             "等待執行任務...",
-                            style={
-                                "padding": "30px",
-                                "textAlign": "center",
-                                "color": "#999"
-                            }
+                            style={"padding": "30px", "textAlign": "center", "color": "#999"}
                         )
                     ],
                     style={
@@ -4082,62 +4168,344 @@ def build_background_tasks_layout():
             "backgroundColor": "#ffffff",
             "borderRadius": "10px",
             "boxShadow": "0 2px 4px rgba(0,0,0,0.1)"
-        }),
-
-        # ========== 未來擴展區域 ==========
-        html.Div([
-            html.H4("🚀 其他任務（開發中）", style={"marginBottom": "15px"}),
-
-            html.Div([
-                html.Button(
-                    "自動篩選",
-                    disabled=True,
-                    style={
-                        "padding": "10px 20px",
-                        "margin": "5px",
-                        "backgroundColor": "#95a5a6",
-                        "color": "white",
-                        "border": "none",
-                        "borderRadius": "5px",
-                        "cursor": "not-allowed"
-                    }
-                ),
-                html.Button(
-                    "定期報告",
-                    disabled=True,
-                    style={
-                        "padding": "10px 20px",
-                        "margin": "5px",
-                        "backgroundColor": "#95a5a6",
-                        "color": "white",
-                        "border": "none",
-                        "borderRadius": "5px",
-                        "cursor": "not-allowed"
-                    }
-                ),
-                html.Button(
-                    "資料庫維護",
-                    disabled=True,
-                    style={
-                        "padding": "10px 20px",
-                        "margin": "5px",
-                        "backgroundColor": "#95a5a6",
-                        "color": "white",
-                        "border": "none",
-                        "borderRadius": "5px",
-                        "cursor": "not-allowed"
-                    }
-                )
-            ])
-        ], style={
-            "marginTop": "20px",
-            "padding": "20px",
-            "backgroundColor": "#ffffff",
-            "borderRadius": "10px",
-            "boxShadow": "0 2px 4px rgba(0,0,0,0.1)"
         })
     ])
 
+
+# ==================================================
+# 🆕 其他任務的 Callbacks
+# ==================================================
+
+# ETF 更新
+@app.callback(
+    Output("task-status-container", "children", allow_duplicate=True),
+    Input("btn-update-etf", "n_clicks"),
+    prevent_initial_call=True
+)
+def run_etf_update(n_clicks):
+    """執行 ETF 更新"""
+    if not n_clicks:
+        return dash.no_update
+
+    import subprocess
+    from datetime import datetime
+
+    start_time = datetime.now()
+
+    log = [
+        html.Div([
+            html.Span("⏳ ", style={"fontSize": "20px"}),
+            html.Span("開始更新 ETF 持股...", style={"fontWeight": "bold"})
+        ], style={"marginBottom": "10px", "color": "#9b59b6"}),
+        html.Div(f"開始時間: {start_time:%H:%M:%S}", style={"color": "#7f8c8d", "fontSize": "12px"})
+    ]
+
+    try:
+        # 執行 utils/etf/main.py
+        result = subprocess.run(
+            [sys.executable, "utils/etf/main.py"],
+            capture_output=True,
+            text=True,
+            timeout=600  # 10分鐘超時
+        )
+
+        end_time = datetime.now()
+        elapsed = (end_time - start_time).total_seconds()
+
+        if result.returncode == 0:
+            log.extend([
+                html.Hr(),
+                html.Div([
+                    html.Span("✅ ", style={"fontSize": "20px"}),
+                    html.Span("ETF 更新完成！", style={"fontWeight": "bold", "color": "#27ae60"})
+                ]),
+                html.Div(f"⏱ 耗時: {elapsed:.1f} 秒", style={"color": "#7f8c8d", "marginLeft": "30px"}),
+                html.Details([
+                    html.Summary("查看輸出", style={"cursor": "pointer", "color": "#7f8c8d"}),
+                    html.Pre(
+                        result.stdout[-1000:],  # 最後1000字元
+                        style={"fontSize": "11px", "backgroundColor": "#f8f9fa", "padding": "10px"}
+                    )
+                ])
+            ])
+        else:
+            log.extend([
+                html.Hr(),
+                html.Div([
+                    html.Span("❌ ", style={"fontSize": "20px"}),
+                    html.Span("ETF 更新失敗", style={"fontWeight": "bold", "color": "#e74c3c"})
+                ]),
+                html.Details([
+                    html.Summary("查看錯誤", style={"cursor": "pointer", "color": "#e74c3c"}),
+                    html.Pre(result.stderr[-500:], style={"fontSize": "11px"})
+                ])
+            ])
+
+    except subprocess.TimeoutExpired:
+        log.extend([
+            html.Hr(),
+            html.Div("❌ 執行超時（超過10分鐘）", style={"color": "#e74c3c"})
+        ])
+    except Exception as e:
+        log.extend([
+            html.Hr(),
+            html.Div(f"❌ 執行異常: {str(e)}", style={"color": "#e74c3c"})
+        ])
+
+    return html.Div(log)
+
+
+# 突破30日新高
+@app.callback(
+    Output("task-status-container", "children", allow_duplicate=True),
+    Input("btn-update-30high", "n_clicks"),
+    prevent_initial_call=True
+)
+def run_30high_update(n_clicks):
+    """執行突破30日新高爬蟲"""
+    if not n_clicks:
+        return dash.no_update
+
+    import subprocess
+    from datetime import datetime
+
+    start_time = datetime.now()
+
+    log = [
+        html.Div([
+            html.Span("⏳ ", style={"fontSize": "20px"}),
+            html.Span("開始爬取突破30日新高...", style={"fontWeight": "bold"})
+        ], style={"marginBottom": "10px", "color": "#e67e22"}),
+        html.Div(f"開始時間: {start_time:%H:%M:%S}", style={"color": "#7f8c8d", "fontSize": "12px"})
+    ]
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "utils/crawler_goodinfo_30high.py"],
+            capture_output=True,
+            text=True,
+            timeout=300  # 5分鐘超時
+        )
+
+        end_time = datetime.now()
+        elapsed = (end_time - start_time).total_seconds()
+
+        if result.returncode == 0:
+            # 檢查輸出檔案
+            output_dir = Path("data/clean/goodinfo/30high")
+            if output_dir.exists():
+                files = list(output_dir.glob("*.csv"))
+                if files:
+                    latest_file = max(files, key=lambda x: x.stat().st_mtime)
+                    df = pd.read_csv(latest_file)
+                    count = len(df)
+                else:
+                    count = 0
+            else:
+                count = 0
+
+            log.extend([
+                html.Hr(),
+                html.Div([
+                    html.Span("✅ ", style={"fontSize": "20px"}),
+                    html.Span("爬取完成！", style={"fontWeight": "bold", "color": "#27ae60"})
+                ]),
+                html.Div(f"找到 {count} 檔股票", style={"color": "#27ae60", "marginLeft": "30px"}),
+                html.Div(f"⏱ 耗時: {elapsed:.1f} 秒", style={"color": "#7f8c8d", "marginLeft": "30px"})
+            ])
+        else:
+            log.extend([
+                html.Hr(),
+                html.Div([
+                    html.Span("❌ ", style={"fontSize": "20px"}),
+                    html.Span("爬取失敗", style={"fontWeight": "bold", "color": "#e74c3c"})
+                ]),
+                html.Details([
+                    html.Summary("查看錯誤", style={"cursor": "pointer", "color": "#e74c3c"}),
+                    html.Pre(result.stderr[-500:], style={"fontSize": "11px"})
+                ])
+            ])
+
+    except subprocess.TimeoutExpired:
+        log.extend([
+            html.Hr(),
+            html.Div("❌ 執行超時（超過5分鐘）", style={"color": "#e74c3c"})
+        ])
+    except Exception as e:
+        log.extend([
+            html.Hr(),
+            html.Div(f"❌ 執行異常: {str(e)}", style={"color": "#e74c3c"})
+        ])
+
+    return html.Div(log)
+
+
+# 千張大戶異動
+@app.callback(
+    Output("task-status-container", "children", allow_duplicate=True),
+    Input("btn-update-holder", "n_clicks"),
+    prevent_initial_call=True
+)
+def run_holder_update(n_clicks):
+    """執行千張大戶異動爬蟲"""
+    if not n_clicks:
+        return dash.no_update
+
+    import subprocess
+    from datetime import datetime
+
+    start_time = datetime.now()
+
+    log = [
+        html.Div([
+            html.Span("⏳ ", style={"fontSize": "20px"}),
+            html.Span("開始爬取千張大戶異動...", style={"fontWeight": "bold"})
+        ], style={"marginBottom": "10px", "color": "#16a085"}),
+        html.Div(f"開始時間: {start_time:%H:%M:%S}", style={"color": "#7f8c8d", "fontSize": "12px"})
+    ]
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "utils/crawler_goodinfo_holder_change.py"],
+            capture_output=True,
+            text=True,
+            timeout=600  # 10分鐘超時
+        )
+
+        end_time = datetime.now()
+        elapsed = (end_time - start_time).total_seconds()
+
+        if result.returncode == 0:
+            output_dir = Path("data/clean/goodinfo/holder_change")
+            if output_dir.exists():
+                files = list(output_dir.glob("*.csv"))
+                if files:
+                    latest_file = max(files, key=lambda x: x.stat().st_mtime)
+                    df = pd.read_csv(latest_file)
+                    count = len(df)
+                else:
+                    count = 0
+            else:
+                count = 0
+
+            log.extend([
+                html.Hr(),
+                html.Div([
+                    html.Span("✅ ", style={"fontSize": "20px"}),
+                    html.Span("爬取完成！", style={"fontWeight": "bold", "color": "#27ae60"})
+                ]),
+                html.Div(f"找到 {count} 檔股票", style={"color": "#27ae60", "marginLeft": "30px"}),
+                html.Div(f"⏱ 耗時: {elapsed / 60:.1f} 分鐘", style={"color": "#7f8c8d", "marginLeft": "30px"})
+            ])
+        else:
+            log.extend([
+                html.Hr(),
+                html.Div([
+                    html.Span("❌ ", style={"fontSize": "20px"}),
+                    html.Span("爬取失敗", style={"fontWeight": "bold", "color": "#e74c3c"})
+                ]),
+                html.Details([
+                    html.Summary("查看錯誤", style={"cursor": "pointer", "color": "#e74c3c"}),
+                    html.Pre(result.stderr[-500:], style={"fontSize": "11px"})
+                ])
+            ])
+
+    except subprocess.TimeoutExpired:
+        log.extend([
+            html.Hr(),
+            html.Div("❌ 執行超時（超過10分鐘）", style={"color": "#e74c3c"})
+        ])
+    except Exception as e:
+        log.extend([
+            html.Hr(),
+            html.Div(f"❌ 執行異常: {str(e)}", style={"color": "#e74c3c"})
+        ])
+
+    return html.Div(log)
+
+
+# 月營收創新高
+@app.callback(
+    Output("task-status-container", "children", allow_duplicate=True),
+    Input("btn-update-revenue", "n_clicks"),
+    prevent_initial_call=True
+)
+def run_revenue_update(n_clicks):
+    """執行月營收創新高爬蟲"""
+    if not n_clicks:
+        return dash.no_update
+
+    import subprocess
+    from datetime import datetime
+
+    start_time = datetime.now()
+
+    log = [
+        html.Div([
+            html.Span("⏳ ", style={"fontSize": "20px"}),
+            html.Span("開始爬取月營收創新高...", style={"fontWeight": "bold"})
+        ], style={"marginBottom": "10px", "color": "#d35400"}),
+        html.Div(f"開始時間: {start_time:%H:%M:%S}", style={"color": "#7f8c8d", "fontSize": "12px"})
+    ]
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "utils/crawler_goodinfo_revenue_high.py"],
+            capture_output=True,
+            text=True,
+            timeout=600  # 10分鐘超時
+        )
+
+        end_time = datetime.now()
+        elapsed = (end_time - start_time).total_seconds()
+
+        if result.returncode == 0:
+            output_dir = Path("data/clean/goodinfo/revenue_high")
+            if output_dir.exists():
+                files = list(output_dir.glob("*.csv"))
+                if files:
+                    latest_file = max(files, key=lambda x: x.stat().st_mtime)
+                    df = pd.read_csv(latest_file)
+                    count = len(df)
+                else:
+                    count = 0
+            else:
+                count = 0
+
+            log.extend([
+                html.Hr(),
+                html.Div([
+                    html.Span("✅ ", style={"fontSize": "20px"}),
+                    html.Span("爬取完成！", style={"fontWeight": "bold", "color": "#27ae60"})
+                ]),
+                html.Div(f"找到 {count} 檔股票", style={"color": "#27ae60", "marginLeft": "30px"}),
+                html.Div(f"⏱ 耗時: {elapsed / 60:.1f} 分鐘", style={"color": "#7f8c8d", "marginLeft": "30px"})
+            ])
+        else:
+            log.extend([
+                html.Hr(),
+                html.Div([
+                    html.Span("❌ ", style={"fontSize": "20px"}),
+                    html.Span("爬取失敗", style={"fontWeight": "bold", "color": "#e74c3c"})
+                ]),
+                html.Details([
+                    html.Summary("查看錯誤", style={"cursor": "pointer", "color": "#e74c3c"}),
+                    html.Pre(result.stderr[-500:], style={"fontSize": "11px"})
+                ])
+            ])
+
+    except subprocess.TimeoutExpired:
+        log.extend([
+            html.Hr(),
+            html.Div("❌ 執行超時（超過10分鐘）", style={"color": "#e74c3c"})
+        ])
+    except Exception as e:
+        log.extend([
+            html.Hr(),
+            html.Div(f"❌ 執行異常: {str(e)}", style={"color": "#e74c3c"})
+        ])
+
+    return html.Div(log)
 
 # ==================================================
 # Callback: 切換擴充模組的內容
@@ -4181,15 +4549,144 @@ def update_module_content(module_type):
 # ==================================================
 # Callback: 執行台股更新
 # ==================================================
+import threading
+import queue
+
+# 全域變數儲存進度
+update_progress = {"status": "idle", "message": "", "logs": []}
+update_lock = threading.Lock()
+
+
 @app.callback(
-    Output("task-status-container", "children"),
+    Output("task-status-container", "children", allow_duplicate=True),
     Input("btn-update-tw", "n_clicks"),
     prevent_initial_call=True
 )
 def run_tw_update(n_clicks):
-    """執行台股資料更新"""
+    """啟動台股更新"""
     if not n_clicks:
         return dash.no_update
+
+    # 檢查是否已在執行中
+    with update_lock:
+        if update_progress["status"] == "running":
+            return html.Div("⚠️ 更新正在進行中，請稍候...", style={"color": "#e67e22"})
+
+        # 重置進度
+        update_progress["status"] = "running"
+        update_progress["message"] = "準備開始..."
+        update_progress["logs"] = []
+
+    # 在背景執行
+    threading.Thread(target=run_update_background, daemon=True).start()
+
+    return html.Div([
+        html.Div("⏳ 更新已啟動，請等待進度更新...", style={"color": "#3498db"}),
+        dcc.Interval(id="update-progress-interval", interval=500, n_intervals=0)  # 每 0.5 秒更新
+    ])
+
+
+def run_update_background():
+    """背景執行更新"""
+    import subprocess
+    from datetime import datetime
+
+    start_time = datetime.now()
+
+    try:
+        # ✅ 使用 Popen 即時讀取輸出
+        process = subprocess.Popen(
+            [sys.executable, "scripts/init_cache_tw.py", "--skip-check"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding='utf-8',
+            errors='replace',
+            bufsize=1,  # 行緩衝
+            universal_newlines=True
+        )
+
+        # 即時讀取輸出
+        for line in process.stdout:
+            line = line.strip()
+            if line:
+                with update_lock:
+                    update_progress["logs"].append(line)
+                    # 解析關鍵訊息
+                    if "檢查進度:" in line:
+                        update_progress["message"] = f"🔍 {line}"
+                    elif "真正需要更新:" in line:
+                        update_progress["message"] = f"✓ {line}"
+                    elif "下載進度:" in line:
+                        update_progress["message"] = f"⬇️ {line}"
+                    elif "成功:" in line:
+                        update_progress["message"] = "✅ 更新完成"
+
+        process.wait()
+
+        end_time = datetime.now()
+        elapsed = (end_time - start_time).total_seconds()
+
+        with update_lock:
+            update_progress["status"] = "completed"
+            update_progress["message"] = f"✅ 完成！耗時 {elapsed / 60:.1f} 分鐘"
+
+    except Exception as e:
+        with update_lock:
+            update_progress["status"] = "failed"
+            update_progress["message"] = f"❌ 錯誤: {str(e)}"
+
+
+@app.callback(
+    Output("task-status-container", "children"),
+    Input("update-progress-interval", "n_intervals"),
+    prevent_initial_call=True
+)
+def update_progress_display(n):
+    """更新進度顯示"""
+    with update_lock:
+        status = update_progress["status"]
+        message = update_progress["message"]
+        logs = update_progress["logs"][-20:]  # 只顯示最近 20 行
+
+    if status == "idle":
+        return dash.no_update
+
+    # 組合顯示
+    display = [
+        html.Div(message, style={
+            "fontSize": "16px",
+            "fontWeight": "bold",
+            "marginBottom": "10px",
+            "color": "#3498db" if status == "running" else "#27ae60"
+        })
+    ]
+
+    if logs:
+        display.append(
+            html.Details([
+                html.Summary(f"詳細記錄（最近 {len(logs)} 行）",
+                             style={"cursor": "pointer", "color": "#7f8c8d"}),
+                html.Pre(
+                    "\n".join(logs),
+                    style={
+                        "fontSize": "11px",
+                        "backgroundColor": "#f8f9fa",
+                        "padding": "10px",
+                        "maxHeight": "300px",
+                        "overflow": "auto"
+                    }
+                )
+            ])
+        )
+
+    # 完成後移除 Interval
+    if status in ["completed", "failed"]:
+        return html.Div(display)
+    else:
+        return html.Div([
+            *display,
+            dcc.Interval(id="update-progress-interval", interval=500, n_intervals=0)
+        ])
 
     from utils.cache import CacheManager, StockDownloader
     from datetime import datetime
