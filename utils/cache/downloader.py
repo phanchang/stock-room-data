@@ -189,18 +189,21 @@ class StockDownloader:
             # 檢查最後更新日期
             last_date = existing_df.index[-1]
             today = pd.Timestamp.now().normalize()
+            missing_days = (today - last_date).days
 
-            # ✅ 嚴格判斷：如果是今天或昨天（週末），就不用更新
-            if check_today:
+            self.logger.info(f"最後更新: {last_date.date()}, 缺失 {missing_days} 天")
+
+            # ✅ 改進的判斷邏輯：檢查是否需要更新
+            if check_today and missing_days > 0:
                 # 判斷今天是否為交易日（台股：週一到週五）
                 weekday = today.weekday()  # 0=週一, 6=週日
 
-                # 如果是週末，最新資料應該是週五
+                # 計算預期的最後交易日
                 if weekday == 5:  # 週六
                     expected_last_date = today - pd.Timedelta(days=1)  # 週五
                 elif weekday == 6:  # 週日
                     expected_last_date = today - pd.Timedelta(days=2)  # 週五
-                else:  # 週間
+                else:  # 週間（週一到週五）
                     # 如果現在還沒收盤（14:30前），最新應該是昨天
                     import datetime
                     now = datetime.datetime.now()
@@ -209,23 +212,17 @@ class StockDownloader:
                     else:
                         expected_last_date = today
 
-                # ✅ 如果已經有預期日期的資料，就不用更新
+                # ✅ 關鍵修正：如果已經有預期日期的資料，才是最新
                 if last_date >= expected_last_date:
-                    self.logger.info(f"✓ 資料已是最新 (最後日期: {last_date.date()})")
+                    self.logger.info(f"✓ 資料已是最新 (最後日期: {last_date.date()}, 預期: {expected_last_date.date()})")
                     return existing_df
+                else:
+                    self.logger.info(f"需要更新 (預期: {expected_last_date.date()})")
 
-            # 計算缺失天數
-            missing_days = (today - last_date).days
+            # ✅ 移除原本的 missing_days <= 1 判斷（這是錯誤的邏輯）
 
-            self.logger.info(f"最後更新: {last_date.date()}, 缺失 {missing_days} 天")
-
-            # 情境2: 已是最新（保留原邏輯作為備用）
-            if missing_days <= 1:
-                self.logger.info("✓ 資料已是最新，無需更新")
-                return existing_df
-
-            # 情境3: 正常增量更新（缺失 <= 30天）
-            elif missing_days <= 30:
+            # 情境2: 正常增量更新（缺失 <= 30天）
+            if missing_days <= 30:
                 self.logger.info(f"增量更新 {missing_days} 天...")
                 start_date = (last_date + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
                 new_df = self.download(symbol, start=start_date)
@@ -234,10 +231,10 @@ class StockDownloader:
                     df = self.cache.merge_data(existing_df, new_df)
                     self.logger.info(f"✓ 新增 {len(new_df)} 筆資料")
                 else:
-                    self.logger.info("無新資料")
+                    self.logger.info("無新資料（可能是非交易日）")
                     df = existing_df
 
-            # 情境4: 缺失過久，重新下載
+            # 情境3: 缺失過久，重新下載
             else:
                 self.logger.warning(f"缺失過久 ({missing_days} 天)，重新下載...")
                 df = self.download(symbol, period='500d')

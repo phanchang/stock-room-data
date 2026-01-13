@@ -117,38 +117,45 @@ def extract_stock_code(text):
     return None
 
 
-def get_latest_trading_date(downloader):
+def get_latest_trading_date():
     """
-    取得最新的交易日期
+    取得台股最新的交易日期
 
-    方法:下載一支代表性股票(如 0050.TW)來取得最新交易日
+    方法：查詢台股加權指數 (^TWII) 的最後交易日
 
     Returns:
-        pd.Timestamp: 最新交易日,如果失敗則返回 None
+        pd.Timestamp: 最新交易日
     """
-    print("取得最新交易日...")
+    print("取得台股最新交易日...")
 
     try:
-        # 使用 0050.TW 作為參考(台灣 50 ETF,流動性高)
-        reference_symbol = "0050.TW"
+        import yfinance as yf
 
-        # 強制更新這支股票
-        success = downloader.update_stock(reference_symbol)
+        # ✅ 使用台股加權指數
+        twii = yf.Ticker("^TWII")
 
-        if success:
-            # 讀取最後一筆資料的日期
-            df = downloader.cache.get_stock_data(reference_symbol)
-            if df is not None and not df.empty:
-                latest_date = df.index[-1]
-                print(f"  最新交易日: {latest_date.date()}")
-                return latest_date
+        # 下載最近 10 天的資料
+        hist = twii.history(period="10d")
 
-        print("  ⚠️  無法取得最新交易日,使用昨日作為參考")
-        return pd.Timestamp.now().normalize() - pd.Timedelta(days=1)
+        if not hist.empty:
+            # 取最後一筆資料的日期
+            latest_date = hist.index[-1]
+            # ✅ 統一轉換為無時區的日期（只保留日期部分）
+            latest_date = pd.Timestamp(latest_date.date())
+
+            print(f"  ✓ 台股最新交易日: {latest_date.date()}")
+            print(f"  ✓ 今天日期: {pd.Timestamp.now().date()}\n")
+
+            return latest_date
+        else:
+            print("  ⚠️  無法從 Yahoo Finance 取得台股指數資料")
+            raise ValueError("無法取得台股指數")
 
     except Exception as e:
-        print(f"  ⚠️  取得最新交易日失敗: {e}")
-        return pd.Timestamp.now().normalize() - pd.Timedelta(days=1)
+        print(f"  ⚠️  查詢台股指數失敗: {e}")
+        print(f"  使用今天作為參考日期\n")
+        # ✅ 備用：使用今天
+        return pd.Timestamp.now().normalize()
 
 
 def filter_existing_symbols(downloader, symbols, force=False):
@@ -235,31 +242,28 @@ def main():
         print(f"  已快取: {len(existing)} 檔")
         print(f"  待檢查: {len(symbols_to_check)} 檔\n")
 
-        # ✅ 先取得最新交易日
-        latest_trading_date = get_latest_trading_date(downloader)
+        # ✅ 取得台股最新交易日
+        latest_trading_date = get_latest_trading_date()
 
-        if latest_trading_date is None:
-            print("  ⚠️  無法判斷最新交易日,將下載所有股票")
-            symbols_to_download = symbols_to_check
-        else:
-            need_update = []
-            total = len(symbols_to_check)
+        need_update = []
+        total = len(symbols_to_check)
 
-            for idx, symbol in enumerate(symbols_to_check, 1):
-                # 每 100 檔輸出一次進度
-                if idx % 100 == 0 or idx == total:
-                    print(f"  檢查進度: {idx}/{total} ({idx / total * 100:.1f}%)")
+        for idx, symbol in enumerate(symbols_to_check, 1):
+            # 每 100 檔輸出一次進度
+            if idx % 100 == 0 or idx == total:
+                print(f"  檢查進度: {idx}/{total} ({idx / total * 100:.1f}%)")
 
-                last_date = downloader.cache.get_last_date(symbol)
+            last_date = downloader.cache.get_last_date(symbol)
 
-                # ✅ 關鍵:比較是否 < 最新交易日
-                if last_date is None or last_date < latest_trading_date:
-                    need_update.append(symbol)
+            # ✅ 關鍵修正：比較是否 < 最新交易日（不是 <= ）
+            # 如果本地最後日期 < 台股最新交易日，就需要更新
+            if last_date is None or last_date < latest_trading_date:
+                need_update.append(symbol)
 
-            print(f"  ✓ 最新交易日: {latest_trading_date.date()}")
-            print(f"  ✓ 真正需要更新: {len(need_update)} 檔\n")
+        print(f"  ✓ 台股最新交易日: {latest_trading_date.date()}")
+        print(f"  ✓ 需要更新的股票: {len(need_update)} 檔\n")
 
-            symbols_to_download = need_update
+        symbols_to_download = need_update
     else:
         # 首次下載模式:只下載不存在的股票
         symbols_to_download = filter_existing_symbols(downloader, symbols, args.force)
