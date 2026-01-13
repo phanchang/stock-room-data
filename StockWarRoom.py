@@ -341,7 +341,7 @@ def load_filter_data(condition_name: str) -> pd.DataFrame:
         return None
 
 
-def merge_filter_results(selected_conditions: list) -> pd.DataFrame:
+def merge_filter_results(selected_conditions: list, days: int = None) -> pd.DataFrame:
     """
     合併多個條件的結果 (AND 邏輯)
     ✅ 保留所有原始欄位的聯集
@@ -350,14 +350,40 @@ def merge_filter_results(selected_conditions: list) -> pd.DataFrame:
     if not selected_conditions:
         return pd.DataFrame()
 
+    from utils.indicator_loader import load_indicator_stocks
+
     # ========== 1️⃣ 載入所有條件的資料 ==========
     dfs = []
     all_stock_codes = []
 
     for i, condition in enumerate(selected_conditions):
+        config = FILTER_CONDITIONS.get(condition)
+        if not config:
+            print(f"⚠️ 未定義條件: {condition}")
+            continue
+
+        # ===============================
+        # Indicator 類型 (只拿股票代號)
+        # ===============================
+        if config.get("type") == "indicator":
+            indicator_name = config["indicator"]
+            matched_codes = set(load_indicator_stocks(indicator_name, days=days))
+
+            all_stock_codes.append(matched_codes)
+
+            if days is not None:
+                print(f"📌 Indicator {condition} (近{days}日): {len(matched_codes)} 檔")
+            else:
+                print(f"📌 Indicator {condition} (全部): {len(matched_codes)} 檔")
+
+            continue  # ⬅️ 跳過下面的邏輯
+
+        # ===============================
+        # DataFrame 類型 (突破30日高、大戶增加等)
+        # ===============================
         df = load_filter_data(condition)
         if df is None:
-            print(f"⚠️ 警告：無法載入 {condition} 的資料")
+            print(f"⚠️ 警告: 無法載入 {condition} 的資料")
             continue
 
         # 統一股票代號欄位名稱為 '代號'
@@ -368,13 +394,13 @@ def merge_filter_results(selected_conditions: list) -> pd.DataFrame:
                 break
 
         if '代號' not in df.columns:
-            print(f"⚠️ 警告：{condition} 沒有股票代號欄位")
+            print(f"⚠️ 警告: {condition} 沒有股票代號欄位")
             continue
 
         # 確保 '代號' 是字串型態且去除空白
         df['代號'] = df['代號'].astype(str).str.strip()
 
-        # ✅ 重新命名欄位（除了 代號、名稱）
+        # ✅ 重新命名欄位 (除了 代號、名稱) - 加上條件名稱後綴
         rename_map = {}
         for col in df.columns:
             if col not in ['代號', '名稱']:
@@ -386,29 +412,45 @@ def merge_filter_results(selected_conditions: list) -> pd.DataFrame:
 
         print(f"📊 {condition}: {len(df)} 檔股票")
 
-    if not dfs:
+    # ========== 2️⃣ 處理沒有資料的情況 ==========
+    if not dfs and not all_stock_codes:
+        print("⚠️ 所有條件都無資料")
         return pd.DataFrame()
 
-    # ========== 2️⃣ 取交集的股票代號 ==========
-    common_codes = all_stock_codes[0]
-    for codes in all_stock_codes[1:]:
-        common_codes = common_codes & codes
+    # 情況1: 只有 indicator 條件
+    if all_stock_codes and not dfs:
+        common_stocks = set.intersection(*all_stock_codes)
+        print(f"✅ Indicator 交集: {len(common_stocks)} 檔")
+        return pd.DataFrame({"代號": list(common_stocks)})
+
+    # ========== 3️⃣ 取交集的股票代號 ==========
+    if all_stock_codes:
+        common_codes = set.intersection(*all_stock_codes)
+    else:
+        # 只有 DataFrame 條件時,取第一個的股票代號
+        common_codes = all_stock_codes[0] if all_stock_codes else set(dfs[0]['代號'])
+        for codes in all_stock_codes[1:]:
+            common_codes = common_codes & codes
 
     print(f"\n✅ 交集後剩餘: {len(common_codes)} 檔股票\n")
 
-    # ========== 3️⃣ 合併所有欄位 ==========
+    # ========== 4️⃣ 合併所有欄位 ==========
+    if not dfs:
+        # 只有 indicator,沒有 DataFrame
+        return pd.DataFrame({"代號": list(common_codes)})
+
     result_df = dfs[0][dfs[0]['代號'].isin(common_codes)].copy()
 
     for df in dfs[1:]:
         df_filtered = df[df['代號'].isin(common_codes)].copy()
         result_df = pd.merge(result_df, df_filtered, on='代號', how='outer', suffixes=('', '_dup'))
 
-        # 處理重複的 '名稱' 欄位（保留第一個非空值）
+        # 處理重複的 '名稱' 欄位(保留第一個非空值)
         if '名稱_dup' in result_df.columns:
             result_df['名稱'] = result_df['名稱'].fillna(result_df['名稱_dup'])
             result_df = result_df.drop(columns=['名稱_dup'])
 
-    # ========== 4️⃣ 定義欄位顯示配置（原始欄位 -> 顯示別名）==========
+    # ========== 5️⃣ 定義欄位顯示配置 ==========
     column_alias = {
         # 基本資訊
         '代號': '代號',
@@ -430,17 +472,14 @@ def merge_filter_results(selected_conditions: list) -> pd.DataFrame:
         '單月營收(億)_月營收創新高': '營收億',
         '單月營收歷月排名_月營收創新高': '營收歷月排名',
         '單月營收連增減月數_月營收創新高': '連增月',
-        #'單月營收創紀錄月數_月營收創新高': '創紀錄',
-        '單月營收月增(%)_月營收創新高':'單月MoM(%)',
+        '單月營收月增(%)_月營收創新高': '單月MoM(%)',
         '單月營收年增(%)_月營收創新高': '單月YoY(%)',
         '累月營收年增(%)_月營收創新高': '累月YoY(%)',
         '營收月份_月營收創新高': '月份',
     }
 
-    # ========== 5️⃣ 只保留配置中的欄位並重命名 ==========
-    # ========== 5️⃣ 依顯示名稱去重（同名欄位只留一個） ==========
-
-    display_groups = {}  # display_name -> [original_cols]
+    # ========== 6️⃣ 依顯示名稱去重 ==========
+    display_groups = {}
 
     for original_col, display_name in column_alias.items():
         if original_col in result_df.columns:
@@ -455,7 +494,7 @@ def merge_filter_results(selected_conditions: list) -> pd.DataFrame:
         if display_name in ['代號', '名稱']:
             continue
 
-        # 👉 依序取第一個非空值
+        # 依序取第一個非空值
         final_df[display_name] = (
             result_df[cols]
             .bfill(axis=1)
@@ -465,8 +504,6 @@ def merge_filter_results(selected_conditions: list) -> pd.DataFrame:
     print(f"\n📋 最終顯示欄位: {list(final_df.columns)}\n")
 
     return final_df.reset_index(drop=True)
-
-
 def build_quick_filter_layout():
     """
     建立快速選股介面
@@ -3425,11 +3462,11 @@ def switch_entry(entry):
             []
         )
 
-    # ========== C 入口：快速選股 ==========
+    # ========== C 入口:快速選股 ==========
     elif entry == "C":
         # 右側佈局
         right_layout = html.Div([
-            # 上方：篩選結果表格
+            # 上方:篩選結果表格
             html.Div(
                 id="filter-result-container",
                 children=[
@@ -3453,7 +3490,7 @@ def switch_entry(entry):
                 }
             ),
 
-            # 下方：戰情室頁籤
+            # 下方:戰情室頁籤
             html.Div(
                 id="filter-detail-tabs-container",
                 children=[],
@@ -3472,27 +3509,67 @@ def switch_entry(entry):
                     "color": "#2c3e50"
                 }
             ),
+
+            # ========== 動態生成按鈕 + 輸入框 ==========
             html.Div([
-                html.Button(
-                    config["label"],
-                    id={"type": "filter-btn", "index": name},
-                    n_clicks=0,
-                    style={
-                        "width": "100%",
-                        "margin": "5px 0",
-                        "padding": "8px",
-                        "backgroundColor": "white",
-                        "border": f"2px solid {config['color']}",
-                        "borderRadius": "5px",
-                        "cursor": "pointer",
-                        "fontSize": "12px",
-                        "transition": "all 0.3s"
-                    }
-                )
-                for name, config in FILTER_CONDITIONS.items()
+                # 針對每個條件生成
+                html.Div([
+                    # 條件按鈕
+                    html.Button(
+                        config["label"],
+                        id={"type": "filter-btn", "index": name},
+                        n_clicks=0,
+                        style={
+                            "width": "100%",
+                            "margin": "5px 0",
+                            "padding": "8px",
+                            "backgroundColor": "white",
+                            "border": f"2px solid {config['color']}",
+                            "borderRadius": "5px",
+                            "cursor": "pointer",
+                            "fontSize": "12px",
+                            "transition": "all 0.3s"
+                        }
+                    ),
+
+                    # 🆕 如果是 indicator 類型,就在下方顯示天數輸入框
+                    (html.Div([
+                        html.Label("  ↳ 近", style={"fontSize": "11px", "color": "#7f8c8d"}),
+                        dcc.Input(
+                            id="filter-days-input",
+                            type="number",
+                            value=5,
+                            min=1,
+                            max=60,
+                            step=1,
+                            style={
+                                "width": "50px",
+                                "padding": "3px",
+                                "border": "1px solid #ccc",
+                                "borderRadius": "3px",
+                                "fontSize": "11px",
+                                "marginLeft": "5px",
+                                "marginRight": "5px"
+                            }
+                        ),
+                        html.Label("日", style={"fontSize": "11px", "color": "#7f8c8d"})
+                    ], style={
+                        "marginLeft": "10px",
+                        "marginBottom": "5px",
+                        "display": "flex",
+                        "alignItems": "center"
+                    }) if config.get("type") == "indicator" else html.Div())  # ⭐ 關鍵判斷
+
+                ]) for name, config in FILTER_CONDITIONS.items()
             ])
         ])
 
+        return (
+            right_layout,
+            {"display": "none"},
+            {"display": "block", "marginTop": "10px"},
+            filter_buttons
+        )
         return (
             right_layout,
             {"display": "none"},  # ✅ 隱藏戰情室左側區域
@@ -3668,10 +3745,11 @@ def toggle_filter_button(n_clicks_list, button_ids):
 @app.callback(
     Output("filter-result-container", "children"),
     Input({"type": "filter-btn", "index": dash.dependencies.ALL}, "n_clicks"),
+    Input("filter-days-input", "value"),  # 🆕 新增 Input
     State({"type": "filter-btn", "index": dash.dependencies.ALL}, "id"),
     prevent_initial_call=True
 )
-def update_filter_result(n_clicks_list, button_ids):
+def update_filter_result(n_clicks_list, days_filter, button_ids):
     """根據選中的條件更新結果表格"""
     # 找出選中的條件
     selected_conditions = []
@@ -3692,7 +3770,7 @@ def update_filter_result(n_clicks_list, button_ids):
     print("="*60)
 
     # 合併資料
-    df_result = merge_filter_results(selected_conditions)
+    df_result = merge_filter_results(selected_conditions, days=days_filter)
 
     print(f"\n✅ 篩選完成，共 {len(df_result)} 檔股票")
     print("="*60 + "\n")

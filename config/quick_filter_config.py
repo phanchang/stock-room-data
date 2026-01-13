@@ -14,7 +14,7 @@ FILTER_CONDITIONS = {
         "label": "突破30日新高",
         "data_dir": DATA_ROOT / "30high",
         "file_pattern": "*_突破30日新高.csv",
-        "frequency": "daily",  # daily, weekly, monthly
+        "frequency": "daily",
         "color": "#FF6B6B",
         "description": "股價創30日新高"
     },
@@ -33,9 +33,32 @@ FILTER_CONDITIONS = {
         "frequency": "monthly",
         "color": "#95E1D3",
         "description": "單月營收歷月新高"
+    },
+
+    # ✅ 指標事件（正確寫法）
+    "日級爆量突破30W": {
+        "label": "日級爆量突破30W",
+        "type": "indicator",
+        "indicator": "daily_break_30w",
+        "frequency": "daily",
+        "color": "#E74C3C",
+        "description": "當天爆量突破 30 週均線（日級事件）",
+        # 🆕 UI 參數設定
+        "params": {
+            "days": {
+                "label": "近N日內",
+                "type": "number",
+                "default": 5,
+                "min": 1,
+                "max": 60,
+                "step": 1
+            }
+         }
     }
-    # 🔧 未來擴充只需在這裡新增即可
+
+
 }
+
 
 
 def get_latest_file(data_dir: str, file_pattern: str) -> Path:
