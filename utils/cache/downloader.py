@@ -457,6 +457,5 @@ if __name__ == '__main__':
 
     print("\n=== 快取資訊 ===")
     info = downloader.cache.get_cache_info()
-
     for key, value in info.items():
         print(f"{key}: {value}")

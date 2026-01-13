@@ -117,47 +117,6 @@ def extract_stock_code(text):
     return None
 
 
-def get_latest_trading_date():
-    """
-    取得台股最新的交易日期
-
-    方法：查詢台股加權指數 (^TWII) 的最後交易日
-
-    Returns:
-        pd.Timestamp: 最新交易日
-    """
-    print("取得台股最新交易日...")
-
-    try:
-        import yfinance as yf
-
-        # ✅ 使用台股加權指數
-        twii = yf.Ticker("^TWII")
-
-        # 下載最近 10 天的資料
-        hist = twii.history(period="10d")
-
-        if not hist.empty:
-            # 取最後一筆資料的日期
-            latest_date = hist.index[-1]
-            # ✅ 統一轉換為無時區的日期（只保留日期部分）
-            latest_date = pd.Timestamp(latest_date.date())
-
-            print(f"  ✓ 台股最新交易日: {latest_date.date()}")
-            print(f"  ✓ 今天日期: {pd.Timestamp.now().date()}\n")
-
-            return latest_date
-        else:
-            print("  ⚠️  無法從 Yahoo Finance 取得台股指數資料")
-            raise ValueError("無法取得台股指數")
-
-    except Exception as e:
-        print(f"  ⚠️  查詢台股指數失敗: {e}")
-        print(f"  使用今天作為參考日期\n")
-        # ✅ 備用：使用今天
-        return pd.Timestamp.now().normalize()
-
-
 def filter_existing_symbols(downloader, symbols, force=False):
     """
     過濾已存在的股票（避免重複下載）
@@ -201,8 +160,8 @@ def main():
                         help='從第 N 檔開始（用於中斷後繼續）')
     parser.add_argument('--skip-check', action='store_true',
                         help='跳過已是最新的股票（加速每日更新）')
-    parser.add_argument('--auto', action='store_true',
-                        help='自動執行，不等待使用者確認')
+    parser.add_argument('--auto', action='store_true',           # ✅ 加這行
+                        help='自動執行，不等待使用者確認')        # ✅ 加這行
 
     args = parser.parse_args()
 
@@ -215,7 +174,7 @@ def main():
     print(f"平行數量: {args.workers}")
     print(f"強制下載: {'是' if args.force else '否'}")
     print(f"跳過檢查: {'是' if args.skip_check else '否'}")
-    print(f"自動模式: {'是' if args.auto else '否'}")
+    print(f"自動模式: {'是' if args.auto else '否'}")  # ✅ 加這行
     if args.limit:
         print(f"限制數量: {args.limit} 檔（測試模式）")
     if args.start_from > 0:
@@ -233,41 +192,30 @@ def main():
         return
 
     # 過濾已存在的股票
-    # ✅ 如果有 skip_check,檢查所有已存在的股票是否需要更新
-    if args.skip_check:
-        # 每日更新模式:檢查所有已存在的股票
-        print("每日更新模式：檢查所有股票是否需要更新...")
-        existing = downloader.cache.get_all_symbols(market='tw')
-        symbols_to_check = [s for s in symbols if s in existing]
-        print(f"  已快取: {len(existing)} 檔")
-        print(f"  待檢查: {len(symbols_to_check)} 檔\n")
+    symbols_to_download = filter_existing_symbols(downloader, symbols, args.force)
 
-        # ✅ 取得台股最新交易日
-        latest_trading_date = get_latest_trading_date()
-
+    # 🆕 如果啟用 skip_check，進一步過濾出真正需要更新的
+    # 在 main() 函數中
+    if args.skip_check and symbols_to_download:
+        print("檢查哪些股票需要更新...")
         need_update = []
-        total = len(symbols_to_check)
+        total = len(symbols_to_download)
 
-        for idx, symbol in enumerate(symbols_to_check, 1):
-            # 每 100 檔輸出一次進度
+        for idx, symbol in enumerate(symbols_to_download, 1):
+            # ✅ 每 100 檔輸出一次進度
             if idx % 100 == 0 or idx == total:
                 print(f"  檢查進度: {idx}/{total} ({idx / total * 100:.1f}%)")
 
             last_date = downloader.cache.get_last_date(symbol)
-
-            # ✅ 關鍵修正：比較是否 < 最新交易日（不是 <= ）
-            # 如果本地最後日期 < 台股最新交易日，就需要更新
-            if last_date is None or last_date < latest_trading_date:
+            if last_date:
+                today = pd.Timestamp.now().normalize()
+                if last_date < today - pd.Timedelta(days=1):
+                    need_update.append(symbol)
+            else:
                 need_update.append(symbol)
 
-        print(f"  ✓ 台股最新交易日: {latest_trading_date.date()}")
-        print(f"  ✓ 需要更新的股票: {len(need_update)} 檔\n")
-
         symbols_to_download = need_update
-    else:
-        # 首次下載模式:只下載不存在的股票
-        symbols_to_download = filter_existing_symbols(downloader, symbols, args.force)
-
+        print(f"  ✓ 檢查完成！真正需要更新: {len(symbols_to_download)} 檔\n")
     if not symbols_to_download:
         # 即使沒有需要更新的，也輸出統計格式
         print("=" * 70)
@@ -292,24 +240,35 @@ def main():
         symbols_to_download = symbols_to_download[:args.limit]
         print(f"測試模式：只下載前 {args.limit} 檔\n")
 
-    # 確認
-    print(f"即將下載 {len(symbols_to_download)} 檔台股資料")
-    print(f"預估時間: {len(symbols_to_download) * 0.5 / 60:.1f} 分鐘")
+        # 確認
+        print(f"即將下載 {len(symbols_to_download)} 檔台股資料")
+        print(f"預估時間: {len(symbols_to_download) * 0.5 / 60:.1f} 分鐘")
 
-    # ✅ 只有非自動模式才等待確認
-    if not args.auto:
-        print("\n按 Ctrl+C 可隨時中斷（已下載的資料會保留）\n")
-        try:
-            input("按 Enter 開始，或 Ctrl+C 取消...")
-        except KeyboardInterrupt:
-            print("\n\n已取消")
-            return
-    else:
-        print("\n自動模式：立即開始下載...\n")
+        # ✅ 加入這段
+        if not args.auto:
+            print("\n按 Ctrl+C 可隨時中斷（已下載的資料會保留）\n")
+            try:
+                input("按 Enter 開始，或 Ctrl+C 取消...")
+            except KeyboardInterrupt:
+                print("\n\n已取消")
+                return
+        else:
+            print("\n自動模式：立即開始下載...\n")
 
-    print("\n" + "=" * 70)
-    print("開始下載...")
-    print("=" * 70 + "\n")
+        # ✅ 只有非自動模式才等待確認
+        if not args.auto:
+            print("\n按 Ctrl+C 可隨時中斷（已下載的資料會保留）\n")
+            try:
+                input("按 Enter 開始，或 Ctrl+C 取消...")
+            except KeyboardInterrupt:
+                print("\n\n已取消")
+                return
+        else:
+            print("\n自動模式：立即開始下載...\n")
+
+        print("\n" + "=" * 70)
+        print("開始下載...")
+        print("=" * 70 + "\n")
 
     # 開始下載
     start_time = datetime.now()
@@ -340,7 +299,6 @@ def main():
 
             # 儲存完整失敗清單
             failed_file = project_root / 'data' / 'cache' / 'metadata' / 'failed_symbols.txt'
-            failed_file.parent.mkdir(parents=True, exist_ok=True)
             with open(failed_file, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(results['failed']))
             print(f"\n完整失敗清單已儲存: {failed_file}")
@@ -358,8 +316,8 @@ def main():
         print(" " * 22 + "使用者中斷")
         print("=" * 70)
         print("已下載的資料已保存")
-        existing_count = len(downloader.cache.get_all_symbols(market='tw'))
-        print(f"下次執行時使用 --start-from {existing_count} 繼續")
+        print(
+            f"下次執行時使用 --start-from {args.start_from + len(downloader.cache.get_all_symbols(market='tw'))} 繼續")
         print("=" * 70 + "\n")
 
 
