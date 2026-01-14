@@ -107,6 +107,13 @@ def main():
     print(f"❌ 處理失敗 (無快取): {fail_count} 檔")
     print(f"{'=' * 60}\n")
 
+    # 🆕 自動建立索引檔
+    print(f"\n{'=' * 60}")
+    print(f"🔧 建立索引檔...")
+    print(f"{'=' * 60}\n")
+
+    from utils.indicator_index import build_indicator_index
+    build_indicator_index()
 
 if __name__ == "__main__":
     main()

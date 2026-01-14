@@ -346,11 +346,16 @@ def merge_filter_results(selected_conditions: list, days: int = None) -> pd.Data
     合併多個條件的結果 (AND 邏輯)
     ✅ 保留所有原始欄位的聯集
     ✅ 使用簡潔的欄位別名
+    ✅ 自動補上股票名稱
     """
     if not selected_conditions:
         return pd.DataFrame()
 
     from utils.indicator_loader import load_indicator_stocks
+
+    # ✅ 新增：載入股票名稱對照表
+    from utils.stock_list import get_stock_name_mapping
+    stock_names = get_stock_name_mapping()
 
     # ========== 1️⃣ 載入所有條件的資料 ==========
     dfs = []
@@ -421,7 +426,11 @@ def merge_filter_results(selected_conditions: list, days: int = None) -> pd.Data
     if all_stock_codes and not dfs:
         common_stocks = set.intersection(*all_stock_codes)
         print(f"✅ Indicator 交集: {len(common_stocks)} 檔")
-        return pd.DataFrame({"代號": list(common_stocks)})
+
+        # ✅ 新增：補上股票名稱
+        result = pd.DataFrame({"代號": list(common_stocks)})
+        result['名稱'] = result['代號'].map(stock_names)
+        return result[['代號', '名稱']]  # 確保欄位順序
 
     # ========== 3️⃣ 取交集的股票代號 ==========
     if all_stock_codes:
@@ -437,7 +446,9 @@ def merge_filter_results(selected_conditions: list, days: int = None) -> pd.Data
     # ========== 4️⃣ 合併所有欄位 ==========
     if not dfs:
         # 只有 indicator,沒有 DataFrame
-        return pd.DataFrame({"代號": list(common_codes)})
+        result = pd.DataFrame({"代號": list(common_codes)})
+        result['名稱'] = result['代號'].map(stock_names)
+        return result[['代號', '名稱']]
 
     result_df = dfs[0][dfs[0]['代號'].isin(common_codes)].copy()
 
@@ -449,6 +460,10 @@ def merge_filter_results(selected_conditions: list, days: int = None) -> pd.Data
         if '名稱_dup' in result_df.columns:
             result_df['名稱'] = result_df['名稱'].fillna(result_df['名稱_dup'])
             result_df = result_df.drop(columns=['名稱_dup'])
+
+    # ✅ 新增：如果沒有名稱欄位，補上
+    if '名稱' not in result_df.columns:
+        result_df['名稱'] = result_df['代號'].map(stock_names)
 
     # ========== 5️⃣ 定義欄位顯示配置 ==========
     column_alias = {
@@ -487,8 +502,12 @@ def merge_filter_results(selected_conditions: list, days: int = None) -> pd.Data
 
     final_df = pd.DataFrame()
     final_df['代號'] = result_df['代號']
+
+    # ✅ 確保名稱一定存在
     if '名稱' in result_df.columns:
         final_df['名稱'] = result_df['名稱']
+    else:
+        final_df['名稱'] = final_df['代號'].map(stock_names)
 
     for display_name, cols in display_groups.items():
         if display_name in ['代號', '名稱']:
@@ -504,6 +523,7 @@ def merge_filter_results(selected_conditions: list, days: int = None) -> pd.Data
     print(f"\n📋 最終顯示欄位: {list(final_df.columns)}\n")
 
     return final_df.reset_index(drop=True)
+
 def build_quick_filter_layout():
     """
     建立快速選股介面
@@ -2998,7 +3018,7 @@ app.layout = html.Div([
     html.Div(id="task-status-container", style={"display": "none"}),
 
     # 全域元件
-    dcc.Store(id="task-trigger-store", data={}),
+    #dcc.Store(id="task-trigger-store", data={}),
     dcc.Interval(id="global-task-interval", interval=1000, disabled=True),
 ])
 
@@ -3464,32 +3484,38 @@ def switch_entry(entry):
 
     # ========== C 入口:快速選股 ==========
     elif entry == "C":
-        # 右側佈局
         right_layout = html.Div([
-            # 上方:篩選結果表格
-            html.Div(
-                id="filter-result-container",
+            # 🆕 包裹 Loading 組件
+            dcc.Loading(
+                id="loading-filter-results",
+                type="circle",  # 或 "default", "dot", "cube"
+                color="#3498db",
                 children=[
+                    # 上方:篩選結果表格
                     html.Div(
-                        "請在左側選擇篩選條件",
+                        id="filter-result-container",
+                        children=[
+                            html.Div(
+                                "請在左側選擇篩選條件",
+                                style={
+                                    "padding": "50px",
+                                    "textAlign": "center",
+                                    "color": "#999",
+                                    "fontSize": "16px"
+                                }
+                            )
+                        ],
                         style={
-                            "padding": "50px",
-                            "textAlign": "center",
-                            "color": "#999",
-                            "fontSize": "16px"
+                            "height": "46vh",
+                            "overflowY": "auto",
+                            "marginBottom": "10px",
+                            "border": "1px solid #ddd",
+                            "borderRadius": "5px",
+                            "backgroundColor": "#f9f9f9"
                         }
                     )
-                ],
-                style={
-                    "height": "46vh",
-                    "overflowY": "auto",
-                    "marginBottom": "10px",
-                    "border": "1px solid #ddd",
-                    "borderRadius": "5px",
-                    "backgroundColor": "#f9f9f9"
-                }
+                ]
             ),
-
             # 下方:戰情室頁籤
             html.Div(
                 id="filter-detail-tabs-container",
@@ -3751,6 +3777,7 @@ def toggle_filter_button(n_clicks_list, button_ids):
 )
 def update_filter_result(n_clicks_list, days_filter, button_ids):
     """根據選中的條件更新結果表格"""
+
     # 找出選中的條件
     selected_conditions = []
     for i, btn_id in enumerate(button_ids):
@@ -3759,79 +3786,86 @@ def update_filter_result(n_clicks_list, days_filter, button_ids):
             selected_conditions.append(btn_id["index"])
 
     if not selected_conditions:
-        return html.Div(
-            "請在左側選擇篩選條件",
-            style={"padding": "50px", "textAlign": "center", "color": "#999", "fontSize": "16px"}
+        # ✅ 必須回傳 2 個值 (對應 2 個 Output)
+        return (
+            html.Div(
+                "請在左側選擇篩選條件",
+                style={"padding": "50px", "textAlign": "center", "color": "#999", "fontSize": "16px"}
+            ),
+            ""  # 第2個值:清空 loading
         )
 
-    # ✅ 加入除錯訊息
-    print("\n" + "="*60)
-    print(f"🔍 開始篩選，條件: {selected_conditions}")
-    print("="*60)
+    print("\n" + "=" * 60)
+    print(f"🔍 開始篩選,條件: {selected_conditions}")
+    print(f"📅 時間範圍: 近 {days_filter} 日")
+    print("=" * 60)
 
     # 合併資料
     df_result = merge_filter_results(selected_conditions, days=days_filter)
 
-    print(f"\n✅ 篩選完成，共 {len(df_result)} 檔股票")
-    print("="*60 + "\n")
+    print(f"\n✅ 篩選完成,共 {len(df_result)} 檔股票")
+    print("=" * 60 + "\n")
 
     if df_result.empty:
-        return html.Div([
-            html.Div(
-                f"已選擇: {', '.join(selected_conditions)}",
-                style={"padding": "10px", "fontWeight": "bold", "backgroundColor": "#e8f4f8"}
-            ),
-            html.Div(
-                "❌ 沒有符合所有條件的股票",
-                style={"color": "red", "textAlign": "center", "padding": "30px"}
-            )
-        ])
+        # ✅ 回傳 2 個值
+        return (
+            html.Div([
+                html.Div(
+                    f"已選擇: {', '.join(selected_conditions)}",
+                    style={"padding": "10px", "fontWeight": "bold", "backgroundColor": "#e8f4f8"}
+                ),
+                html.Div(
+                    "❌ 沒有符合所有條件的股票",
+                    style={"color": "red", "textAlign": "center", "padding": "30px"}
+                )
+            ]),
+            ""  # 第2個值:清空 loading
+        )
 
-    return html.Div([
-        html.Div(
-            f"✅ 已選擇: {', '.join(selected_conditions)} | 找到 {len(df_result)} 檔股票",
-            style={
-                "padding": "10px",
-                "fontWeight": "bold",
-                "backgroundColor": "#d4edda",
-                "color": "#155724",
-                "borderRadius": "5px 5px 0 0"
-            }
-        ),
-        dash_table.DataTable(
-            id="filter-result-datatable",
-            columns=[{"name": col, "id": col} for col in df_result.columns],
-            sort_action="native",  # ⭐ 啟用排序功能
-            sort_mode="multi",  # ⭐ 允許多欄位排序（可選 "single" 只允許單欄位）
-            filter_action="native",
-            data=df_result.to_dict("records"),
-            row_selectable="single",
-            selected_rows=[],
-
-
-
-            style_table={
-                "overflowX": "auto",
-                "maxWidth": "100%",  # ⭐ 限制最大寬度
-                "height": "350px"  # ⭐ 固定高度
-            },
-            style_cell={
-                "textAlign": "center",
-                "padding": "4px 8px",  # ⭐ 減少內距 (原本 8px)
-                "fontSize": "12px",  # ⭐ 縮小字體 (原本 13px)
-                "minWidth": "60px",  # ⭐ 設定最小寬度
-                "maxWidth": "120px",  # ⭐ 設定最大寬度
-                "overflow": "hidden",
-                "textOverflow": "ellipsis",
-                "whiteSpace": "normal"  # ⭐ 允許換行
-            },
-            style_header={
-                "fontWeight": "bold",
-                "backgroundColor": "#f0f0f0",
-                "padding": "6px 8px",  # ⭐ 標題也縮小
-                "fontSize": "12px",
-                "textAlign": "center"
-            },
+    # ✅ 回傳 2 個值 (表格 + 清空 loading)
+    return (
+            html.Div([
+                html.Div(
+                    f"✅ 已選擇: {', '.join(selected_conditions)} | 找到 {len(df_result)} 檔股票",
+                    style={
+                        "padding": "10px",
+                        "fontWeight": "bold",
+                        "backgroundColor": "#d4edda",
+                        "color": "#155724",
+                        "borderRadius": "5px 5px 0 0"
+                    }
+                ),
+                dash_table.DataTable(
+                    id="filter-result-datatable",
+                    columns=[{"name": col, "id": col} for col in df_result.columns],
+                    sort_action="native",
+                    sort_mode="multi",
+                    filter_action="native",
+                    data=df_result.to_dict("records"),
+                    row_selectable="single",
+                    selected_rows=[],
+                    style_table={
+                        "overflowX": "auto",
+                        "maxWidth": "100%",
+                        "height": "350px"
+                    },
+                    style_cell={
+                        "textAlign": "center",
+                        "padding": "4px 8px",
+                        "fontSize": "12px",
+                        "minWidth": "60px",
+                        "maxWidth": "120px",
+                        "overflow": "hidden",
+                        "textOverflow": "ellipsis",
+                        "whiteSpace": "normal"
+                    },
+                    style_header={
+                        "fontWeight": "bold",
+                        "backgroundColor": "#f0f0f0",
+                        "padding": "6px 8px",
+                        "fontSize": "12px",
+                        "textAlign": "center"
+                    },
             # ⭐ 針對特定欄位設定寬度
             style_cell_conditional=[
                 {'if': {'column_id': '代號'}, 'width': '70px', 'minWidth': '70px', 'maxWidth': '70px'},
@@ -3851,9 +3885,11 @@ def update_filter_result(n_clicks_list, days_filter, button_ids):
                 #{'if': {'column_id': '創紀錄'}, 'width': '70px'},
                 {'if': {'column_id': '月份'}, 'width': '60px'},
             ],
-            page_size=10  # ⭐ 增加每頁顯示數量 (原本 10)
-        )
-    ])
+                    page_size=10
+                )
+            ]),
+            ""  # 第2個值:清空 loading
+    )
 
 
 # ==================================================
