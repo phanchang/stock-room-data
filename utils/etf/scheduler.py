@@ -1,4 +1,3 @@
-# modules/scheduler.py
 from datetime import datetime, timedelta
 import time
 import os
@@ -6,12 +5,14 @@ from parse import parse_specific as parse_data
 
 
 class ETFScheduler:
-    def __init__(self, scrapers_config, base_dir, proxy, retry_interval=30, max_retry_until="23:59"):
+    def __init__(self, scrapers_config, base_dir, proxy, retry_interval=30, max_retry_until="23:59",
+                 startup_check_days=7):
         self.scrapers_config = scrapers_config
         self.base_dir = base_dir
         self.proxy = proxy
         self.retry_interval = retry_interval
         self.max_retry_until = max_retry_until
+        self.startup_check_days = startup_check_days  # 新增：啟動時檢查天數
         self.last_run_date = None
         self.schedule_status = {}
 
@@ -83,6 +84,98 @@ class ETFScheduler:
             current_date += timedelta(days=1)
 
         return missing_dates
+
+    def startup_backfill(self):
+        """
+        啟動時智能檢查並補齊缺失的資料
+        只下載真正缺失的日期，不是無腦下載過去N天
+        """
+        print("\n" + "=" * 60)
+        print("🔍 啟動補齊檢查")
+        print("=" * 60)
+        print(f"檢查範圍: 過去 {self.startup_check_days} 天內的工作日\n")
+
+        total_missing = 0
+        backfill_tasks = []
+
+        # 先掃描所有投信的缺失情況
+        for company, config in self.scrapers_config.items():
+            for fund in config['funds']:
+                save_dir = os.path.join(self.base_dir, fund['dir'])
+
+                # 智能檢查：只找出真正缺失的日期
+                missing_dates = self.get_missing_dates(save_dir, lookback_days=self.startup_check_days)
+
+                if missing_dates:
+                    total_missing += len(missing_dates)
+                    backfill_tasks.append((company, config, fund, missing_dates))
+                    print(f"📂 {company} - {fund['name']} ({fund['code']})")
+                    print(f"   ⚠️  缺失 {len(missing_dates)} 個工作日的檔案:")
+
+                    # 顯示缺失的日期
+                    display_dates = missing_dates[-5:] if len(missing_dates) > 5 else missing_dates
+                    for date in display_dates:
+                        print(f"      - {date.strftime('%Y-%m-%d (%A)')}")
+                    if len(missing_dates) > 5:
+                        print(f"      ... 還有 {len(missing_dates) - 5} 個日期")
+                    print()
+
+        if total_missing == 0:
+            print("✅ 所有資料完整，無需補齊\n")
+            return
+
+        # 執行智能補齊
+        print(f"🚀 開始補齊 {total_missing} 個缺失檔案...")
+        print(f"   涉及 {len(backfill_tasks)} 個基金\n")
+
+        # 記錄哪些投信有成功下載新檔案
+        companies_with_new_data = set()
+
+        for company, config, fund, missing_dates in backfill_tasks:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📥 補齊 {company} - {fund['name']}...")
+            print(f"   目標日期: {missing_dates[0].strftime('%Y-%m-%d')} ~ {missing_dates[-1].strftime('%Y-%m-%d')}")
+
+            save_dir = os.path.join(self.base_dir, fund['dir'])
+            scraper_class = config['class']
+
+            # 記錄補齊前的檔案數
+            files_before = len([f for f in os.listdir(save_dir)
+                                if f.endswith(('.xlsx', '.xls'))]) if os.path.exists(save_dir) else 0
+
+            scraper = scraper_class(
+                fund_code=fund['code'],
+                save_dir=save_dir,
+                proxy=self.proxy
+            )
+
+            # 執行下載（不管返回值，我們自己判斷是否成功）
+            scraper.fetch_and_save()
+
+            # 檢查實際下載了多少檔案
+            files_after = len([f for f in os.listdir(save_dir)
+                               if f.endswith(('.xlsx', '.xls'))]) if os.path.exists(save_dir) else 0
+            new_files = files_after - files_before
+
+            # 只要有新檔案就算成功
+            if new_files > 0:
+                print(f"   ✅ 成功下載 {new_files} 個檔案")
+                companies_with_new_data.add(company)
+            else:
+                print(f"   ℹ️  無新檔案（可能網站尚未更新）")
+            print()
+
+        # 在所有下載完成後，對有新資料的投信執行解析
+        if companies_with_new_data:
+            print("\n" + "=" * 60)
+            print("🔄 開始執行資料解析")
+            print("=" * 60)
+            for company in companies_with_new_data:
+                self._run_parser(company)
+            print()
+
+        print("=" * 60)
+        print("✅ 補齊作業完成")
+        print("=" * 60 + "\n")
 
     def execute_scraper(self, company, config, target_dates=None):
         """
@@ -186,6 +279,10 @@ class ETFScheduler:
         print(f"重試間隔: {self.retry_interval} 分鐘")
         print(f"最晚重試: {self.max_retry_until}")
         print("=" * 60)
+
+        # 🆕 啟動時先執行補齊檢查
+        self.startup_backfill()
+
         print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 排程器已啟動...")
         print("按 Ctrl+C 可停止程式\n")
 

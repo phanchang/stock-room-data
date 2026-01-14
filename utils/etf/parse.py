@@ -7,13 +7,17 @@ from modules.parsers.fhtrust_parser import FHTrustParser
 
 # ===== 重要：正確設定專案根目錄 =====
 # 方法 1：使用絕對路徑（推薦，最穩定）
-BASE_DIR = Path(r'C:\Users\andychang\Desktop\每日選股\戰情室')
+#BASE_DIR = Path(r'C:\Users\andychang\Desktop\每日選股\戰情室')
 
 # 方法 2：從 parse.py 位置往上推算（如果目錄結構固定）
 # BASE_DIR = Path(__file__).resolve().parents[2]  # 往上兩層到戰情室
 
-RAW_DIR = BASE_DIR / 'data' / 'raw'
-CLEAN_DIR = BASE_DIR / 'data' / 'clean'
+# 設定專案路徑 - 從當前檔案往上找到專案根目錄
+current_file = Path(__file__).resolve()
+RAW_DIR = current_file.parent.parent.parent / 'data' / 'raw'
+CLEAN_DIR = current_file.parent.parent.parent / 'data' / 'clean'
+#RAW_DIR = BASE_DIR / 'data' / 'raw'
+#CLEAN_DIR = BASE_DIR / 'data' / 'clean'
 
 PARSERS = {
     'ezmoney': {
