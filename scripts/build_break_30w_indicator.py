@@ -15,20 +15,12 @@ from utils.stock_list import get_stock_list
 def process_single_stock(stock_id: str, market: str) -> bool:
     """
     處理單一股票的 indicator 計算
-
-    Args:
-        stock_id: 股票代號 (例如 "1101")
-        market: 市場別 ("TW" 或 "TWO")
-
-    Returns:
-        bool: 是否成功處理
     """
-    # 🆕 根據市場別決定檔名
     stock_suffix = f"{stock_id}_{market}"
     data_path = PROJECT_ROOT / "data" / "cache" / "tw" / f"{stock_suffix}.parquet"
 
     if not data_path.exists():
-        print(f"⚠️ {stock_id}: 找不到快取檔案 ({stock_suffix}.parquet)")
+        # print(f"⚠️ {stock_id}: 找不到快取檔案") # 減少雜訊
         return False
 
     try:
@@ -36,7 +28,6 @@ def process_single_stock(stock_id: str, market: str) -> bool:
         df = pd.read_parquet(data_path)
 
         if df.empty:
-            print(f"⚠️ {stock_id}: 資料為空")
             return False
 
         # 重設索引
@@ -48,19 +39,21 @@ def process_single_stock(stock_id: str, market: str) -> bool:
         df = calc_break_30w(df)
 
         # 檢查是否有觸發事件
-        if not df["daily_break_30w"].any():
-            print(f"📌 {stock_id}: 無觸發事件")
+        target_col = "daily_break_30w"
+        if target_col not in df.columns or not df[target_col].any():
             return False
 
-        # 寫入 parquet
+        # 🆕 寫入 parquet (關鍵修改：加入 sub_folder 參數)
         write_daily_indicators(
             df=df,
             stock_id=stock_suffix,
-            indicator_cols=["daily_break_30w"]
+            indicator_cols=[target_col],
+            sub_folder="break_30w",  # <--- 指定存入 break_30w 資料夾
+            market="tw"
         )
 
-        event_count = df["daily_break_30w"].sum()
-        print(f"✅ {stock_id}: 成功處理 ({event_count} 個事件)")
+        event_count = df[target_col].sum()
+        print(f"✅ {stock_id}: 偵測到突破30週 ({event_count} 次)")
         return True
 
     except Exception as e:
@@ -69,51 +62,43 @@ def process_single_stock(stock_id: str, market: str) -> bool:
 
 
 def main():
-    """批次處理所有台股"""
+    """批次處理所有台股 - 突破30週策略"""
 
-    # 🆕 取得股票清單 (包含市場別)
     stock_list = get_stock_list(include_market=True)
 
     print(f"\n{'=' * 60}")
-    print(f"🚀 開始處理 {len(stock_list)} 檔股票")
+    print(f"🚀 開始掃描「突破30週均線」型態")
+    print(f"🎯 目標股票總數: {len(stock_list)} 檔")
     print(f"{'=' * 60}\n")
 
     success_count = 0
-    no_event_count = 0
     fail_count = 0
 
     for i, (stock_id, market) in enumerate(stock_list, 1):
-        print(f"[{i}/{len(stock_list)}] {stock_id} ({market}) ", end="")
+        # 優化顯示：每 100 檔才印一次進度，避免洗版
+        if i % 100 == 0:
+            print(f"Progress: [{i}/{len(stock_list)}]")
 
         result = process_single_stock(stock_id, market)
 
         if result:
             success_count += 1
         else:
-            # 區分是無事件還是失敗
-            stock_suffix = f"{stock_id}_{market}"
-            data_path = PROJECT_ROOT / "data" / "cache" / "tw" / f"{stock_suffix}.parquet"
-            if data_path.exists():
-                no_event_count += 1
-            else:
-                fail_count += 1
+            fail_count += 1
 
     # 統計結果
     print(f"\n{'=' * 60}")
-    print(f"📊 處理完成統計")
+    print(f"📊 掃描完成")
     print(f"{'=' * 60}")
-    print(f"✅ 成功處理 (有事件): {success_count} 檔")
-    print(f"📌 無觸發事件: {no_event_count} 檔")
-    print(f"❌ 處理失敗 (無快取): {fail_count} 檔")
+    print(f"✅ 符合突破定義: {success_count} 檔")
+    print(f"📌 不符合或資料缺失: {fail_count} 檔")
     print(f"{'=' * 60}\n")
 
-    # 🆕 自動建立索引檔
-    print(f"\n{'=' * 60}")
-    print(f"🔧 建立索引檔...")
-    print(f"{'=' * 60}\n")
-
+    # 重建索引
+    print(f"🔧 更新指標索引 (Indicator Index)...")
     from utils.indicator_index import build_indicator_index
     build_indicator_index()
+    print("🎉 完成！")
 
 if __name__ == "__main__":
     main()

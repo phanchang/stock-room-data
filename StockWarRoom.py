@@ -3439,7 +3439,7 @@ def update_war_eps_view(view_type, stock_code):
 
 @app.callback(
     Output("right-panel", "children"),
-    Output("war-room-left-panel", "style"),  # 🆕 控制戰情室左側區域
+    Output("war-room-left-panel", "style"),
     Output("quick-filter-buttons-container", "style"),
     Output("quick-filter-buttons-container", "children"),
     Input("entry-selector", "value")
@@ -3449,23 +3449,22 @@ def switch_entry(entry):
     if entry == "A":
         return (
             build_war_room_layout(),
-            {"display": "block"},  # ✅ 顯示戰情室左側區域
+            {"display": "block"},  # 顯示戰情室左側區域
             {"display": "none"},  # 隱藏篩選按鈕
             []
         )
 
     # ========== B 入口：擴充模組 ==========
-    # 在 switch_entry callback 的 B 入口部分
     elif entry == "B":
         return (
             html.Div([
-                # 🆕 上方：選擇功能類型
+                # 上方：選擇功能類型
                 html.Div([
                     dcc.RadioItems(
                         id="module-selector",
                         options=[
                             {"label": "主動式 ETF", "value": "etf"},
-                            {"label": "背景任務", "value": "tasks"}  # 🆕
+                            {"label": "背景任務", "value": "tasks"}
                         ],
                         value="etf",
                         inline=True,
@@ -3477,32 +3476,25 @@ def switch_entry(entry):
                 # 動態內容區域
                 html.Div(id="module-content-container")
             ], style={"padding": "20px"}),
-            {"display": "none"},
-            {"display": "none"},
+            {"display": "none"},  # 隱藏戰情室左側
+            {"display": "none"},  # 隱藏篩選按鈕
             []
         )
 
-    # ========== C 入口:快速選股 ==========
+    # ========== C 入口:快速選股 (修正版) ==========
     elif entry == "C":
         right_layout = html.Div([
-            # 🆕 包裹 Loading 組件
             dcc.Loading(
                 id="loading-filter-results",
-                type="circle",  # 或 "default", "dot", "cube"
+                type="circle",
                 color="#3498db",
                 children=[
-                    # 上方:篩選結果表格
                     html.Div(
                         id="filter-result-container",
                         children=[
                             html.Div(
                                 "請在左側選擇篩選條件",
-                                style={
-                                    "padding": "50px",
-                                    "textAlign": "center",
-                                    "color": "#999",
-                                    "fontSize": "16px"
-                                }
+                                style={"padding": "50px", "textAlign": "center", "color": "#999", "fontSize": "16px"}
                             )
                         ],
                         style={
@@ -3516,7 +3508,6 @@ def switch_entry(entry):
                     )
                 ]
             ),
-            # 下方:戰情室頁籤
             html.Div(
                 id="filter-detail-tabs-container",
                 children=[],
@@ -3528,19 +3519,21 @@ def switch_entry(entry):
         filter_buttons = html.Div([
             html.Div(
                 "篩選條件",
-                style={
-                    "fontWeight": "bold",
-                    "marginBottom": "10px",
-                    "fontSize": "14px",
-                    "color": "#2c3e50"
-                }
+                style={"fontWeight": "bold", "marginBottom": "10px", "fontSize": "14px", "color": "#2c3e50"}
             ),
 
-            # ========== 動態生成按鈕 + 輸入框 ==========
+            # 🔧 修正重點：全域單一 Input (隱藏)，解決 ID 重複問題
+            dcc.Input(
+                id="filter-days-input",
+                type="number",
+                value=1,  # 預設查當下
+                min=1, max=60, step=1,
+                style={"display": "none"} # 隱藏起來
+            ),
+
+            # 動態生成按鈕
             html.Div([
-                # 針對每個條件生成
                 html.Div([
-                    # 條件按鈕
                     html.Button(
                         config["label"],
                         id={"type": "filter-btn", "index": name},
@@ -3556,36 +3549,7 @@ def switch_entry(entry):
                             "fontSize": "12px",
                             "transition": "all 0.3s"
                         }
-                    ),
-
-                    # 🆕 如果是 indicator 類型,就在下方顯示天數輸入框
-                    (html.Div([
-                        html.Label("  ↳ 近", style={"fontSize": "11px", "color": "#7f8c8d"}),
-                        dcc.Input(
-                            id="filter-days-input",
-                            type="number",
-                            value=5,
-                            min=1,
-                            max=60,
-                            step=1,
-                            style={
-                                "width": "50px",
-                                "padding": "3px",
-                                "border": "1px solid #ccc",
-                                "borderRadius": "3px",
-                                "fontSize": "11px",
-                                "marginLeft": "5px",
-                                "marginRight": "5px"
-                            }
-                        ),
-                        html.Label("日", style={"fontSize": "11px", "color": "#7f8c8d"})
-                    ], style={
-                        "marginLeft": "10px",
-                        "marginBottom": "5px",
-                        "display": "flex",
-                        "alignItems": "center"
-                    }) if config.get("type") == "indicator" else html.Div())  # ⭐ 關鍵判斷
-
+                    )
                 ]) for name, config in FILTER_CONDITIONS.items()
             ])
         ])
@@ -3596,14 +3560,8 @@ def switch_entry(entry):
             {"display": "block", "marginTop": "10px"},
             filter_buttons
         )
-        return (
-            right_layout,
-            {"display": "none"},  # ✅ 隱藏戰情室左側區域
-            {"display": "block", "marginTop": "10px"},  # 顯示篩選按鈕
-            filter_buttons
-        )
 
-    # 預設返回
+    # ========== 預設返回 ==========
     return (
         html.Div("請選擇功能", style={"padding": "20px", "textAlign": "center"}),
         {"display": "none"},
