@@ -3,8 +3,8 @@ import pandas as pd
 from utils.cache.manager import CacheManager
 
 # --- 設定 GitHub 資料路徑 ---
-GITHUB_USER = "你的帳號"
-GITHUB_REPO = "你的專案名"
+GITHUB_USER = "phanchang"
+GITHUB_REPO = "stock-room-data"
 BASE_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/data/cache"
 
 def get_remote_data_url(symbol):
