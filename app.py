@@ -2,7 +2,7 @@
 import pandas as pd
 from utils.cache.manager import CacheManager
 
-# --- 設定 GitHub 資料路徑 ---
+# --- 設定 GitHub 資料路徑OK ---
 GITHUB_USER = "phanchang"
 GITHUB_REPO = "stock-room-data"
 BASE_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/data/cache"
