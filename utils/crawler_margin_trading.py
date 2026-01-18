@@ -4,18 +4,15 @@
 # 資料來源：MoneyDJ
 # ==================================================
 
-import requests
+import requests,os
+import urllib3  # 1. 新增：用來關閉警告
 from bs4 import BeautifulSoup
 import pandas as pd
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
-# --- proxy 設定 ---
-PROXY = "http://10.160.3.88:8080"
-proxies = {
-    "http": PROXY,
-    "https": PROXY
-}
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 
 # --- headers ---
 HEADERS = {
@@ -48,6 +45,8 @@ def get_margin_trading(stock_code: str) -> pd.DataFrame:
     """
     抓取融資融券資料（近 9 個月）
     """
+    curr_proxy = os.environ.get("HTTP_PROXY")
+    proxies_config = {"http": curr_proxy, "https": curr_proxy} if curr_proxy else None
 
     # ---------- 日期區間 ----------
     end_date = datetime.today()
@@ -62,10 +61,16 @@ def get_margin_trading(stock_code: str) -> pd.DataFrame:
     )
 
     headers = {"User-Agent": "Mozilla/5.0"}
-    resp = requests.get(url, headers=headers,proxies=proxies, timeout=15)
-    resp.encoding = "big5"
+    res = requests.get(
+        url,
+        headers=HEADERS,
+        proxies=proxies_config,  # ✅ 這裡使用函數內定義的變數
+        timeout=10,
+        verify=False  # ✅ 解決 SSLError
+    )
+    res.encoding = "big5"
 
-    soup = BeautifulSoup(resp.text, "html.parser")
+    soup = BeautifulSoup(res.text, "html.parser")
 
     columns = [
         "date",

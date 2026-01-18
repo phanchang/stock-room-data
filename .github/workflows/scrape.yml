@@ -1,0 +1,44 @@
+name: Daily Stock Scraper
+
+on:
+  schedule:
+    # 台灣時間週二至週六 早上 8:00 (對應美股收盤與台股開盤前)
+    - cron: '0 0 * * 2-6'
+  workflow_dispatch: # 允許手動點擊執行
+
+jobs:
+  scrape_and_commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          cache: 'pip' # 自動快取 pip 套件減少執行時間
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas pyarrow  # 你的 downloader 依賴
+
+      - name: Run Fetch Data
+        run: |
+          # 設定 PYTHONPATH 確保 import utils 正常
+          export PYTHONPATH=$PYTHONPATH:$(pwd)
+          python fetch_data.py
+
+      - name: Commit and Push
+        run: |
+          git config --global user.name "StockBot"
+          git config --global user.email "bot@example.com"
+          git add data/cache/
+          # 檢查是否有變動，避免空 commit
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Auto-update stock data: $(date)"
+            git push
+          else
+            echo "No changes to commit"
+          fi

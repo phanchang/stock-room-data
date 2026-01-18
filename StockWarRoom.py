@@ -3,7 +3,7 @@
 # 股票戰情室 - 技術面、三大法人、營收 + 左側股票清單 + Loading
 # ==================================================
 
-import os
+import os,socket
 import pandas as pd
 import yfinance as yf
 import plotly.graph_objs as go
@@ -18,43 +18,56 @@ from utils.etf.fhtrust_data import load_history, compute_diff
 # 1️⃣ 在檔案開頭的 import 區塊新增：
 from utils.etf import fhtrust_data, ezmoney_data
 from config.quick_filter_config import FILTER_CONDITIONS, get_latest_file
-# ==================================================
-# 1. Proxy 設定
-# ==================================================
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-ENV_HOME = os.getenv('ENV_HOME')
+# ==================================================
+# 1. 智慧 Proxy 設定 (解決家裡卡頓的關鍵)
+# ==================================================
+def check_proxy_alive(ip, port, timeout=1):
+    try:
+        socket.create_connection((ip, port), timeout=timeout)
+        return True
+    except OSError:
+        return False
 
-if not ENV_HOME:
-    PROXY = "http://10.160.3.88:8080"
-    os.environ["HTTP_PROXY"] = PROXY
-    os.environ["HTTPS_PROXY"] = PROXY
+# 智慧判斷：如果連不到公司 Proxy，就徹底清空環境變數
+PROXY_IP = "10.160.3.88"
+PROXY_PORT = 8080
+
+if check_proxy_alive(PROXY_IP, PROXY_PORT):
+    print(f"📡 偵測到公司網路，設定 Proxy: {PROXY_IP}")
+    os.environ["HTTP_PROXY"] = f"http://{PROXY_IP}:{PROXY_PORT}"
+    os.environ["HTTPS_PROXY"] = f"http://{PROXY_IP}:{PROXY_PORT}"
+else:
+    print("🏠 偵測為家裡網路，清除 Proxy 設定避免 Timeout...")
+    # 這裡很關鍵，必須確保環境變數是乾淨的，yfinance 才會走直連
+    if "HTTP_PROXY" in os.environ: del os.environ["HTTP_PROXY"]
+    if "HTTPS_PROXY" in os.environ: del os.environ["HTTPS_PROXY"]
+
 
 # ==================================================
 # 2. 載入股票清單
 # ==================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STOCKLIST_DIR = os.path.join(BASE_DIR, "StockList")
-TWSE_FILE = os.path.join(STOCKLIST_DIR, "TWSE_ESVUFR.csv")
-TWO_FILE = os.path.join(STOCKLIST_DIR, "TWO_ESVUFR.csv")
+df_twse = pd.read_csv(os.path.join(STOCKLIST_DIR, "TWSE_ESVUFR.csv"), dtype=str)
+df_two = pd.read_csv(os.path.join(STOCKLIST_DIR, "TWO_ESVUFR.csv"), dtype=str)
 
-df_twse = pd.read_csv(TWSE_FILE, dtype=str)
-df_two = pd.read_csv(TWO_FILE, dtype=str)
 
 
 def extract_code_from_name_col(df):
     col = "股票代號及名稱"
     return set(df[col].astype(str).str.extract(r"^(\d{4,5})")[0].dropna())
 
-
 twse_codes = extract_code_from_name_col(df_twse)
 two_codes = extract_code_from_name_col(df_two)
-
 
 def get_yahoo_symbol(stock_code: str) -> str:
     if stock_code in twse_codes: return f"{stock_code}.TW"
     if stock_code in two_codes: return f"{stock_code}.TWO"
-    raise ValueError(f"找不到股票代號：{stock_code}")
-
+    return f"{stock_code}.TW" # 預設
 
 def get_stock_name(stock_code):
     for df in (df_twse, df_two):
@@ -62,237 +75,72 @@ def get_stock_name(stock_code):
         if not m.empty: return m.iloc[0]["股票代號及名稱"].split()[1]
     return stock_code
 
-
 # ==================================================
 # 🔄 通用函數：建立股票分析頁籤內容
 # ==================================================
-def build_stock_tabs_content(stock_code: str, selected_tab: str, period: str = "D", prefix: str = "", compact: bool = False):
-    """通用函數：根據選擇的頁籤返回對應內容"""
+def build_stock_tabs_content(stock_code: str, selected_tab: str, period: str = "D", prefix: str = "",
+                             compact: bool = False):
+    """根據選擇的頁籤，僅抓取該頁籤所需的資料"""
 
-    # ========== 取得所有資料 ==========
-    data = {}
-
-    # K線
-    try:
-        data['k'] = get_kline_data(stock_code, period)
-    except Exception as e:
-        data['k'] = None
-        data['k_error'] = str(e)
-
-    # 三大法人
-    try:
-        data['fa'] = get_fa_ren(stock_code)
-    except Exception as e:
-        data['fa'] = None
-        data['fa_error'] = str(e)
-
-    # 營收
-    try:
-        df_rev_raw = get_monthly_revenue(stock_code)
-        data['rev'] = df_rev_raw.copy()
-        data['rev']["year"] = data['rev']["日期"].dt.year
-        data['rev']["month"] = data['rev']["日期"].dt.month
-        data['rev'].rename(columns={"營收": "revenue"}, inplace=True)
-        data['rev'] = data['rev'].sort_values(["year", "month"], ascending=[False, False])
-    except Exception as e:
-        data['rev'] = None
-        data['rev_error'] = str(e)
-
-    # 資券
-    try:
-        data['margin'] = get_margin_trading(stock_code)
-    except Exception as e:
-        data['margin'] = None
-        data['margin_error'] = str(e)
-
-    # ========== 技術面 ==========
+    # ========== 1. 技術面 ==========
     if selected_tab == "tab-tech":
-        if data['k'] is not None:
-            # ⭐ 修正：加上 prefix 避免 ID 衝突
+        try:
+            df_k = get_kline_data(stock_code, period)
             return html.Div([
                 html.Div([
                     html.Label("選擇週期:", style={"marginRight": "10px", "fontWeight": "bold"}),
                     dcc.RadioItems(
-                        id=f"{prefix}period-radio",  # ⭐ 加上前綴
-                        options=[
-                            {"label": "日線", "value": "D"},
-                            {"label": "週線", "value": "W"},
-                            {"label": "月線", "value": "M"}
-                        ],
-                        value=period,
-                        inline=True,
-                        labelStyle={"marginRight": "15px"}
+                        id=f"{prefix}period-radio",
+                        options=[{"label": "日線", "value": "D"}, {"label": "週線", "value": "W"},
+                                 {"label": "月線", "value": "M"}],
+                        value=period, inline=True, labelStyle={"marginRight": "15px"}
                     )
-                ], style={"marginBottom": "15px", "padding": "10px",
-                          "backgroundColor": "#f0f0f0", "borderRadius": "5px"}),
-
-                dcc.Graph(
-                    figure=build_chart(data['k'], stock_code, period),
-                    style={"width": "100%", "height": "400px" if compact else "520px"}  # ⭐ 動態高度
-                )
+                ], style={"marginBottom": "15px", "padding": "10px", "backgroundColor": "#f0f0f0",
+                          "borderRadius": "5px"}),
+                dcc.Graph(figure=build_chart(df_k, stock_code, period), style={"width": "100%", "height": "520px"})
             ])
-        else:
-            return html.Div(f"K線抓取失敗: {data.get('k_error', '未知錯誤')}",
-                            style={"color": "red", "padding": "20px"})
+        except Exception as e:
+            return html.Div(f"技術面載入失敗: {e}", style={"color": "red", "padding": "20px"})
 
-    # ========== 籌碼面 ==========
-    elif selected_tab == "tab-chips":
-        chips_sections = []
+    # ========== 2. 籌碼面 ==========
+    elif selected_tab == "tab-chips" or selected_tab == "tab-fa":
+        try:
+            df_fa = get_fa_ren(stock_code)
+            # 如果是單純的三大法人分頁
+            if selected_tab == "tab-fa":
+                return html.Div([build_fa_summary_table(df_fa, stock_code), build_fa_detail_table(df_fa)])
 
-        # 1. 三大法人
-        if data['fa'] is not None and data['k'] is not None:
-            fa_content = html.Div([
-                build_fa_summary_table(data['fa'], stock_code),
-                dcc.Graph(
-                    figure=build_fa_price_chart(data['fa'], stock_code),
-                    style={"width": "100%", "height": "280px" if compact else "400px"}
-                ),
-                build_fa_detail_table(data['fa'])
+            # 如果是籌碼面摺疊選單
+            df_margin = get_margin_trading(stock_code)
+            return html.Div([
+                create_accordion_section("chips-fa", "📊 三大法人", build_fa_summary_table(df_fa, stock_code), True,
+                                         prefix),
+                create_accordion_section("chips-margin", "💰 資券", build_margin_section(df_margin, stock_code), False,
+                                         prefix)
             ])
-        else:
-            fa_content = html.Div(
-                f"三大法人資料抓取失敗: {data.get('fa_error', '未知錯誤')}",
-                style={"color": "red", "padding": "20px"}
-            )
+        except Exception as e:
+            return html.Div(f"籌碼資料載入失敗 (請檢查 Proxy 或是 crawler_fa.py 設定): {e}", style={"color": "red"})
 
-        chips_sections.append(
-            create_accordion_section(
-                section_id="chips-fa",
-                title="📊 三大法人",
-                content=fa_content,
-                is_open=False,
-                prefix=prefix  # ⭐ 傳入 prefix
-            )
-        )
-
-        # 2. 資券
-        if data['margin'] is not None:
-            margin_content = build_margin_section(data['margin'], stock_code)
-        else:
-            margin_content = html.Div(
-                f"資券資料抓取失敗: {data.get('margin_error', '未知錯誤')}",
-                style={"color": "red", "padding": "20px"}
-            )
-
-        chips_sections.append(
-            create_accordion_section(
-                section_id="chips-margin",
-                title="💰 資券",
-                content=margin_content,
-                is_open=False,
-                prefix=prefix
-            )
-        )
-
-        # 3. 主力進出
-        chips_sections.append(
-            create_accordion_section(
-                section_id="chips-main",
-                title="🎯 主力進出",
-                content=html.Div("主力進出資料待實作",
-                                 style={"padding": "20px", "textAlign": "center", "color": "gray"}),
-                is_open=False,
-                prefix=prefix
-            )
-        )
-
-        # 4. 股權分布
-        chips_sections.append(
-            create_accordion_section(
-                section_id="chips-ownership",
-                title="📈 股權分布",
-                content=html.Div("股權分布資料待實作",
-                                 style={"padding": "20px", "textAlign": "center", "color": "gray"}),
-                is_open=False,
-                prefix=prefix
-            )
-        )
-
-        return html.Div(chips_sections, style={"width": "100%"})
-
-    # ========== 財務面 ==========
+    # ========== 3. 財務面 (營收/EPS) ==========
     elif selected_tab == "tab-revenue":
-        financial_sections = []
+        try:
+            df_rev_raw = get_monthly_revenue(stock_code)
+            df_rev = df_rev_raw.copy()
+            df_rev["year"] = df_rev["日期"].dt.year
+            df_rev["month"] = df_rev["日期"].dt.month
+            df_rev.rename(columns={"營收": "revenue"}, inplace=True)
 
-        # 1. 月營收
-        if data['rev'] is not None:
-            revenue_content = build_revenue_section(data['rev'], stock_code)
-        else:
-            revenue_content = html.Div(
-                f"營收資料抓取失敗: {data.get('rev_error', '未知錯誤')}",
-                style={"color": "red", "padding": "20px"}
-            )
+            return html.Div([
+                create_accordion_section("revenue", "📊 月營收", build_revenue_section(df_rev, stock_code), True,
+                                         prefix),
+                create_accordion_section("eps", "💰 EPS", build_eps_section(stock_code, "quarter"), False, prefix),
+                create_accordion_section("gross-margin", "📈 毛利率", build_gross_margin_section(stock_code), False,
+                                         prefix)
+            ])
+        except Exception as e:
+            return html.Div(f"財務資料載入失敗: {e}", style={"color": "red"})
 
-        financial_sections.append(
-            create_accordion_section(
-                section_id="revenue",
-                title="📊 月營收",
-                content=revenue_content,
-                is_open=False,
-                prefix=prefix
-            )
-        )
-
-        # 2. EPS
-        financial_sections.append(
-            create_accordion_section(
-                section_id="eps",
-                title="💰 EPS (每股盈餘)",
-                content=html.Div([
-                    html.Div([
-                        html.Label("選擇視圖:", style={"marginRight": "10px", "fontWeight": "bold"}),
-                        dcc.RadioItems(
-                            id=f"{prefix}eps-view-radio",  # ⭐ 回到字串 ID
-                            options=[
-                                {"label": "單季", "value": "quarter"},
-                                {"label": "累季", "value": "cumulative"},
-                                {"label": "年度", "value": "yearly"}
-                            ],
-                            value="quarter",
-                            inline=True,
-                            labelStyle={"marginRight": "15px"}
-                        )
-                    ], style={"marginBottom": "15px", "padding": "10px",
-                              "backgroundColor": "#f0f0f0", "borderRadius": "5px"}),
-
-                    html.Div(
-                        id=f"{prefix}eps-content-container",  # ⭐ 回到字串 ID
-                        children=build_eps_section(stock_code, view_type="quarter", n_quarters=12)
-                    )
-                ]),
-                is_open=False,
-                prefix=prefix
-            )
-        )
-
-        # 3. 毛利率
-        financial_sections.append(
-            create_accordion_section(
-                section_id="gross-margin",
-                title="📈 毛利率",
-                content=build_gross_margin_section(stock_code),
-                is_open=False,
-                prefix=prefix
-            )
-        )
-
-        # 4. 財報摘要
-        financial_sections.append(
-            create_accordion_section(
-                section_id="financial-statement",
-                title="📋 財報摘要",
-                content=html.Div([
-                    build_financial_statement_table(stock_code)
-                ], style={"padding": "10px"}),
-                is_open=False,
-                prefix=prefix
-            )
-        )
-
-        return html.Div(financial_sections, style={"width": "100%"})
-
-    return html.Div("請選擇分頁", style={"padding": "20px"})
-
+    return html.Div("請選擇分頁")
 # ==================================================
 # 🆕 快速選股相關函數
 # ==================================================
@@ -588,22 +436,26 @@ def get_kline_data(stock_code: str, period_type: str) -> pd.DataFrame:
     interval_map = {"D": ("1d", "1y"), "W": ("1wk", "2y"), "M": ("1mo", "5y")}
     interval, period = interval_map[period_type]
 
+    # ✅ 修正點：移除 session=session，讓 yfinance 自動處理連線
+    # 它會自動抓取上面 os.environ 設定的 Proxy（如果有）
     df = yf.download(
         yahoo_symbol,
         interval=interval,
         period=period,
         progress=False,
-        auto_adjust=False
+        auto_adjust=True
     )
 
-    if df.empty: raise ValueError("Yahoo 無資料")
-    if isinstance(df.columns, pd.MultiIndex): df.columns = [c[0] for c in df.columns]
+    if df.empty:
+        raise ValueError(f"Yahoo 無資料: {yahoo_symbol}")
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [c[0] for c in df.columns]
 
     df = df.dropna().reset_index()
-    df.rename(columns={"index": "Date"}, inplace=True)
+    if 'index' in df.columns:
+        df.rename(columns={"index": "Date"}, inplace=True)
     return df
-
-
 # ==================================================
 # 技術面 K 線圖表
 # ==================================================

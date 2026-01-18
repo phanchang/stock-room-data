@@ -6,16 +6,13 @@
 # 含 proxy + headers
 # ==================================================
 
+import os
+import urllib3  # 1. 新增：用來關閉警告
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 
-# --- proxy 設定 ---
-PROXY = "http://10.160.3.88:8080"
-proxies = {
-    "http": PROXY,
-    "https": PROXY
-}
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- headers ---
 HEADERS = {
@@ -30,10 +27,19 @@ def get_profitability(stock_code: str) -> pd.DataFrame:
     """
     取得獲利能力分析（季報）
     """
+    curr_proxy = os.environ.get("HTTP_PROXY")
+    proxies_config = {"http": curr_proxy, "https": curr_proxy} if curr_proxy else None
+
     url = f"https://concords.moneydj.com/z/zc/zce/zce_{stock_code}.djhtm"
 
     try:
-        res = requests.get(url, headers=HEADERS, proxies=proxies, timeout=10)
+        res = requests.get(
+            url,
+            headers=HEADERS,
+            proxies=proxies_config,  # ✅ 這裡使用函數內定義的變數
+            timeout=10,
+            verify=False  # ✅ 解決 SSLError
+        )
         res.encoding = "big5"
     except Exception as e:
         print(f"? 網頁抓取失敗: {e}")

@@ -3,18 +3,14 @@
 # 月營收爬蟲（MoneyDJ）
 # 抓最近 37 個月，由新到舊
 # ==================================================
-
+import os
+import urllib3  # 1. 新增：用來關閉警告
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 from datetime import datetime
 
-# --- proxy（沿用你三大法人的設定） ---
-PROXY = "http://10.160.3.88:8080"
-proxies = {
-    "http": PROXY,
-    "https": PROXY
-}
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- headers ---
 HEADERS = {
@@ -37,10 +33,19 @@ def get_monthly_revenue(stock_code: str, months: int = 37) -> pd.DataFrame:
     """
     取得最新 N 個月營收資料
     """
+    curr_proxy = os.environ.get("HTTP_PROXY")
+    proxies_config = {"http": curr_proxy, "https": curr_proxy} if curr_proxy else None
+
     url = f"https://concords.moneydj.com/z/zc/zch/zch_{stock_code}.djhtm"
 
     try:
-        res = requests.get(url, headers=HEADERS, proxies=proxies, timeout=10)
+        res = requests.get(
+            url,
+            headers=HEADERS,
+            proxies=proxies_config,
+            timeout=10,
+            verify=False  # ✅ 跳過 SSL 驗證
+        )
         res.encoding = "big5"
     except Exception as e:
         print(f"? 網頁抓取失敗: {e}")

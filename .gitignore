@@ -1,0 +1,21 @@
+# --- 忽略 Python 快取與環境 ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+.env
+
+# --- 忽略日誌檔 (保留你原本的要求) ---
+utils/logs/*.log
+*.log
+
+# --- 資料夾設定 ---
+# 1. 先忽略整個 data 夾 (保險起見)
+data/*
+
+# 2. 但「不要」忽略 data/cache 夾裡面的 parquet 檔案
+!data/cache/**/*.parquet
+
+# 3. 如果你有 metadata 夾 (存放 summary.json)，也不要忽略
+!data/cache/metadata/*.json
