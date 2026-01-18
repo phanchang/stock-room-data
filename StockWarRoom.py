@@ -21,7 +21,8 @@ from config.quick_filter_config import FILTER_CONDITIONS, get_latest_file
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-
+# 這裡定義你的 GitHub 基地網址
+GITHUB_BASE_URL = "https://raw.githubusercontent.com/phanchang/stock-room-data/main/data/cache/tw"
 # ==================================================
 # 1. 智慧 Proxy 設定 (解決家裡卡頓的關鍵)
 # ==================================================
@@ -431,32 +432,69 @@ def build_quick_filter_layout():
 # ==================================================
 # 3. K 線資料
 # ==================================================
+# 修改後的資料獲取邏輯
+from functools import lru_cache  # 🆕 新增在檔案頂部
+
+
+# 🆕 加入本地記憶體快取 (最多存 32 檔股票，當天操作時秒開)
+@lru_cache(maxsize=32)
 def get_kline_data(stock_code: str, period_type: str) -> pd.DataFrame:
-    yahoo_symbol = get_yahoo_symbol(stock_code)
-    interval_map = {"D": ("1d", "1y"), "W": ("1wk", "2y"), "M": ("1mo", "5y")}
-    interval, period = interval_map[period_type]
+    """
+    從 GitHub 讀取資料，並加入本地記憶體快取以提升速度
+    """
+    pure_code = str(stock_code).split('.')[0]
+    full_symbol = get_yahoo_symbol(pure_code)
+    file_name = f"{full_symbol.replace('.', '_')}.parquet"
+    file_url = f"{GITHUB_BASE_URL}/{file_name}"
 
-    # ✅ 修正點：移除 session=session，讓 yfinance 自動處理連線
-    # 它會自動抓取上面 os.environ 設定的 Proxy（如果有）
-    df = yf.download(
-        yahoo_symbol,
-        interval=interval,
-        period=period,
-        progress=False,
-        auto_adjust=True
-    )
+    df = None
+    # --- 策略 A: GitHub ---
+    try:
+        # 只有在快取失效或第一次執行時才會走到這
+        print(f"📡 [網路請求] 正在從 GitHub 下載: {file_name}")
+        df = pd.read_parquet(file_url, storage_options={"User-Agent": "pandas"})
+    except Exception as e:
+        print(f"⚠️ GitHub 載入失敗: {e}")
 
-    if df.empty:
-        raise ValueError(f"Yahoo 無資料: {yahoo_symbol}")
+    # --- 策略 B: yfinance ---
+    if df is None or df.empty:
+        try:
+            print(f"🌐 [網路請求] 切換至 yfinance 下載: {full_symbol}")
+            df_raw = yf.download(full_symbol, period="1y", interval="1d", progress=False, auto_adjust=True)
+            if not df_raw.empty:
+                if isinstance(df_raw.columns, pd.MultiIndex):
+                    df_raw.columns = [c[0] for c in df_raw.columns]
+                df = df_raw.dropna()
+                df.index.name = 'Date'
+        except Exception as e:
+            print(f"❌ 全部失敗: {e}")
 
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [c[0] for c in df.columns]
+    if df is None or df.empty:
+        raise ValueError("無法取得資料")
 
-    df = df.dropna().reset_index()
-    if 'index' in df.columns:
-        df.rename(columns={"index": "Date"}, inplace=True)
+    # 標準化與日期處理
+    df.columns = [c.capitalize() if c.lower() in ['open', 'high', 'low', 'close', 'volume'] else c for c in df.columns]
+    if 'Date' not in df.columns:
+        df = df.reset_index()
+    df['Date'] = pd.to_datetime(df['Date'])
+
+    # 注意：這裡不直接回傳週期轉換後的 df，
+    # 而是確保快取存的是「原汁原味日線」，後續再處理轉週/月
     return df
-# ==================================================
+
+
+# 🆕 新增一個輔助函數來處理週期，避免污染快取
+def get_processed_kline(stock_code: str, period_type: str) -> pd.DataFrame:
+    # 從快取取得日線 (這步現在會非常快)
+    df = get_kline_data(stock_code, period_type).copy()
+
+    if period_type in ["W", "M"]:
+        df.set_index('Date', inplace=True)
+        rule = 'W' if period_type == "W" else 'ME'
+        df = df.resample(rule).agg({
+            'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
+        }).dropna().reset_index()
+    return df
 # 技術面 K 線圖表
 # ==================================================
 def build_chart(df, stock_code, period_type):
@@ -616,7 +654,11 @@ def build_chart(df, stock_code, period_type):
             ticktext=ticktext,
             tickangle=-45,
             showgrid=True,
-            gridcolor="rgba(200,200,200,0.3)"
+            gridcolor="rgba(200,200,200,0.3)",
+    # 🆕 新增：消除週末空白
+            rangebreaks = [
+            dict(bounds=["sat", "mon"]),  # 跳過週六到週一 (週六 00:00 到週一 00:00)
+            ]
         ),
         # ⭐ 關鍵優化：改善 hover 體驗
         hovermode="x unified",  # 統一顯示該 X 位置的所有資訊
@@ -2936,25 +2978,41 @@ def sync_stock_input(selected_rows, table_data, current_clicks):
     Input("query-btn", "n_clicks"),
     Input("tabs", "value"),
     State("stock-input", "value"),
-    State("period-store", "data")
+    State("period-store", "data"),
+    prevent_initial_call=True
 )
 def update_tab_content(n_clicks, selected_tab, stock_code, current_period):
-    if not stock_code:
-        return "請選擇股票代號", current_period
+    # 1. 判定觸發來源，如果沒觸發則不更新
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update, current_period if current_period else "D"
 
+    # 2. 檢查股票代碼是否存在
+    if not stock_code:
+        return "請輸入或選擇股票代號", current_period if current_period else "D"
+
+    # 3. 確定週期 (預設為日線 D)
     period = current_period if current_period else "D"
 
-    # ✅ 直接呼叫通用函數
-    # ⭐ 呼叫時加上 prefix="war-"
-    content = build_stock_tabs_content(
-        stock_code=stock_code,
-        selected_tab=selected_tab,
-        period=period,
-        prefix="war-",  # ⭐ 戰情室使用 "war-" 前綴
-        compact = False  # ⭐ 維持正常大小
-    )
+    # 4. 根據選擇的頁籤建立內容
+    try:
+        # 這裡會呼叫你已經加上 @lru_cache 的 get_kline_data
+        content = build_stock_tabs_content(
+            stock_code=stock_code,
+            selected_tab=selected_tab,
+            period=period,
+            prefix="war-",  # 戰情室前綴
+            compact=False
+        )
 
-    return content, period
+        # ⭐ 關鍵修正：必須回傳兩個值 (Content, Period)
+        return content, period
+
+    except Exception as e:
+        # 如果抓取失敗，也要回傳兩個值，畫面才不會崩潰
+        error_msg = html.Div(f"❌ 載入失敗: {str(e)}", style={"color": "red", "padding": "20px"})
+        return error_msg, period
+
 
 # ==================================================
 # Callback: 戰情室 - 技術面週期切換
