@@ -1,6 +1,7 @@
 name: Daily Stock Scraper
 
 on:
+  push:           # <--- 新增這行，這樣你 push 程式碼它就會跑
   schedule:
     # 台灣時間週二至週六 早上 8:00 (對應美股收盤與台股開盤前)
     - cron: '0 0 * * 2-6'
