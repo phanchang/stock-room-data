@@ -12,9 +12,16 @@ utils/logs/*.log
 
 # --- 資料夾設定 ---
 # 1. 先忽略整個 data 夾 (保險起見)
+# 忽略所有在 data 底下的東西
 data/*
 
-# 2. 但「不要」忽略 data/cache 夾裡面的 parquet 檔案
+# 但是「不要」忽略 data/cache 這個資料夾本身 (重要！)
+!data/cache/
+
+# 也不要忽略 cache 底下的子資料夾 (tw, us)
+!data/cache/*/
+
+# 最後，不要忽略所有的 parquet 檔案
 !data/cache/**/*.parquet
 
 # 3. 如果你有 metadata 夾 (存放 summary.json)，也不要忽略
