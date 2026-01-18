@@ -1,0 +1,10 @@
+[
+  {
+    "timestamp": "2026-01-18T18:10:59.191512",
+    "market": "tw",
+    "success_count": 3,
+    "failed_count": 0,
+    "elapsed_seconds": 1.5,
+    "failed_symbols": []
+  }
+]
