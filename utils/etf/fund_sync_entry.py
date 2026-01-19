@@ -43,11 +43,17 @@ def is_fund_updated(company, etf_code):
         print(f"檢查 {company} 時發生錯誤: {e}")
         return False
 
+def count_files(directory):
+    """計算目錄下 excel 檔案的數量"""
+    path = Path(directory)
+    if not path.exists():
+        return 0
+    return len(list(path.glob("*.xls*")))
+
 
 def main():
     print(f"=== 基金同步任務啟動: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
 
-    # 定義要處理的目標
     targets = [
         {
             'company': 'ezmoney',
@@ -70,32 +76,37 @@ def main():
     for t in targets:
         print(f"\n--- 檢查 {t['company']} ({t['name']}) ---")
 
+        # 1. 檢查是否已經完全更新完成 (Clean CSV 已經到今天)
         if is_fund_updated(t['company'], t['name']):
             print(f"✅ 今日資料已存在於 Clean CSV，跳過抓取。")
             continue
 
-        # 執行爬蟲 (注意：GitHub 上不需要 Proxy，傳入 None)
         save_dir = RAW_DIR / t['company'] / t['name']
         save_dir.mkdir(parents=True, exist_ok=True)
 
+        # --- 改良點：記錄執行前的檔案數量 ---
+        files_before = count_files(save_dir)
+
         scraper = t['scraper_cls'](fund_code=t['code'], save_dir=str(save_dir))
+        print(f"正在嘗試抓取資料...")
+        scraper.fetch_and_save()  # 執行抓取
 
-        print(f"正在嘗試抓取最新資料...")
-        success = scraper.fetch_and_save()
+        # --- 改良點：記錄執行後的檔案數量 ---
+        files_after = count_files(save_dir)
 
-        if success:
-            print(f"✨ 抓取成功！開始解析資料...")
+        # 2. 如果檔案數量變多了，代表有補到舊資料或抓到新資料，就執行 Parser
+        if files_after > files_before:
+            print(f"✨ 偵測到新檔案 ({files_before} -> {files_after})！開始解析...")
             parser = t['parser_cls'](raw_dir=str(save_dir), clean_dir=str(CLEAN_DIR / t['company']))
             parser.parse_all_files()
             any_new_data = True
         else:
-            print(f"⚠️ 今日資料尚未更新，待下次排程重試。")
+            print(f"ℹ️ 沒有新增檔案，不需要重新解析。")
 
     if not any_new_data:
-        print("\n[結果] 今日無新資料或已全部完成。")
+        print("\n[結果] 本次任務無新檔案產生。")
     else:
-        print("\n[結果] 資料已更新並解析完成。")
-
+        print("\n[結果] 偵測到新檔案，已完成解析並更新 CSV。")
 
 if __name__ == "__main__":
     main()

@@ -6,23 +6,28 @@ __pycache__/
 env/
 .env
 
-# --- 忽略日誌檔 (保留你原本的要求) ---
+# --- 忽略日誌檔 ---
 utils/logs/*.log
 *.log
 
 # --- 資料夾設定 ---
-# 1. 先忽略整個 data 夾 (保險起見)
-# 忽略所有在 data 底下的東西
+# 1. 先忽略 data 底下的所有內容
 data/*
 
-# 但是「不要」忽略 data/cache 這個資料夾本身 (重要！)
+# 2. 【雲端化 1.0】放行快取與 Parquet 檔案
 !data/cache/
-
-# 也不要忽略 cache 底下的子資料夾 (tw, us)
-!data/cache/*/
-
-# 最後，不要忽略所有的 parquet 檔案
+!data/cache/**/
 !data/cache/**/*.parquet
-
-# 3. 如果你有 metadata 夾 (存放 summary.json)，也不要忽略
 !data/cache/metadata/*.json
+
+# 3. 【雲端化 2.0】放行基金原始與清理後的資料 (Excel, CSV)
+# 放行目錄本身
+!data/raw/
+!data/raw/**/
+!data/clean/
+!data/clean/**/
+
+# 確保檔案副檔名也被放行
+!*.csv
+!*.xlsx
+!*.xls
