@@ -9,18 +9,14 @@ import yfinance as yf
 import plotly.graph_objs as go
 import dash
 from dash import Dash, html, dcc, Input, Output, State, dash_table
-from datetime import datetime
 from utils.crawler_fa import get_fa_ren
-from utils.crawler_revenue import get_monthly_revenue
+from utils import get_monthly_revenue
 from utils.crawler_profitability import get_profitability
 from utils.crawler_margin_trading import get_margin_trading
-from utils.etf.fhtrust_data import load_history, compute_diff
 # 1️⃣ 在檔案開頭的 import 區塊新增：
-from utils.etf import fhtrust_data, ezmoney_data
+from utils.etf import ezmoney_data, fhtrust_data
 from config.quick_filter_config import FILTER_CONDITIONS, get_latest_file
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+
 # 這裡定義你的 GitHub 基地網址
 GITHUB_BASE_URL = "https://raw.githubusercontent.com/phanchang/stock-room-data/main/data/cache/tw"
 from functools import lru_cache

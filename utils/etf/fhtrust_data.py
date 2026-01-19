@@ -4,7 +4,9 @@
 # ==================================================
 
 import pandas as pd
+import io
 from pathlib import Path
+import requests
 
 # ----------------------
 # 基本參數
@@ -23,29 +25,28 @@ def load_history(etf_code: str = None, days: int = 30) -> pd.DataFrame:
     讀取 clean CSV，取過去 N 天資料
     etf_code: ETF 代號（例如 "00991A"），如果為 None 則使用預設值
     """
-    if etf_code:
-        # ✅ 動態生成路徑
+    github_url = f"https://raw.githubusercontent.com/phanchang/stock-room-data/main/data/clean/{FUND}/{ETF_CODE}.csv"
+    df = None
+
+    # 優先嘗試讀取 GitHub (雲端化 2.0)
+    try:
+        print(f"🌐 獲取雲端基金資料: {github_url}")
+        # 加入 timeout 防止網路卡住
+        response = requests.get(github_url, timeout=5)
+        if response.status_code == 200:
+            df = pd.read_csv(io.StringIO(response.text), parse_dates=['date'])
+            print("✅ 雲端資料讀取成功")
+    except Exception as e:
+        print(f"⚠️ 雲端讀取失敗，嘗試本地 fallback: {e}")
+
+    # 若雲端失敗，才讀取本地 (原本的邏輯)
+    if df is None:
         csv_path = BASE_DIR / "data" / "clean" / FUND / f"{etf_code}.csv"
-    else:
-        csv_path = CSV_FILE
+        df = pd.read_csv(str(csv_path), parse_dates=['date'])
+        print(f"🏠 本地資料讀取成功: {csv_path}")
 
-    # ✅ 確保路徑是字串
-    csv_path_str = str(csv_path)
-
-    print(f"📂 讀取檔案路徑: {csv_path_str}")  # 除錯用
-    print(f"📂 檔案是否存在: {csv_path.exists()}")  # 除錯用
-
-    df = pd.read_csv(csv_path_str, parse_dates=['date'])
+    # 後續處理... (不變)
     df = df.sort_values(['date', 'stock_code'])
-
-    print(f"✅ 成功讀取 {len(df)} 筆資料")  # 除錯用
-
-    if days:
-        latest_date = df['date'].max()
-        start_date = latest_date - pd.Timedelta(days=days - 1)
-        df = df[df['date'] >= start_date]
-        print(f"✅ 篩選後剩餘 {len(df)} 筆資料（過去 {days} 天）")  # 除錯用
-
     return df
 
 

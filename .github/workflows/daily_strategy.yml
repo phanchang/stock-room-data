@@ -1,0 +1,71 @@
+name: Daily Strategy Pipeline
+
+on:
+  schedule:
+    # 1. 每日收盤 (台股 15:30) - 跑策略 + 營收
+    - cron: '30 7 * * 1-5'
+    # 2. 每週六早上 (台股 10:00) - 跑大戶籌碼
+    - cron: '0 2 * * 6'
+    # 3. 每週日 (台股 00:00) - 更新股票清單
+    - cron: '0 16 * * 0'
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Restore Stock Data Cache
+      uses: actions/cache@v3
+      with:
+        path: data/cache/tw
+        key: stock-data-tw-${{ runner.os }}-${{ github.run_id }}
+        restore-keys: |
+          stock-data-tw-${{ runner.os }}-
+
+    - name: Install dependencies
+      run: |
+        pip install pandas numpy pyarrow schedule fastparquet yfinance requests lxml html5lib python-dotenv selenium webdriver-manager beautifulsoup4
+
+    # 1. 更新股票清單 (週日)
+    - name: Update Stock List
+      if: github.event.schedule == '0 16 * * 0' || github.event_name == 'workflow_dispatch'
+      run: python scripts/update_stock_list.py
+
+    # 2. 更新股價 + 計算技術指標 (平日)
+    # 包含: 突破30日新高(high_30), 盤整(consol), 多頭(strong_uptrend)
+    - name: Run Daily Technical Strategies
+      if: github.event.schedule == '30 7 * * 1-5' || github.event_name == 'workflow_dispatch'
+      run: |
+        python scripts/init_cache_tw.py --skip-check --batch-size 100
+        python scripts/daily_strategy_runner.py
+
+    # 3. 爬取月營收創新高 (平日順便跑，反正沒更新也沒差)
+    - name: Crawl Revenue High
+      if: github.event.schedule == '30 7 * * 1-5' || github.event_name == 'workflow_dispatch'
+      run: python scripts/crawler_goodinfo_revenue_high.py --mode fetch
+
+    # 4. 爬取大戶籌碼 (週六)
+    - name: Crawl Holder Change
+      if: github.event.schedule == '0 2 * * 6' || github.event_name == 'workflow_dispatch'
+      run: python scripts/crawler_goodinfo_holder_change.py --mode fetch
+
+    # 5. 提交結果
+    - name: Commit and Push
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        
+        git add data/stock_list.csv
+        git add data/indicators/
+        git add data/goodinfo/
+        
+        git commit -m "Auto: Update strategies & crawler data" || echo "No changes to commit"
+        git push

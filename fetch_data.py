@@ -1,5 +1,4 @@
 import json
-import os
 from utils.cache.downloader import StockDownloader
 
 

@@ -13,6 +13,8 @@
 
 import sys
 from pathlib import Path
+import os # 🟢 新增
+from dotenv import load_dotenv # 🟢 新增
 
 # 加入專案根目錄到路徑
 project_root = Path(__file__).resolve().parent.parent
@@ -23,124 +25,81 @@ import argparse
 from datetime import datetime
 from utils.cache import StockDownloader
 
+# 🟢 [新增] Proxy 設定函式
+def setup_env():
+    """載入環境變數與設定 Proxy"""
+    # 載入 .env 檔案
+    env_path = project_root / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+
+    # 檢查是否有設定 Proxy
+    proxy = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
+
+    if proxy:
+        print(f"🔒 偵測到 Proxy 設定，正在套用至 yfinance...")
+        # 設定系統環境變數，yfinance/requests 會自動讀取這些變數
+        os.environ['http_proxy'] = proxy
+        os.environ['https_proxy'] = proxy
+        os.environ['HTTP_PROXY'] = proxy
+        os.environ['HTTPS_PROXY'] = proxy
+    else:
+        print("🌐 未偵測到 Proxy，使用直接連線")
 
 def load_tw_symbols():
     """
-    從 StockList 載入所有台股代號
-
-    Returns:
-        List[str]: 台股代號列表（格式：2330.TW）
+    從 data/stock_list.csv 載入所有台股代號
     """
     print("載入台股清單...")
 
-    symbols = []
+    list_file = project_root / 'data' / 'stock_list.csv'
 
-    # 讀取上市股票
-    twse_file = project_root / 'StockList' / 'TWSE_ESVUFR.csv'
-    if twse_file.exists():
-        try:
-            df = pd.read_csv(twse_file, encoding='utf-8')
+    if not list_file.exists():
+        print(f"❌ 找不到清單檔案: {list_file}")
+        print("💡 請先執行: python scripts/update_stock_list.py")
+        return []
 
-            # 欄位名稱可能是 '股票代號及名稱' 或 'symbol'
-            if '股票代號及名稱' in df.columns:
-                col = '股票代號及名稱'
-            elif 'symbol' in df.columns:
-                col = 'symbol'
-            else:
-                col = df.columns[0]
+    try:
+        df = pd.read_csv(list_file, dtype={'stock_id': str})
 
-            # 提取股票代號（移除中文名稱）
-            twse_symbols = df[col].astype(str).tolist()
-            twse_symbols = [extract_stock_code(s) for s in twse_symbols]
-            twse_symbols = [s for s in twse_symbols if s]  # 移除空值
+        symbols = []
+        for _, row in df.iterrows():
+            stock_id = row['stock_id']
+            market = row['market']
 
-            # 加上 .TW 後綴
-            twse_symbols = [f"{s}.TW" for s in twse_symbols]
-            symbols.extend(twse_symbols)
-            print(f"  上市: {len(twse_symbols)} 檔")
-        except Exception as e:
-            print(f"  ⚠️  讀取上市股票失敗: {e}")
+            if market == 'TW':
+                symbols.append(f"{stock_id}.TW")
+            elif market == 'TWO':
+                symbols.append(f"{stock_id}.TWO")
 
-    # 讀取上櫃股票
-    two_file = project_root / 'StockList' / 'TWO_ESVUFR.csv'
-    if two_file.exists():
-        try:
-            df = pd.read_csv(two_file, encoding='utf-8')
+        print(f"  上市: {len([s for s in symbols if s.endswith('.TW')])} 檔")
+        print(f"  上櫃: {len([s for s in symbols if s.endswith('.TWO')])} 檔")
+        print(f"  總計: {len(symbols)} 檔\n")
 
-            if '股票代號及名稱' in df.columns:
-                col = '股票代號及名稱'
-            elif 'symbol' in df.columns:
-                col = 'symbol'
-            else:
-                col = df.columns[0]
+        return symbols
 
-            two_symbols = df[col].astype(str).tolist()
-            two_symbols = [extract_stock_code(s) for s in two_symbols]
-            two_symbols = [s for s in two_symbols if s]
-
-            # 加上 .TWO 後綴
-            two_symbols = [f"{s}.TWO" for s in two_symbols]
-            symbols.extend(two_symbols)
-            print(f"  上櫃: {len(two_symbols)} 檔")
-        except Exception as e:
-            print(f"  ⚠️  讀取上櫃股票失敗: {e}")
-
-    print(f"  總計: {len(symbols)} 檔\n")
-
-    return symbols
-
-
-def extract_stock_code(text):
-    """
-    從文字中提取股票代號
-
-    支援格式：
-    - '1101　台泥' -> '1101'
-    - '2330' -> '2330'
-    - '1101 台泥' -> '1101'
-
-    Args:
-        text: 原始文字
-
-    Returns:
-        股票代號（純數字）
-    """
-    import re
-
-    text = str(text).strip()
-
-    # 用正則表達式提取開頭的數字
-    match = re.match(r'^(\d+)', text)
-    if match:
-        return match.group(1)
-
-    return None
+    except Exception as e:
+        print(f"❌ 讀取清單失敗: {e}")
+        return []
 
 
 def get_latest_trading_date():
     """
     取得台股最新的交易日期
-
-    方法：查詢台股加權指數 (^TWII) 的最後交易日
-
-    Returns:
-        pd.Timestamp: 最新交易日
     """
     print("取得台股最新交易日...")
 
     try:
         import yfinance as yf
 
-        # ✅ 使用台股加權指數
+        # 使用台股加權指數
         twii = yf.Ticker("^TWII")
 
         # 下載最近 10 天的資料
         hist = twii.history(period="10d")
 
         if not hist.empty:
-            # 取最後一筆資料的日期
             latest_date = hist.index[-1]
-            # ✅ 統一轉換為無時區的日期（只保留日期部分）
             latest_date = pd.Timestamp(latest_date.date())
 
             print(f"  ✓ 台股最新交易日: {latest_date.date()}")
@@ -153,22 +112,14 @@ def get_latest_trading_date():
 
     except Exception as e:
         print(f"  ⚠️  查詢台股指數失敗: {e}")
-        print(f"  使用今天作為參考日期\n")
-        # ✅ 備用：使用今天
+        print(f"  可能是 Proxy 問題或網路不穩")
+        print(f"  暫時使用今天作為參考日期\n")
         return pd.Timestamp.now().normalize()
 
 
 def filter_existing_symbols(downloader, symbols, force=False):
     """
-    過濾已存在的股票（避免重複下載）
-
-    Args:
-        downloader: StockDownloader 實例
-        symbols: 所有股票列表
-        force: 是否強制重新下載
-
-    Returns:
-        需要下載的股票列表
+    過濾已存在的股票
     """
     if force:
         print("強制模式：將重新下載所有股票\n")
@@ -186,6 +137,9 @@ def filter_existing_symbols(downloader, symbols, force=False):
 
 def main():
     """主程式"""
+
+    # 🟢 [新增] 執行環境設定 (最重要的一步！)
+    setup_env()
 
     # 參數解析
     parser = argparse.ArgumentParser(description='台股資料初始化')
@@ -229,34 +183,27 @@ def main():
     symbols = load_tw_symbols()
 
     if not symbols:
-        print("❌ 未找到任何股票！請檢查 StockList/ 目錄")
         return
 
     # 過濾已存在的股票
-    # ✅ 如果有 skip_check,檢查所有已存在的股票是否需要更新
     if args.skip_check:
-        # 每日更新模式:檢查所有已存在的股票
         print("每日更新模式：檢查所有股票是否需要更新...")
         existing = downloader.cache.get_all_symbols(market='tw')
         symbols_to_check = [s for s in symbols if s in existing]
         print(f"  已快取: {len(existing)} 檔")
         print(f"  待檢查: {len(symbols_to_check)} 檔\n")
 
-        # ✅ 取得台股最新交易日
         latest_trading_date = get_latest_trading_date()
 
         need_update = []
         total = len(symbols_to_check)
 
         for idx, symbol in enumerate(symbols_to_check, 1):
-            # 每 100 檔輸出一次進度
             if idx % 100 == 0 or idx == total:
                 print(f"  檢查進度: {idx}/{total} ({idx / total * 100:.1f}%)")
 
             last_date = downloader.cache.get_last_date(symbol)
 
-            # ✅ 關鍵修正：比較是否 < 最新交易日（不是 <= ）
-            # 如果本地最後日期 < 台股最新交易日，就需要更新
             if last_date is None or last_date < latest_trading_date:
                 need_update.append(symbol)
 
@@ -265,11 +212,9 @@ def main():
 
         symbols_to_download = need_update
     else:
-        # 首次下載模式:只下載不存在的股票
         symbols_to_download = filter_existing_symbols(downloader, symbols, args.force)
 
     if not symbols_to_download:
-        # 即使沒有需要更新的，也輸出統計格式
         print("=" * 70)
         print(" " * 25 + "完成")
         print("=" * 70)
@@ -282,21 +227,17 @@ def main():
         print("=" * 70 + "\n")
         return
 
-    # 處理起始位置
     if args.start_from > 0:
         symbols_to_download = symbols_to_download[args.start_from:]
         print(f"跳過前 {args.start_from} 檔，剩餘 {len(symbols_to_download)} 檔\n")
 
-    # 限制數量（測試用）
     if args.limit:
         symbols_to_download = symbols_to_download[:args.limit]
         print(f"測試模式：只下載前 {args.limit} 檔\n")
 
-    # 確認
     print(f"即將下載 {len(symbols_to_download)} 檔台股資料")
     print(f"預估時間: {len(symbols_to_download) * 0.5 / 60:.1f} 分鐘")
 
-    # ✅ 只有非自動模式才等待確認
     if not args.auto:
         print("\n按 Ctrl+C 可隨時中斷（已下載的資料會保留）\n")
         try:
@@ -311,7 +252,6 @@ def main():
     print("開始下載...")
     print("=" * 70 + "\n")
 
-    # 開始下載
     start_time = datetime.now()
 
     try:
@@ -321,7 +261,6 @@ def main():
             max_workers=args.workers
         )
 
-        # 完成統計
         elapsed = (datetime.now() - start_time).total_seconds()
 
         print("\n" + "=" * 70)
@@ -332,22 +271,19 @@ def main():
         print(f"⏱ 總耗時: {elapsed / 60:.1f} 分鐘")
         print(f"完成時間: {datetime.now():%Y-%m-%d %H:%M:%S}")
 
-        # 失敗清單
         if results['failed']:
             print(f"\n失敗清單（前 20 個）:")
             for symbol in results['failed'][:20]:
                 print(f"  - {symbol}")
 
-            # 儲存完整失敗清單
             failed_file = project_root / 'data' / 'cache' / 'metadata' / 'failed_symbols.txt'
             failed_file.parent.mkdir(parents=True, exist_ok=True)
             with open(failed_file, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(results['failed']))
             print(f"\n完整失敗清單已儲存: {failed_file}")
 
-        # 快取資訊
-        print("\n快取統計:")
         info = downloader.cache.get_cache_info()
+        print("\n快取統計:")
         print(f"  台股: {info['tw_stocks']} 檔")
         print(f"  大小: {info['tw_size_mb']:.1f} MB")
 

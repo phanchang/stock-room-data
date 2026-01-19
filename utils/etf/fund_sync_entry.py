@@ -1,5 +1,4 @@
 import sys
-import os
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
