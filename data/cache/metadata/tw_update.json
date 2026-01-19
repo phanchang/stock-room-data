@@ -22,5 +22,13 @@
     "failed_count": 0,
     "elapsed_seconds": 1.5,
     "failed_symbols": []
+  },
+  {
+    "timestamp": "2026-01-19T04:05:30.775404",
+    "market": "tw",
+    "success_count": 3,
+    "failed_count": 0,
+    "elapsed_seconds": 1.5,
+    "failed_symbols": []
   }
 ]
