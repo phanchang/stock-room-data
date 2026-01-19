@@ -22,13 +22,13 @@ class FHTrustScraper:
         """
         url = f'{self.base_url}/{self.fund_code}/{date_str}'
 
-        proxies = None
-        if self.proxy:
-            proxies = {
-                'http': f'http://{self.proxy}',
-                'https': f'http://{self.proxy}'
-            }
-
+        # --- 修改這裡：自動抓取系統環境變數的 Proxy ---
+        proxies = {
+            'http': os.environ.get('HTTP_PROXY'),
+            'https': os.environ.get('HTTPS_PROXY')
+        }
+        if not proxies['http']: proxies = None
+        # ------------------------------------------
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': f'https://www.fhtrust.com.tw/ETF/etf_detail/{self.fund_code}'

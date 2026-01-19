@@ -19,13 +19,14 @@ class EZMoneyScraper:
         """抓取資料"""
         url = f'{self.base_url}?fundCode={self.fund_code}'
 
-        proxies = None
-        if self.proxy:
-            proxies = {
-                'http': f'http://{self.proxy}',
-                'https': f'http://{self.proxy}'
-            }
-
+        # --- 修改這裡：自動抓取系統環境變數的 Proxy ---
+        proxies = {
+            'http': os.environ.get('HTTP_PROXY'),
+            'https': os.environ.get('HTTPS_PROXY')
+        }
+        # 如果環境變數沒設定，設定為 None 讓 requests 直連
+        if not proxies['http']: proxies = None
+        # ------------------------------------------
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }

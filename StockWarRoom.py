@@ -23,6 +23,30 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 # 這裡定義你的 GitHub 基地網址
 GITHUB_BASE_URL = "https://raw.githubusercontent.com/phanchang/stock-room-data/main/data/cache/tw"
+from functools import lru_cache
+
+# 股價快取
+@lru_cache(maxsize=128)
+def cached_kline(stock_code):
+    # 這裡放你之前寫好的 get_kline_data 邏輯 (只抓日線 Raw Data)
+    return get_kline_data(stock_code, "D")
+
+# 三大法人快取
+@lru_cache(maxsize=128)
+def cached_fa(stock_code):
+    return get_fa_ren(stock_code)
+
+# 營收快取
+@lru_cache(maxsize=128)
+def cached_revenue(stock_code):
+    return get_monthly_revenue(stock_code)
+
+# 資券快取
+@lru_cache(maxsize=128)
+def cached_margin(stock_code):
+    return get_margin_trading(stock_code)
+
+
 # ==================================================
 # 1. 智慧 Proxy 設定 (解決家裡卡頓的關鍵)
 # ==================================================
@@ -91,7 +115,8 @@ def build_stock_tabs_content(stock_code: str, selected_tab: str, period: str = "
                 html.Div([
                     html.Label("選擇週期:", style={"marginRight": "10px", "fontWeight": "bold"}),
                     dcc.RadioItems(
-                        id=f"{prefix}period-radio",
+                        # ⭐ 關鍵修改：將 id 改成字典模式
+                        id={"type": "war-period-radio", "index": "war"},
                         options=[{"label": "日線", "value": "D"}, {"label": "週線", "value": "W"},
                                  {"label": "月線", "value": "M"}],
                         value=period, inline=True, labelStyle={"marginRight": "15px"}
@@ -2970,90 +2995,47 @@ def sync_stock_input(selected_rows, table_data, current_clicks):
 
 
 # ==================================================
-# 1️⃣1️⃣ Callback: 查詢並更新右側Tabs
+# 1️⃣1️⃣ Callback: 查詢並更新右側Tabs (唯一總管版本)
 # ==================================================
 @app.callback(
     Output("tabs-content", "children"),
     Output("period-store", "data"),
     Input("query-btn", "n_clicks"),
     Input("tabs", "value"),
+    Input({"type": "war-period-radio", "index": dash.dependencies.ALL}, "value"),
     State("stock-input", "value"),
     State("period-store", "data"),
     prevent_initial_call=True
 )
-def update_tab_content(n_clicks, selected_tab, stock_code, current_period):
-    # 1. 判定觸發來源，如果沒觸發則不更新
+def update_tab_content(n_clicks, selected_tab, period_radio_list, stock_code, current_period):
     ctx = dash.callback_context
-    if not ctx.triggered:
+    if not ctx.triggered or not stock_code:
         return dash.no_update, current_period if current_period else "D"
 
-    # 2. 檢查股票代碼是否存在
-    if not stock_code:
-        return "請輸入或選擇股票代號", current_period if current_period else "D"
+    trigger_id = ctx.triggered[0]["prop_id"]
 
-    # 3. 確定週期 (預設為日線 D)
-    period = current_period if current_period else "D"
+    # 因為使用了 ALL，period_radio_list 會變成一個列表 [value]
+    # 我們取第一個值作為真正的選擇
+    period_radio = period_radio_list[0] if period_radio_list else "D"
 
-    # 4. 根據選擇的頁籤建立內容
+    # 邏輯判斷
+    if "war-period-radio" in trigger_id:
+        period = period_radio
+    else:
+        # 如果是查詢或換頁籤，維持 store 裡的週期
+        period = current_period if current_period else "D"
+
     try:
-        # 這裡會呼叫你已經加上 @lru_cache 的 get_kline_data
         content = build_stock_tabs_content(
             stock_code=stock_code,
             selected_tab=selected_tab,
             period=period,
-            prefix="war-",  # 戰情室前綴
+            prefix="war-",
             compact=False
         )
-
-        # ⭐ 關鍵修正：必須回傳兩個值 (Content, Period)
         return content, period
-
     except Exception as e:
-        # 如果抓取失敗，也要回傳兩個值，畫面才不會崩潰
-        error_msg = html.Div(f"❌ 載入失敗: {str(e)}", style={"color": "red", "padding": "20px"})
-        return error_msg, period
-
-
-# ==================================================
-# Callback: 戰情室 - 技術面週期切換
-# ==================================================
-@app.callback(
-    Output("period-store", "data", allow_duplicate=True),
-    Output("tabs-content", "children", allow_duplicate=True),
-    Input("war-period-radio", "value"),  # ⭐ 加上 war- 前綴
-    State("stock-input", "value"),
-    prevent_initial_call=True
-)
-def update_war_period(period, stock_code):
-    """戰情室 - 切換技術面週期"""
-    if not stock_code or not period:
-        return dash.no_update, dash.no_update
-
-    try:
-        df_k = get_kline_data(stock_code, period)
-        return period, html.Div([
-            html.Div([
-                html.Label("選擇週期:", style={"marginRight": "10px", "fontWeight": "bold"}),
-                dcc.RadioItems(
-                    id="war-period-radio",  # ⭐ 確保 ID 一致
-                    options=[
-                        {"label": "日線", "value": "D"},
-                        {"label": "週線", "value": "W"},
-                        {"label": "月線", "value": "M"}
-                    ],
-                    value=period,
-                    inline=True,
-                    labelStyle={"marginRight": "15px"}
-                )
-            ], style={"marginBottom": "15px", "padding": "10px", "backgroundColor": "#f0f0f0", "borderRadius": "5px"}),
-
-            dcc.Graph(
-                figure=build_chart(df_k, stock_code, period),
-                style={"width": "100%", "height": "520px"}
-            )
-        ])
-    except Exception as e:
-        return period, html.Div(f"更新失敗: {e}")
+        return html.Div(f"❌ 載入失敗: {str(e)}", style={"color": "red"}), period
 # ==================================================
 # 🆕 輔助函數: 建立可摺疊區塊
 # ==================================================
@@ -3263,46 +3245,6 @@ def toggle_chips_ownership_section(n_clicks, current_style):
     arrow = "▶" if is_open else "▼"
     return new_style, arrow
 
-
-# ==================================================
-# 🆕 Callback: 監聽週期選擇器變化
-# ==================================================
-@app.callback(
-    Output("period-store", "data", allow_duplicate=True),
-    Output("tabs-content", "children", allow_duplicate=True),
-    Input("period-radio", "value"),
-    State("stock-input", "value"),
-    prevent_initial_call=True
-)
-def update_period(period, stock_code):
-    if not stock_code or not period:
-        return dash.no_update, dash.no_update
-
-    try:
-        df_k = get_kline_data(stock_code, period)
-        return period, html.Div([
-            html.Div([
-                html.Label("選擇週期:", style={"marginRight": "10px", "fontWeight": "bold"}),
-                dcc.RadioItems(
-                    id="period-radio",
-                    options=[
-                        {"label": "日線", "value": "D"},
-                        {"label": "週線", "value": "W"},
-                        {"label": "月線", "value": "M"}
-                    ],
-                    value=period,
-                    inline=True,
-                    labelStyle={"marginRight": "15px"}
-                )
-            ], style={"marginBottom": "15px", "padding": "10px", "backgroundColor": "#f0f0f0", "borderRadius": "5px"}),
-
-            dcc.Graph(
-                figure=build_chart(df_k, stock_code, period),
-                style={"width": "100%", "height": "520px"}
-            )
-        ])
-    except Exception as e:
-        return period, html.Div(f"更新失敗: {e}")
 
 
 # ==================================================
@@ -4637,6 +4579,7 @@ def update_module_content(module_type):
         }
 
     return html.Div("未知模組"), {"display": "none"}
+
 
 if __name__ == "__main__":
     app.run(debug=True)

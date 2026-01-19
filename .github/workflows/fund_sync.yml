@@ -1,0 +1,44 @@
+name: Fund Data Auto Sync
+
+on:
+  schedule:
+    # 這裡設定 Cron Job (UTC 時間)
+    # 台灣時間 (UTC+8) 下午 14:00 到 18:00，每 15 分鐘執行一次
+    # 14:00 TW = 06:00 UTC
+    - cron: '*/15 6-10 * * 1-5'
+  workflow_dispatch: # 允許你手動在 GitHub 網頁上點按執行
+
+jobs:
+  update-fund-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests beautifulsoup4 openpyxl python-dotenv lxml
+
+      - name: Run Fund Sync
+        run: python utils/etf/fund_sync_entry.py
+
+      - name: Check for changes
+        id: git-check
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add data/
+          # 檢查是否有檔案變更，如果有就 commit 並 push
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Auto-update fund data: $(date +'%Y-%m-%d %H:%M')"
+            git push
+          else
+            echo "No changes to commit"
+          fi
