@@ -5,7 +5,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException, StaleElementReferenceException
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from bs4 import BeautifulSoup
 import pandas as pd
 import time
@@ -36,7 +36,7 @@ class GoodinfoBaseCrawler:
 
     MAX_RETRIES = 3
     RETRY_DELAY = 10
-    WAIT_TIMEOUT = 20
+    WAIT_TIMEOUT = 60
 
     def __init__(self, data_subdir: str = None):
         self.data_subdir = data_subdir
@@ -88,7 +88,6 @@ class GoodinfoBaseCrawler:
         if is_github_actions:
             self.logger.info("☁️ 雲端環境：啟動 Linux Driver")
             driver = webdriver.Chrome(options=options)
-            self.logger.info("☁️ 雲端環境：啟動 Linux Driver成功")
         else:
             self.logger.info("🏠 本機環境：啟動 Windows Driver")
             os.environ['NO_PROXY'] = 'localhost,127.0.0.1,::1'
@@ -120,29 +119,22 @@ class GoodinfoBaseCrawler:
 
     def _parse_goodinfo_table(self, table_id: str = "tblStockList") -> pd.DataFrame:
         try:
-            self.logger.info("準備取得page_source")
             page_source = self.driver.page_source
-            self.logger.info("取得page_source")
         except Exception as e:
             raise ConnectionError(f"瀏覽器通訊失敗: {e}")
 
         try:
-            self.logger.info("準備取得page_source decode")
             page_source = page_source.encode('latin1').decode('utf-8', errors='ignore')
-            self.logger.info("取得page_source decode")
         except:
             pass
 
-        self.logger.info("準備Beautiful souo")
         soup = BeautifulSoup(page_source, 'lxml')
-        self.logger.info("完成Beautiful souo")
+
         # 檢查是否被擋
         if "刷新過快" in str(soup):
             raise ValueError("被 Goodinfo 阻擋 (Rate Limit)")
 
-        self.logger.info("準備取得DataTable")
         data_table = soup.select_one(f'#{table_id}')
-        self.logger.info("取得DataTable")
 
         if not data_table:
             # 嘗試找所有表格，有時候廣告會把 ID 擠掉
@@ -151,7 +143,6 @@ class GoodinfoBaseCrawler:
             raise ValueError("頁面載入不完整 (找不到表格)")
 
         df_list = pd.read_html(io.StringIO(str(data_table)))
-        self.logger.info("取得df_list")
         if not df_list:
             raise ValueError("表格解析失敗")
 
@@ -160,48 +151,6 @@ class GoodinfoBaseCrawler:
             df = df[df['代號'] != '代號']
         df = df.reset_index(drop=True)
         return df
-
-    # ==================== NEW METHOD START ====================
-    def _click_and_get_updated_table(self, click_target_xpath: str, table_id: str = "tblStockList") -> pd.DataFrame:
-        """
-        點擊指定元素，智能等待 Goodinfo 的主要資料表更新，然後回傳新的 DataFrame。
-        這是處理多頁籤 (Tab) 網站，避免重複載入完整頁面的核心方法。
-
-        :param click_target_xpath: The XPath for the element to click (e.g., a tab link).
-        :param table_id: The ID of the data table to monitor for updates.
-        :return: A pandas DataFrame of the updated table, or None if it fails.
-        """
-        try:
-            self.logger.info(f"🔗 正在點擊頁籤: {click_target_xpath}")
-            wait = WebDriverWait(self.driver, 30) # 等待 30 秒
-
-            # 1. 找到舊的表格元素，以便後續判斷它是否已過時 (stale)
-            old_table = self.driver.find_element(By.ID, table_id)
-
-            # 2. 點擊目標頁籤
-            tab_to_click = wait.until(EC.element_to_be_clickable((By.XPATH, click_target_xpath)))
-            tab_to_click.click()
-
-            # 3. 等待，直到舊的表格元素不再存在於 DOM 中 (stale)
-            #    這表示 AJAX 已經觸發，頁面正在更新表格
-            self.logger.info("⏳ 等待表格資料更新...")
-            wait.until(EC.staleness_of(old_table))
-
-            # 4. 等待新的表格完全載入
-            wait.until(EC.presence_of_element_located((By.ID, table_id)))
-            self.logger.info("✅ 表格更新完成")
-
-            # 5. 回傳新的表格資料
-            df = self._parse_goodinfo_table(table_id)
-            return df
-
-        except TimeoutException:
-            self.logger.error(f"❌ 點擊後等待表格更新超時: {click_target_xpath}")
-            return None
-        except Exception as e:
-            self.logger.error(f"❌ 點擊或解析更新後的表格時發生錯誤: {e}")
-            return None
-    # ===================== NEW METHOD END =====================
 
     def _convert_numeric_columns(self, df: pd.DataFrame, columns: list) -> pd.DataFrame:
         for col in columns:
@@ -254,15 +203,12 @@ class GoodinfoBaseCrawler:
                 self.driver = self._setup_driver()
 
                 # 設定 Timeout
-                self.logger.info(f"第 {attempt + 1} 次嘗試連線後sleep")
-                self.driver.set_page_load_timeout(15)
-                self.driver.set_script_timeout(15)
-                self.logger.info(f"sleep完畢")
+                self.driver.set_page_load_timeout(60)
+                self.driver.set_script_timeout(60)
 
                 # 發送請求
-                self.logger.info(f"發送請求")
                 self.driver.get(url)
-                self.logger.info(f"發送請求完畢")
+
                 # 等待表格出現
                 try:
                     wait = WebDriverWait(self.driver, self.WAIT_TIMEOUT)
@@ -272,9 +218,7 @@ class GoodinfoBaseCrawler:
                     self.logger.warning("等待逾時，嘗試直接解析...")
 
                 # 解析
-                self.logger.info(f"df準備解析")
                 df = self._parse_goodinfo_table(table_id)
-                self.logger.info(f"取得解析後df")
                 return df
 
             except Exception as e:
@@ -285,67 +229,6 @@ class GoodinfoBaseCrawler:
             finally:
                 self._cleanup_driver()
 
-            self.logger.info(f"準備睡 {self.RETRY_DELAY} 秒")
             time.sleep(self.RETRY_DELAY)
 
         raise Exception("已達最大重試次數，抓取失敗")
-
-    # utils/crawler_goodinfo_base.py
-    # ... (其他程式碼保持不變) ...
-
-    # 刪除或註解掉舊的 _click_and_get_updated_table 方法，換成下面這個
-    # def _click_and_get_updated_table(...):
-    #     ...
-
-    # ==================== NEW ROBUST METHOD START ====================
-    def _click_and_wait_for_text_change(
-            self,
-            click_target_xpath: str,
-            watch_element_xpath: str,
-            expected_text: str,
-            table_id: str = "tblStockList"
-    ) -> pd.DataFrame:
-        """
-        點擊目標，並等待另一個元素的文字內容變為預期值。
-        這是比 EC.staleness_of 更可靠的等待 AJAX 更新的方法。
-
-        :param click_target_xpath: 要點擊的元素的 XPath.
-        :param watch_element_xpath: 要監視其文字變化的元素的 XPath (例如，表格標頭).
-        :param expected_text: 點擊後，監視的元素預期會包含的文字.
-        :param table_id: 資料表的 ID.
-        :return: 更新後的 DataFrame，或失敗時返回 None.
-        """
-        try:
-            self.logger.info(f"🔗 [Robust] 正在點擊頁籤: {click_target_xpath}")
-            wait = WebDriverWait(self.driver, 30)
-
-            # 1. 點擊前，先記錄監視元素的當前文字
-            initial_text = self.driver.find_element(By.XPATH, watch_element_xpath).text
-            self.logger.info(f"   - 監視元素初始文字: '{initial_text}'")
-
-            # 2. 點擊目標頁籤
-            tab_to_click = wait.until(EC.element_to_be_clickable((By.XPATH, click_target_xpath)))
-            tab_to_click.click()
-
-            # 3. 建立一個自訂的等待條件 (lambda 函式)
-            #    它會一直執行，直到返回 True 為止
-            self.logger.info(f"⏳ 等待監視元素的文字變為包含 '{expected_text}'...")
-            wait.until(
-                lambda driver: expected_text in driver.find_element(By.XPATH, watch_element_xpath).text and \
-                               initial_text not in driver.find_element(By.XPATH, watch_element_xpath).text
-            )
-
-            self.logger.info("✅ 表格更新成功 (文字已變更)")
-
-            # 4. 回傳新的表格資料
-            return self._parse_goodinfo_table(table_id)
-
-        except TimeoutException:
-            self.logger.error(f"❌ 等待文字變更超時. 預期: '{expected_text}'")
-            return None
-        except Exception as e:
-            self.logger.error(f"❌ 點擊或等待文字變更時發生錯誤: {e}")
-            return None
-    # ===================== NEW ROBUST METHOD END =====================
-
-    # ... (其他程式碼保持不變) ...
