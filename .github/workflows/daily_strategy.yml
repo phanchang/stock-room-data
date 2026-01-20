@@ -44,7 +44,7 @@ jobs:
     - name: Run Daily Technical Strategies
       if: github.event.schedule == '30 7 * * 1-5' || github.event_name == 'workflow_dispatch'
       run: |
-        python scripts/init_cache_tw.py --skip-check --batch-size 100
+        python scripts/init_cache_tw.py --skip-check --batch-size 100 --auto
         python scripts/daily_strategy_runner.py
 
     # 3. 爬取月營收創新高 (平日順便跑，反正沒更新也沒差)
