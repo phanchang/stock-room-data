@@ -5,7 +5,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.common.exceptions import TimeoutException, WebDriverException, StaleElementReferenceException
 from bs4 import BeautifulSoup
 import pandas as pd
 import time
@@ -151,6 +151,48 @@ class GoodinfoBaseCrawler:
             df = df[df['代號'] != '代號']
         df = df.reset_index(drop=True)
         return df
+
+    # ==================== NEW METHOD START ====================
+    def _click_and_get_updated_table(self, click_target_xpath: str, table_id: str = "tblStockList") -> pd.DataFrame:
+        """
+        點擊指定元素，智能等待 Goodinfo 的主要資料表更新，然後回傳新的 DataFrame。
+        這是處理多頁籤 (Tab) 網站，避免重複載入完整頁面的核心方法。
+
+        :param click_target_xpath: The XPath for the element to click (e.g., a tab link).
+        :param table_id: The ID of the data table to monitor for updates.
+        :return: A pandas DataFrame of the updated table, or None if it fails.
+        """
+        try:
+            self.logger.info(f"🔗 正在點擊頁籤: {click_target_xpath}")
+            wait = WebDriverWait(self.driver, 30) # 等待 30 秒
+
+            # 1. 找到舊的表格元素，以便後續判斷它是否已過時 (stale)
+            old_table = self.driver.find_element(By.ID, table_id)
+
+            # 2. 點擊目標頁籤
+            tab_to_click = wait.until(EC.element_to_be_clickable((By.XPATH, click_target_xpath)))
+            tab_to_click.click()
+
+            # 3. 等待，直到舊的表格元素不再存在於 DOM 中 (stale)
+            #    這表示 AJAX 已經觸發，頁面正在更新表格
+            self.logger.info("⏳ 等待表格資料更新...")
+            wait.until(EC.staleness_of(old_table))
+
+            # 4. 等待新的表格完全載入
+            wait.until(EC.presence_of_element_located((By.ID, table_id)))
+            self.logger.info("✅ 表格更新完成")
+
+            # 5. 回傳新的表格資料
+            df = self._parse_goodinfo_table(table_id)
+            return df
+
+        except TimeoutException:
+            self.logger.error(f"❌ 點擊後等待表格更新超時: {click_target_xpath}")
+            return None
+        except Exception as e:
+            self.logger.error(f"❌ 點擊或解析更新後的表格時發生錯誤: {e}")
+            return None
+    # ===================== NEW METHOD END =====================
 
     def _convert_numeric_columns(self, df: pd.DataFrame, columns: list) -> pd.DataFrame:
         for col in columns:
