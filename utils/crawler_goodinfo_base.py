@@ -29,14 +29,14 @@ logging.basicConfig(
 
 
 class GoodinfoBaseCrawler:
-    """Goodinfo 爬蟲基礎類別 (極速暴力版 - 回歸 strategy='none')"""
+    """Goodinfo 爬蟲基礎類別 (核彈級加速版)"""
 
     CHROMEDRIVER_PATH = Path(__file__).resolve().parent.parent / "chromedriver-win64" / "chromedriver.exe"
     DATA_ROOT_DIR = Path(__file__).resolve().parent.parent / "data" / "goodinfo"
 
     MAX_RETRIES = 3
     RETRY_DELAY = 5
-    # 這是「輪詢」的最大時間，不是連線時間。15秒內沒看到表格就重試。
+    # 這是「輪詢」的最大時間，不是連線時間。20秒內沒看到表格就重試。
     POLLING_TIMEOUT = 20
 
     def __init__(self, data_subdir: str = None):
@@ -54,38 +54,40 @@ class GoodinfoBaseCrawler:
 
         options = webdriver.ChromeOptions()
 
-        # === 🚀 極限效能優化 (回歸這一版) ===
-        # 1. 徹底禁用圖片、CSS、字型
+        # === 🚀 核彈級效能優化 ===
+        # 1. 徹底禁用圖片、CSS、字型、媒體
         prefs = {
             "profile.managed_default_content_settings.images": 2,
             "profile.managed_default_content_settings.stylesheets": 2,
             "profile.managed_default_content_settings.fonts": 2,
+            "profile.managed_default_content_settings.media_stream": 2,
         }
         options.add_experimental_option("prefs", prefs)
         options.add_argument('--blink-settings=imagesEnabled=false')
 
         # 2. 策略：None (網址打出去立刻回傳，不等轉圈圈)
-        # 這是解決 Timeout 和本機 15秒完成的關鍵！
+        # 這是解決 120s Timeout 的唯一解藥
         options.page_load_strategy = 'none'
 
         options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-dev-shm-usage')  # 重要：防止記憶體不足崩潰
         options.add_argument('--disable-gpu')
         options.add_argument('--window-size=1920,1080')
 
-        # 禁用干擾項
+        # 3. 禁用干擾項
         options.add_argument('--disable-extensions')
         options.add_argument('--disable-infobars')
         options.add_argument('--disable-notifications')
         options.add_argument('--disable-popup-blocking')
+        options.add_argument('--disable-application-cache')
 
-        # 偽裝
+        # 4. 偽裝
         options.add_argument(
             '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         options.add_argument('--ignore-certificate-errors')
 
-        # === 環境感知 (這是本機成功的關鍵，不能改壞) ===
+        # === 環境感知 ===
         is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
 
         if is_github_actions:
@@ -208,24 +210,25 @@ class GoodinfoBaseCrawler:
                     self._cleanup_driver()
                 self.driver = self._setup_driver()
 
-                # 設定 Timeout
-                self.driver.set_page_load_timeout(30)
+                # 設定 Script Timeout (防止 JS 卡死)
                 self.driver.set_script_timeout(30)
 
-                # 1. 發送請求 (因為 strategy='none'，這裡會瞬間返回)
+                # 1. 發送請求
+                # 因為 strategy='none'，這行會瞬間返回，絕不會卡 120 秒
                 self.driver.get(url)
 
                 # 2. 手動輪詢 (Polling) 等待表格出現
-                # 這是最關鍵的一步：我們不等網頁跑完，我們只盯著表格 ID
+                # 我們不依賴瀏覽器的載入狀態，我們只看 DOM
                 elapsed = 0
                 found = False
-                check_interval = 1  # 每秒檢查一次
+                check_interval = 2  # 每2秒檢查一次
 
                 while elapsed < self.POLLING_TIMEOUT:
                     try:
                         # 檢查元素是否存在 (不需要完整載入，只要 DOM 有就好)
-                        element = self.driver.find_element(By.ID, table_id)
-                        if element:
+                        # 使用 find_elements 比較不會噴錯
+                        elements = self.driver.find_elements(By.ID, table_id)
+                        if elements:
                             found = True
                             self.logger.info(f"✓ 在 {elapsed} 秒時偵測到表格")
                             break
@@ -236,7 +239,7 @@ class GoodinfoBaseCrawler:
                     elapsed += check_interval
 
                 if not found:
-                    self.logger.warning("等待表格逾時，但嘗試強制解析看看...")
+                    self.logger.warning(f"等待表格逾時 ({self.POLLING_TIMEOUT}s)，嘗試強制解析...")
 
                 # 3. 強制解析
                 df = self._parse_goodinfo_table(table_id)
