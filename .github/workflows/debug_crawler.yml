@@ -1,0 +1,36 @@
+# .github/workflows/debug_crawler.yml
+
+name: Debug Crawler (Only)
+
+on:
+  workflow_dispatch: # 只能手動觸發，不會自動跑
+
+jobs:
+  debug-run:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        pip install pandas numpy selenium webdriver-manager beautifulsoup4 python-dotenv requests lxml html5lib
+
+    # 直接執行爬蟲，跳過所有前置作業
+    - name: Run Revenue Crawler
+      run: python scripts/crawler_goodinfo_revenue_high.py --mode fetch
+
+    # 如果想測另一個爬蟲，可以把下面這行取消註解
+    # - name: Run Holder Crawler
+    #   run: python scripts/crawler_goodinfo_holder_change.py --mode fetch
+
+    # 為了驗證有抓到，我們把結果印出來看看 (因為是測試，不用 Push 回去)
+    - name: List Result Files
+      run: |
+        echo "=== 檢查目錄檔案 ==="
+        ls -R data/goodinfo/
