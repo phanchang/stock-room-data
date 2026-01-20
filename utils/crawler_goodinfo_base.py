@@ -289,3 +289,63 @@ class GoodinfoBaseCrawler:
             time.sleep(self.RETRY_DELAY)
 
         raise Exception("已達最大重試次數，抓取失敗")
+
+    # utils/crawler_goodinfo_base.py
+    # ... (其他程式碼保持不變) ...
+
+    # 刪除或註解掉舊的 _click_and_get_updated_table 方法，換成下面這個
+    # def _click_and_get_updated_table(...):
+    #     ...
+
+    # ==================== NEW ROBUST METHOD START ====================
+    def _click_and_wait_for_text_change(
+            self,
+            click_target_xpath: str,
+            watch_element_xpath: str,
+            expected_text: str,
+            table_id: str = "tblStockList"
+    ) -> pd.DataFrame:
+        """
+        點擊目標，並等待另一個元素的文字內容變為預期值。
+        這是比 EC.staleness_of 更可靠的等待 AJAX 更新的方法。
+
+        :param click_target_xpath: 要點擊的元素的 XPath.
+        :param watch_element_xpath: 要監視其文字變化的元素的 XPath (例如，表格標頭).
+        :param expected_text: 點擊後，監視的元素預期會包含的文字.
+        :param table_id: 資料表的 ID.
+        :return: 更新後的 DataFrame，或失敗時返回 None.
+        """
+        try:
+            self.logger.info(f"🔗 [Robust] 正在點擊頁籤: {click_target_xpath}")
+            wait = WebDriverWait(self.driver, 30)
+
+            # 1. 點擊前，先記錄監視元素的當前文字
+            initial_text = self.driver.find_element(By.XPATH, watch_element_xpath).text
+            self.logger.info(f"   - 監視元素初始文字: '{initial_text}'")
+
+            # 2. 點擊目標頁籤
+            tab_to_click = wait.until(EC.element_to_be_clickable((By.XPATH, click_target_xpath)))
+            tab_to_click.click()
+
+            # 3. 建立一個自訂的等待條件 (lambda 函式)
+            #    它會一直執行，直到返回 True 為止
+            self.logger.info(f"⏳ 等待監視元素的文字變為包含 '{expected_text}'...")
+            wait.until(
+                lambda driver: expected_text in driver.find_element(By.XPATH, watch_element_xpath).text and \
+                               initial_text not in driver.find_element(By.XPATH, watch_element_xpath).text
+            )
+
+            self.logger.info("✅ 表格更新成功 (文字已變更)")
+
+            # 4. 回傳新的表格資料
+            return self._parse_goodinfo_table(table_id)
+
+        except TimeoutException:
+            self.logger.error(f"❌ 等待文字變更超時. 預期: '{expected_text}'")
+            return None
+        except Exception as e:
+            self.logger.error(f"❌ 點擊或等待文字變更時發生錯誤: {e}")
+            return None
+    # ===================== NEW ROBUST METHOD END =====================
+
+    # ... (其他程式碼保持不變) ...
