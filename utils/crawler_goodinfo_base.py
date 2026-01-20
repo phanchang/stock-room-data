@@ -30,7 +30,7 @@ logging.basicConfig(
 class GoodinfoBaseCrawler:
     """Goodinfo 爬蟲基礎類別"""
 
-    # Driver 路徑
+    # 本機 Driver 路徑 (僅供本機使用)
     CHROMEDRIVER_PATH = Path(__file__).resolve().parent.parent / "chromedriver-win64" / "chromedriver.exe"
 
     # 資料儲存根目錄
@@ -48,64 +48,63 @@ class GoodinfoBaseCrawler:
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def _setup_driver(self):
-        """設定 Chrome driver (含 Proxy 與 NO_PROXY 設定)"""
-
-        # 1. 載入 .env
-        env_path = self.DATA_ROOT_DIR.parent.parent / ".env"
-        if env_path.exists():
-            load_dotenv(env_path)
-
-        # 🟢 [關鍵修正] 設定 NO_PROXY
-        # 告訴 Python：連線到本機 (localhost) 時，絕對不要走 Proxy！
-        # 這能解決 Access Denied 錯誤
-        os.environ['NO_PROXY'] = 'localhost,127.0.0.1,::1'
-        os.environ['no_proxy'] = 'localhost,127.0.0.1,::1'
+        """設定 Chrome driver (環境感知版)"""
 
         options = webdriver.ChromeOptions()
-
-        # 基本設定
+        # 基本設定 (雲端與本機通用)
         options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
+        options.add_argument('--window-size=1920,1080')  # 設定視窗大小，避免跑版
 
-        # 🟢 注入 Proxy 設定給 Chrome 瀏覽器 (這是給瀏覽器看網頁用的)
-        proxy = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
-        if proxy:
-            proxy_clean = proxy.replace("http://", "").replace("https://", "")
-            self.logger.info(f"🔒 Chrome 使用 Proxy: {proxy_clean}")
-            options.add_argument(f'--proxy-server=http://{proxy_clean}')
-
-        # SSL/TLS 相關設定
+        # 偽裝與 SSL 設定
         options.add_argument('--ignore-certificate-errors')
-        options.add_argument('--ignore-ssl-errors')
-        options.add_argument('--disable-web-security')
-
-        # 偽裝設定
         options.add_argument(
-            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36')
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option('useAutomationExtension', False)
-
-        # 頁面載入策略
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         options.page_load_strategy = 'eager'
 
-        # 判斷環境
-        if os.environ.get('GITHUB_ACTIONS') == 'true':
+        # 🟢 [關鍵修改] 判斷是否在 GitHub Actions 環境
+        is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
+
+        if is_github_actions:
+            # === 雲端環境 (GitHub Actions - Linux) ===
+            self.logger.info("☁️ 偵測到雲端環境：使用自動下載 Linux Driver，不使用 Proxy")
+
+            # 雲端不需要 Proxy，也不要讀 .env
+            # 直接初始化，Selenium 4.x 會自動管理 Driver (Linux版)
             driver = webdriver.Chrome(options=options)
+
         else:
-            # 本機環境
+            # === 本機環境 (Local - Windows/Mac) ===
+            self.logger.info("🏠 偵測到本機環境：嘗試載入 Proxy 與指定 Driver")
+
+            # 1. 載入 .env 與 Proxy
+            env_path = self.DATA_ROOT_DIR.parent.parent / ".env"
+            if env_path.exists():
+                load_dotenv(env_path)
+
+            # 設定 NO_PROXY 避免 localhost 被擋
+            os.environ['NO_PROXY'] = 'localhost,127.0.0.1,::1'
+
+            proxy = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
+            if proxy:
+                proxy_clean = proxy.replace("http://", "").replace("https://", "")
+                options.add_argument(f'--proxy-server=http://{proxy_clean}')
+                self.logger.info(f"🔒 Chrome Proxy 已啟用")
+
+            # 2. 指定 Driver 路徑
             if self.CHROMEDRIVER_PATH.exists():
                 service = Service(str(self.CHROMEDRIVER_PATH))
                 try:
                     driver = webdriver.Chrome(service=service, options=options)
                 except Exception as e:
-                    self.logger.warning(f"指定 Driver 啟動失敗 ({e})，嘗試自動尋找...")
+                    self.logger.warning(f"指定 Driver 失敗，嘗試自動尋找: {e}")
                     driver = webdriver.Chrome(options=options)
             else:
-                self.logger.info("找不到指定 Driver，嘗試系統路徑...")
                 driver = webdriver.Chrome(options=options)
 
+        # 移除 webdriver 特徵 (防機器人偵測)
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         return driver
@@ -119,7 +118,11 @@ class GoodinfoBaseCrawler:
             self.driver = None
 
     def _parse_goodinfo_table(self, table_id: str = "tblStockList") -> pd.DataFrame:
-        page_source = self.driver.page_source
+        # 增加容錯：如果 driver 已經死了，這裡會報錯
+        try:
+            page_source = self.driver.page_source
+        except Exception:
+            raise ConnectionError("瀏覽器連線已中斷")
 
         try:
             page_source = page_source.encode('latin1').decode('utf-8', errors='ignore')
@@ -130,7 +133,6 @@ class GoodinfoBaseCrawler:
         data_table = soup.select_one(f'#{table_id}')
 
         if not data_table:
-            # 檢查是否被擋
             if "刷新過快" in page_source or "請稍後" in page_source:
                 raise ValueError("被網站阻擋 (Rate Limit)")
             raise ValueError(f"找不到表格 ID: {table_id}")
@@ -192,8 +194,9 @@ class GoodinfoBaseCrawler:
                 self.logger.info(f"第 {attempt + 1} 次嘗試連線...")
                 self.driver = self._setup_driver()
 
-                self.driver.implicitly_wait(20)
-                self.driver.set_page_load_timeout(90)
+                # 設定超時 (Script Timeout 是關鍵，防止 JS 卡死)
+                self.driver.set_script_timeout(30)
+                self.driver.set_page_load_timeout(60)
 
                 self.driver.get(url)
 
