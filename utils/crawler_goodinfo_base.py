@@ -245,8 +245,9 @@ class GoodinfoBaseCrawler:
                 self.driver = self._setup_driver()
 
                 # 設定 Timeout
-                self.driver.set_page_load_timeout(60)
-                self.driver.set_script_timeout(60)
+                self.logger.info(f"第 {attempt + 1} 次嘗試連線後sleep")
+                self.driver.set_page_load_timeout(15)
+                self.driver.set_script_timeout(15)
 
                 # 發送請求
                 self.driver.get(url)
