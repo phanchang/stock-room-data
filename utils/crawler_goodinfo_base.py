@@ -88,6 +88,7 @@ class GoodinfoBaseCrawler:
         if is_github_actions:
             self.logger.info("☁️ 雲端環境：啟動 Linux Driver")
             driver = webdriver.Chrome(options=options)
+            self.logger.info("☁️ 雲端環境：啟動 Linux Driver成功")
         else:
             self.logger.info("🏠 本機環境：啟動 Windows Driver")
             os.environ['NO_PROXY'] = 'localhost,127.0.0.1,::1'
@@ -120,21 +121,24 @@ class GoodinfoBaseCrawler:
     def _parse_goodinfo_table(self, table_id: str = "tblStockList") -> pd.DataFrame:
         try:
             page_source = self.driver.page_source
+            self.logger.info("取得page_source")
         except Exception as e:
             raise ConnectionError(f"瀏覽器通訊失敗: {e}")
 
         try:
             page_source = page_source.encode('latin1').decode('utf-8', errors='ignore')
+            self.logger.info("取得page_source decode")
         except:
             pass
 
         soup = BeautifulSoup(page_source, 'lxml')
-
+        self.logger.info("完成Beautiful souo")
         # 檢查是否被擋
         if "刷新過快" in str(soup):
             raise ValueError("被 Goodinfo 阻擋 (Rate Limit)")
 
         data_table = soup.select_one(f'#{table_id}')
+        self.logger.info("取得DataTable")
 
         if not data_table:
             # 嘗試找所有表格，有時候廣告會把 ID 擠掉
@@ -143,6 +147,7 @@ class GoodinfoBaseCrawler:
             raise ValueError("頁面載入不完整 (找不到表格)")
 
         df_list = pd.read_html(io.StringIO(str(data_table)))
+        self.logger.info("取得df_list")
         if not df_list:
             raise ValueError("表格解析失敗")
 
@@ -250,8 +255,9 @@ class GoodinfoBaseCrawler:
                 self.driver.set_script_timeout(15)
 
                 # 發送請求
+                self.logger.info(f"發送請求")
                 self.driver.get(url)
-
+                self.logger.info(f"發送請求完畢")
                 # 等待表格出現
                 try:
                     wait = WebDriverWait(self.driver, self.WAIT_TIMEOUT)
@@ -262,6 +268,7 @@ class GoodinfoBaseCrawler:
 
                 # 解析
                 df = self._parse_goodinfo_table(table_id)
+                self.logger.info(f"取得解析後df")
                 return df
 
             except Exception as e:
@@ -272,6 +279,7 @@ class GoodinfoBaseCrawler:
             finally:
                 self._cleanup_driver()
 
+            self.logger.info(f"準備睡 {self.RETRY_DELAY} 秒")
             time.sleep(self.RETRY_DELAY)
 
         raise Exception("已達最大重試次數，抓取失敗")

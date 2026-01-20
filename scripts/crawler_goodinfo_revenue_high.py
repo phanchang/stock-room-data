@@ -40,10 +40,12 @@ class GoodinfoRevenueHighCrawler(GoodinfoBaseCrawler):
         super().__init__(data_subdir="revenue_high")
 
     def fetch_data(self, force: bool = False) -> pd.DataFrame:
+        self.logger.info(f"log_fetch_data Enter...")
         if not force and self._file_exists_for_today(self.FILENAME_SUFFIX):
             print("本機已有資料，跳過抓取")
             return self._load_today_data(self.FILENAME_SUFFIX)
 
+        self.logger.info(f"🚀 開始抓取:log_fetch_data  {self.FILENAME_SUFFIX}")
         print(f"🚀 開始抓取: {self.FILENAME_SUFFIX}")
 
         try:
@@ -91,7 +93,7 @@ def main():
     args = parser.parse_args()
 
     crawler = GoodinfoRevenueHighCrawler()
-
+    print(f"crawler ready")
     if args.mode == 'fetch':
         crawler.fetch_data(force=args.force)
 
