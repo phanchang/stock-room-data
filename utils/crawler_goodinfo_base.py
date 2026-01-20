@@ -5,7 +5,6 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
 from bs4 import BeautifulSoup
 import pandas as pd
 import time
@@ -29,14 +28,14 @@ logging.basicConfig(
 
 
 class GoodinfoBaseCrawler:
-    """Goodinfo 爬蟲基礎類別 (雲端防崩潰版)"""
+    """Goodinfo 爬蟲基礎類別 (極速優化版)"""
 
     CHROMEDRIVER_PATH = Path(__file__).resolve().parent.parent / "chromedriver-win64" / "chromedriver.exe"
     DATA_ROOT_DIR = Path(__file__).resolve().parent.parent / "data" / "goodinfo"
 
     MAX_RETRIES = 3
-    RETRY_DELAY = 10
-    WAIT_TIMEOUT = 60
+    RETRY_DELAY = 5
+    WAIT_TIMEOUT = 20
 
     def __init__(self, data_subdir: str = None):
         self.data_subdir = data_subdir
@@ -46,66 +45,76 @@ class GoodinfoBaseCrawler:
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def _setup_driver(self):
-        """設定 Chrome driver"""
+        """設定 Chrome driver (含資源阻擋與環境感知)"""
+
         env_path = self.DATA_ROOT_DIR.parent.parent / ".env"
         if env_path.exists():
             load_dotenv(env_path)
 
         options = webdriver.ChromeOptions()
 
-        # === 🚀 穩定性關鍵設定 ===
-        # 1. 禁用圖片與多媒體 (節省記憶體)
-        prefs = {
-            "profile.managed_default_content_settings.images": 2,
-            "profile.managed_default_content_settings.stylesheets": 2,
-            "profile.default_content_setting_values.notifications": 2
-        }
+        # === 🚀 效能優化關鍵設定 ===
+        # 1. 禁用圖片 (最有效加速)
+        prefs = {"profile.managed_default_content_settings.images": 2}
         options.add_experimental_option("prefs", prefs)
         options.add_argument('--blink-settings=imagesEnabled=false')
 
-        # 2. 策略改回 'eager' (none 在某些環境會導致 socket 斷線)
-        # eager: DOM 載入完就回傳，不等圖片
-        options.page_load_strategy = 'eager'
-
-        # 3. 雲端環境必備參數 (防崩潰)
+        # 2. 基礎 headless 設定
         options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')  # 解決容器記憶體不足
+        options.add_argument('--disable-dev-shm-usage')  # 避免記憶體不足崩潰
         options.add_argument('--disable-gpu')
-        options.add_argument('--window-size=1920,1080')
-        options.add_argument('--remote-debugging-port=9222')  # 🟢 關鍵：確保 WebDriver 能連上 Chrome
+        options.add_argument('--window-size=1920,1080')  # 確保版面正確
 
-        # 4. 偽裝與忽略錯誤
-        options.add_argument(
-            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        options.add_argument('--ignore-certificate-errors')
+        # 3. 禁用擴充與自動化特徵
         options.add_argument('--disable-extensions')
         options.add_argument('--disable-infobars')
+        options.add_argument('--disable-notifications')
+        options.add_argument('--disable-popup-blocking')
 
-        # === 環境感知 ===
+        # 4. 頁面載入策略：Eager (DOM 載入完就跑，不等圖片/樣式)
+        options.page_load_strategy = 'eager'
+
+        # 5. 偽裝 User-Agent
+        options.add_argument(
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+        # 6. 忽略 SSL 錯誤
+        options.add_argument('--ignore-certificate-errors')
+        options.add_argument('--ignore-ssl-errors')
+
+        # === 環境感知邏輯 ===
         is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
 
         if is_github_actions:
-            self.logger.info("☁️ 雲端環境：啟動 Linux Driver")
+            # ☁️ 雲端環境 (Linux)
+            self.logger.info("☁️ 雲端環境：自動下載 Driver，禁用 Proxy")
             driver = webdriver.Chrome(options=options)
         else:
-            self.logger.info("🏠 本機環境：啟動 Windows Driver")
+            # 🏠 本機環境 (Windows)
+            self.logger.info("🏠 本機環境：載入 Proxy 設定")
+
+            # 設定 NO_PROXY 避免 localhost 被擋
             os.environ['NO_PROXY'] = 'localhost,127.0.0.1,::1'
 
             proxy = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
             if proxy:
                 proxy_clean = proxy.replace("http://", "").replace("https://", "")
                 options.add_argument(f'--proxy-server=http://{proxy_clean}')
-                self.logger.info(f"🔒 Proxy: {proxy_clean}")
+                self.logger.info(f"🔒 Chrome Proxy 已啟用")
 
             if self.CHROMEDRIVER_PATH.exists():
                 service = Service(str(self.CHROMEDRIVER_PATH))
                 try:
                     driver = webdriver.Chrome(service=service, options=options)
-                except:
+                except Exception as e:
+                    self.logger.warning(f"指定 Driver 失敗，切換自動模式: {e}")
                     driver = webdriver.Chrome(options=options)
             else:
                 driver = webdriver.Chrome(options=options)
+
+        # 移除 webdriver 特徵
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         return driver
 
@@ -119,9 +128,10 @@ class GoodinfoBaseCrawler:
 
     def _parse_goodinfo_table(self, table_id: str = "tblStockList") -> pd.DataFrame:
         try:
+            # 取得網頁原始碼
             page_source = self.driver.page_source
-        except Exception as e:
-            raise ConnectionError(f"瀏覽器通訊失敗: {e}")
+        except Exception:
+            raise ConnectionError("瀏覽器失去回應 (可能是載入過久卡死)")
 
         try:
             page_source = page_source.encode('latin1').decode('utf-8', errors='ignore')
@@ -129,22 +139,19 @@ class GoodinfoBaseCrawler:
             pass
 
         soup = BeautifulSoup(page_source, 'lxml')
-
-        # 檢查是否被擋
-        if "刷新過快" in str(soup):
-            raise ValueError("被 Goodinfo 阻擋 (Rate Limit)")
-
         data_table = soup.select_one(f'#{table_id}')
 
         if not data_table:
-            # 嘗試找所有表格，有時候廣告會把 ID 擠掉
-            if len(soup.select('table')) > 0:
-                raise ValueError(f"頁面有表格但 ID 不符 ({table_id})")
-            raise ValueError("頁面載入不完整 (找不到表格)")
+            if "刷新過快" in page_source or "請稍後" in page_source:
+                raise ValueError("Goodinfo 阻擋 (Rate Limit)，請稍後再試")
+
+            # 嘗試印出頁面標題或是部分內容除錯
+            title = soup.title.string if soup.title else "No Title"
+            raise ValueError(f"找不到表格 ID: {table_id} (Page Title: {title})")
 
         df_list = pd.read_html(io.StringIO(str(data_table)))
         if not df_list:
-            raise ValueError("表格解析失敗")
+            raise ValueError("表格解析失敗 (Pandas read_html error)")
 
         df = df_list[0]
         if '代號' in df.columns:
@@ -198,34 +205,33 @@ class GoodinfoBaseCrawler:
             try:
                 self.logger.info(f"第 {attempt + 1} 次嘗試連線...")
 
+                # 每次重試都重新啟動 Driver (避免記憶體洩漏或卡死)
                 if self.driver:
                     self._cleanup_driver()
+
                 self.driver = self._setup_driver()
 
-                # 設定 Timeout
-                self.driver.set_page_load_timeout(60)
-                self.driver.set_script_timeout(60)
+                # 設定較短的 Page Load Timeout，強迫它在卡住時趕快報錯重試
+                self.driver.set_page_load_timeout(45)
+                self.driver.set_script_timeout(30)
 
-                # 發送請求
-                self.driver.get(url)
-
-                # 等待表格出現
                 try:
-                    wait = WebDriverWait(self.driver, self.WAIT_TIMEOUT)
-                    wait.until(EC.presence_of_element_located((By.ID, table_id)))
-                    self.logger.info("✓ 偵測到表格")
+                    self.driver.get(url)
                 except TimeoutException:
-                    self.logger.warning("等待逾時，嘗試直接解析...")
+                    self.logger.warning("頁面載入超時 (但可能已抓到 DOM，繼續嘗試解析...)")
+                    # 有時候超時是因為圖片還在轉，但文字已經出來了，我們可以試著硬抓
+                    self.driver.execute_script("window.stop();")
 
-                # 解析
+                wait = WebDriverWait(self.driver, self.WAIT_TIMEOUT)
+                wait.until(EC.presence_of_element_located((By.ID, table_id)))
+
+                time.sleep(3 + attempt * 2)
+
                 df = self._parse_goodinfo_table(table_id)
                 return df
 
             except Exception as e:
                 self.logger.warning(f"嘗試失敗: {e}")
-                # 失敗後多等一下，避開鎖 IP
-                time.sleep(10 + attempt * 5)
-
             finally:
                 self._cleanup_driver()
 
