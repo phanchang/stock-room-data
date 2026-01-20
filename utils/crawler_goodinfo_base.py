@@ -36,7 +36,7 @@ class GoodinfoBaseCrawler:
 
     MAX_RETRIES = 3
     RETRY_DELAY = 10
-    WAIT_TIMEOUT = 60
+    WAIT_TIMEOUT = 20
 
     def __init__(self, data_subdir: str = None):
         self.data_subdir = data_subdir
