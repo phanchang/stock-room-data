@@ -29,15 +29,14 @@ logging.basicConfig(
 
 
 class GoodinfoBaseCrawler:
-    """Goodinfo 爬蟲基礎類別 (核彈級加速版)"""
+    """Goodinfo 爬蟲基礎類別 (雲端防崩潰版)"""
 
     CHROMEDRIVER_PATH = Path(__file__).resolve().parent.parent / "chromedriver-win64" / "chromedriver.exe"
     DATA_ROOT_DIR = Path(__file__).resolve().parent.parent / "data" / "goodinfo"
 
     MAX_RETRIES = 3
-    RETRY_DELAY = 5
-    # 這是「輪詢」的最大時間，不是連線時間。20秒內沒看到表格就重試。
-    POLLING_TIMEOUT = 20
+    RETRY_DELAY = 10
+    WAIT_TIMEOUT = 60
 
     def __init__(self, data_subdir: str = None):
         self.data_subdir = data_subdir
@@ -54,56 +53,50 @@ class GoodinfoBaseCrawler:
 
         options = webdriver.ChromeOptions()
 
-        # === 🚀 核彈級效能優化 ===
-        # 1. 徹底禁用圖片、CSS、字型、媒體
+        # === 🚀 穩定性關鍵設定 ===
+        # 1. 禁用圖片與多媒體 (節省記憶體)
         prefs = {
             "profile.managed_default_content_settings.images": 2,
             "profile.managed_default_content_settings.stylesheets": 2,
-            "profile.managed_default_content_settings.fonts": 2,
-            "profile.managed_default_content_settings.media_stream": 2,
+            "profile.default_content_setting_values.notifications": 2
         }
         options.add_experimental_option("prefs", prefs)
         options.add_argument('--blink-settings=imagesEnabled=false')
 
-        # 2. 策略：None (網址打出去立刻回傳，不等轉圈圈)
-        # 這是解決 120s Timeout 的唯一解藥
-        options.page_load_strategy = 'none'
+        # 2. 策略改回 'eager' (none 在某些環境會導致 socket 斷線)
+        # eager: DOM 載入完就回傳，不等圖片
+        options.page_load_strategy = 'eager'
 
+        # 3. 雲端環境必備參數 (防崩潰)
         options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')  # 重要：防止記憶體不足崩潰
+        options.add_argument('--disable-dev-shm-usage')  # 解決容器記憶體不足
         options.add_argument('--disable-gpu')
         options.add_argument('--window-size=1920,1080')
+        options.add_argument('--remote-debugging-port=9222')  # 🟢 關鍵：確保 WebDriver 能連上 Chrome
 
-        # 3. 禁用干擾項
-        options.add_argument('--disable-extensions')
-        options.add_argument('--disable-infobars')
-        options.add_argument('--disable-notifications')
-        options.add_argument('--disable-popup-blocking')
-        options.add_argument('--disable-application-cache')
-
-        # 4. 偽裝
+        # 4. 偽裝與忽略錯誤
         options.add_argument(
             '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         options.add_argument('--ignore-certificate-errors')
+        options.add_argument('--disable-extensions')
+        options.add_argument('--disable-infobars')
 
         # === 環境感知 ===
         is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
 
         if is_github_actions:
-            self.logger.info("☁️ 雲端環境：極速模式啟動 (自動 Driver)")
+            self.logger.info("☁️ 雲端環境：啟動 Linux Driver")
             driver = webdriver.Chrome(options=options)
         else:
-            self.logger.info("🏠 本機環境：極速模式啟動 (Proxy + 指定 Driver)")
-
-            # 設定 NO_PROXY 避免 localhost 被擋 (本機必須)
+            self.logger.info("🏠 本機環境：啟動 Windows Driver")
             os.environ['NO_PROXY'] = 'localhost,127.0.0.1,::1'
 
             proxy = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
             if proxy:
                 proxy_clean = proxy.replace("http://", "").replace("https://", "")
                 options.add_argument(f'--proxy-server=http://{proxy_clean}')
-                self.logger.info(f"🔒 Chrome Proxy 已啟用")
+                self.logger.info(f"🔒 Proxy: {proxy_clean}")
 
             if self.CHROMEDRIVER_PATH.exists():
                 service = Service(str(self.CHROMEDRIVER_PATH))
@@ -114,7 +107,6 @@ class GoodinfoBaseCrawler:
             else:
                 driver = webdriver.Chrome(options=options)
 
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         return driver
 
     def _cleanup_driver(self):
@@ -126,16 +118,10 @@ class GoodinfoBaseCrawler:
             self.driver = None
 
     def _parse_goodinfo_table(self, table_id: str = "tblStockList") -> pd.DataFrame:
-        # 在解析前，先嘗試停止網頁繼續載入 (斷尾求生)
-        try:
-            self.driver.execute_script("window.stop();")
-        except:
-            pass
-
         try:
             page_source = self.driver.page_source
-        except:
-            raise ConnectionError("瀏覽器已死")
+        except Exception as e:
+            raise ConnectionError(f"瀏覽器通訊失敗: {e}")
 
         try:
             page_source = page_source.encode('latin1').decode('utf-8', errors='ignore')
@@ -143,12 +129,18 @@ class GoodinfoBaseCrawler:
             pass
 
         soup = BeautifulSoup(page_source, 'lxml')
+
+        # 檢查是否被擋
+        if "刷新過快" in str(soup):
+            raise ValueError("被 Goodinfo 阻擋 (Rate Limit)")
+
         data_table = soup.select_one(f'#{table_id}')
 
         if not data_table:
-            if "刷新過快" in str(soup) or "請稍後" in str(soup):
-                raise ValueError("被網站阻擋 (Rate Limit)")
-            raise ValueError(f"表格尚未出現 ({table_id})")
+            # 嘗試找所有表格，有時候廣告會把 ID 擠掉
+            if len(soup.select('table')) > 0:
+                raise ValueError(f"頁面有表格但 ID 不符 ({table_id})")
+            raise ValueError("頁面載入不完整 (找不到表格)")
 
         df_list = pd.read_html(io.StringIO(str(data_table)))
         if not df_list:
@@ -210,43 +202,30 @@ class GoodinfoBaseCrawler:
                     self._cleanup_driver()
                 self.driver = self._setup_driver()
 
-                # 設定 Script Timeout (防止 JS 卡死)
-                self.driver.set_script_timeout(30)
+                # 設定 Timeout
+                self.driver.set_page_load_timeout(60)
+                self.driver.set_script_timeout(60)
 
-                # 1. 發送請求
-                # 因為 strategy='none'，這行會瞬間返回，絕不會卡 120 秒
+                # 發送請求
                 self.driver.get(url)
 
-                # 2. 手動輪詢 (Polling) 等待表格出現
-                # 我們不依賴瀏覽器的載入狀態，我們只看 DOM
-                elapsed = 0
-                found = False
-                check_interval = 2  # 每2秒檢查一次
+                # 等待表格出現
+                try:
+                    wait = WebDriverWait(self.driver, self.WAIT_TIMEOUT)
+                    wait.until(EC.presence_of_element_located((By.ID, table_id)))
+                    self.logger.info("✓ 偵測到表格")
+                except TimeoutException:
+                    self.logger.warning("等待逾時，嘗試直接解析...")
 
-                while elapsed < self.POLLING_TIMEOUT:
-                    try:
-                        # 檢查元素是否存在 (不需要完整載入，只要 DOM 有就好)
-                        # 使用 find_elements 比較不會噴錯
-                        elements = self.driver.find_elements(By.ID, table_id)
-                        if elements:
-                            found = True
-                            self.logger.info(f"✓ 在 {elapsed} 秒時偵測到表格")
-                            break
-                    except:
-                        pass
-
-                    time.sleep(check_interval)
-                    elapsed += check_interval
-
-                if not found:
-                    self.logger.warning(f"等待表格逾時 ({self.POLLING_TIMEOUT}s)，嘗試強制解析...")
-
-                # 3. 強制解析
+                # 解析
                 df = self._parse_goodinfo_table(table_id)
                 return df
 
             except Exception as e:
                 self.logger.warning(f"嘗試失敗: {e}")
+                # 失敗後多等一下，避開鎖 IP
+                time.sleep(10 + attempt * 5)
+
             finally:
                 self._cleanup_driver()
 
