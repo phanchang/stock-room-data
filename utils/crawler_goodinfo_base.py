@@ -28,12 +28,9 @@ logging.basicConfig(
 
 
 class GoodinfoBaseCrawler:
-    """Goodinfo 爬蟲基礎類別"""
+    """Goodinfo 爬蟲基礎類別 (極速優化版)"""
 
-    # 本機 Driver 路徑 (僅供本機使用)
     CHROMEDRIVER_PATH = Path(__file__).resolve().parent.parent / "chromedriver-win64" / "chromedriver.exe"
-
-    # 資料儲存根目錄
     DATA_ROOT_DIR = Path(__file__).resolve().parent.parent / "data" / "goodinfo"
 
     MAX_RETRIES = 3
@@ -48,41 +45,54 @@ class GoodinfoBaseCrawler:
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def _setup_driver(self):
-        """設定 Chrome driver (環境感知版)"""
+        """設定 Chrome driver (含資源阻擋與環境感知)"""
+
+        env_path = self.DATA_ROOT_DIR.parent.parent / ".env"
+        if env_path.exists():
+            load_dotenv(env_path)
 
         options = webdriver.ChromeOptions()
-        # 基本設定 (雲端與本機通用)
+
+        # === 🚀 效能優化關鍵設定 ===
+        # 1. 禁用圖片 (最有效加速)
+        prefs = {"profile.managed_default_content_settings.images": 2}
+        options.add_experimental_option("prefs", prefs)
+        options.add_argument('--blink-settings=imagesEnabled=false')
+
+        # 2. 基礎 headless 設定
         options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-dev-shm-usage')  # 避免記憶體不足崩潰
         options.add_argument('--disable-gpu')
-        options.add_argument('--window-size=1920,1080')  # 設定視窗大小，避免跑版
+        options.add_argument('--window-size=1920,1080')  # 確保版面正確
 
-        # 偽裝與 SSL 設定
-        options.add_argument('--ignore-certificate-errors')
-        options.add_argument(
-            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        # 3. 禁用擴充與自動化特徵
+        options.add_argument('--disable-extensions')
+        options.add_argument('--disable-infobars')
+        options.add_argument('--disable-notifications')
+        options.add_argument('--disable-popup-blocking')
+
+        # 4. 頁面載入策略：Eager (DOM 載入完就跑，不等圖片/樣式)
         options.page_load_strategy = 'eager'
 
-        # 🟢 [關鍵修改] 判斷是否在 GitHub Actions 環境
+        # 5. 偽裝 User-Agent
+        options.add_argument(
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+        # 6. 忽略 SSL 錯誤
+        options.add_argument('--ignore-certificate-errors')
+        options.add_argument('--ignore-ssl-errors')
+
+        # === 環境感知邏輯 ===
         is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
 
         if is_github_actions:
-            # === 雲端環境 (GitHub Actions - Linux) ===
-            self.logger.info("☁️ 偵測到雲端環境：使用自動下載 Linux Driver，不使用 Proxy")
-
-            # 雲端不需要 Proxy，也不要讀 .env
-            # 直接初始化，Selenium 4.x 會自動管理 Driver (Linux版)
+            # ☁️ 雲端環境 (Linux)
+            self.logger.info("☁️ 雲端環境：自動下載 Driver，禁用 Proxy")
             driver = webdriver.Chrome(options=options)
-
         else:
-            # === 本機環境 (Local - Windows/Mac) ===
-            self.logger.info("🏠 偵測到本機環境：嘗試載入 Proxy 與指定 Driver")
-
-            # 1. 載入 .env 與 Proxy
-            env_path = self.DATA_ROOT_DIR.parent.parent / ".env"
-            if env_path.exists():
-                load_dotenv(env_path)
+            # 🏠 本機環境 (Windows)
+            self.logger.info("🏠 本機環境：載入 Proxy 設定")
 
             # 設定 NO_PROXY 避免 localhost 被擋
             os.environ['NO_PROXY'] = 'localhost,127.0.0.1,::1'
@@ -93,18 +103,17 @@ class GoodinfoBaseCrawler:
                 options.add_argument(f'--proxy-server=http://{proxy_clean}')
                 self.logger.info(f"🔒 Chrome Proxy 已啟用")
 
-            # 2. 指定 Driver 路徑
             if self.CHROMEDRIVER_PATH.exists():
                 service = Service(str(self.CHROMEDRIVER_PATH))
                 try:
                     driver = webdriver.Chrome(service=service, options=options)
                 except Exception as e:
-                    self.logger.warning(f"指定 Driver 失敗，嘗試自動尋找: {e}")
+                    self.logger.warning(f"指定 Driver 失敗，切換自動模式: {e}")
                     driver = webdriver.Chrome(options=options)
             else:
                 driver = webdriver.Chrome(options=options)
 
-        # 移除 webdriver 特徵 (防機器人偵測)
+        # 移除 webdriver 特徵
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         return driver
@@ -118,11 +127,11 @@ class GoodinfoBaseCrawler:
             self.driver = None
 
     def _parse_goodinfo_table(self, table_id: str = "tblStockList") -> pd.DataFrame:
-        # 增加容錯：如果 driver 已經死了，這裡會報錯
         try:
+            # 取得網頁原始碼
             page_source = self.driver.page_source
         except Exception:
-            raise ConnectionError("瀏覽器連線已中斷")
+            raise ConnectionError("瀏覽器失去回應 (可能是載入過久卡死)")
 
         try:
             page_source = page_source.encode('latin1').decode('utf-8', errors='ignore')
@@ -134,12 +143,15 @@ class GoodinfoBaseCrawler:
 
         if not data_table:
             if "刷新過快" in page_source or "請稍後" in page_source:
-                raise ValueError("被網站阻擋 (Rate Limit)")
-            raise ValueError(f"找不到表格 ID: {table_id}")
+                raise ValueError("Goodinfo 阻擋 (Rate Limit)，請稍後再試")
+
+            # 嘗試印出頁面標題或是部分內容除錯
+            title = soup.title.string if soup.title else "No Title"
+            raise ValueError(f"找不到表格 ID: {table_id} (Page Title: {title})")
 
         df_list = pd.read_html(io.StringIO(str(data_table)))
         if not df_list:
-            raise ValueError("表格解析失敗")
+            raise ValueError("表格解析失敗 (Pandas read_html error)")
 
         df = df_list[0]
         if '代號' in df.columns:
@@ -192,13 +204,23 @@ class GoodinfoBaseCrawler:
         for attempt in range(self.MAX_RETRIES):
             try:
                 self.logger.info(f"第 {attempt + 1} 次嘗試連線...")
+
+                # 每次重試都重新啟動 Driver (避免記憶體洩漏或卡死)
+                if self.driver:
+                    self._cleanup_driver()
+
                 self.driver = self._setup_driver()
 
-                # 設定超時 (Script Timeout 是關鍵，防止 JS 卡死)
+                # 設定較短的 Page Load Timeout，強迫它在卡住時趕快報錯重試
+                self.driver.set_page_load_timeout(45)
                 self.driver.set_script_timeout(30)
-                self.driver.set_page_load_timeout(60)
 
-                self.driver.get(url)
+                try:
+                    self.driver.get(url)
+                except TimeoutException:
+                    self.logger.warning("頁面載入超時 (但可能已抓到 DOM，繼續嘗試解析...)")
+                    # 有時候超時是因為圖片還在轉，但文字已經出來了，我們可以試著硬抓
+                    self.driver.execute_script("window.stop();")
 
                 wait = WebDriverWait(self.driver, self.WAIT_TIMEOUT)
                 wait.until(EC.presence_of_element_located((By.ID, table_id)))
