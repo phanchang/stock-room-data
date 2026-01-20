@@ -188,9 +188,10 @@ def main():
     # 過濾已存在的股票
     if args.skip_check:
         print("每日更新模式：檢查所有股票是否需要更新...")
-        existing = downloader.cache.get_all_symbols(market='tw')
-        symbols_to_check = [s for s in symbols if s in existing]
-        print(f"  已快取: {len(existing)} 檔")
+        #existing = downloader.cache.get_all_symbols(market='tw')
+        #symbols_to_check = [s for s in symbols if s in existing]
+        symbols_to_check = symbols
+
         print(f"  待檢查: {len(symbols_to_check)} 檔\n")
 
         latest_trading_date = get_latest_trading_date()

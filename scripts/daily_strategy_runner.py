@@ -13,8 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from utils.stock_list import get_stock_list
 from utils.indicator_writer import write_daily_indicators
 from utils.indicator_index import build_indicator_index
-from utils import TechnicalStrategies
-
+from utils.strategies.technical import TechnicalStrategies
 # 確保輸出目錄存在
 INDICATOR_DIR = PROJECT_ROOT / "data" / "indicators"
 INDICATOR_DIR.mkdir(parents=True, exist_ok=True)
