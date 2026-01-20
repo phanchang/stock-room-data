@@ -23,7 +23,7 @@ jobs:
 
     # 直接執行爬蟲，跳過所有前置作業
     - name: Run Revenue Crawler
-      run: python scripts/crawler_goodinfo_revenue_high.py --mode fetch
+      run: python scripts/crawler_goodinfo_holder_change.py --mode fetch
 
     # 如果想測另一個爬蟲，可以把下面這行取消註解
     # - name: Run Holder Crawler
