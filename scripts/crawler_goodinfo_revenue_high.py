@@ -46,21 +46,23 @@ class GoodinfoRevenueHighCrawler(GoodinfoBaseCrawler):
             return self._load_today_data(self.FILENAME_SUFFIX)
 
         self.logger.info(f"🚀 開始抓取:log_fetch_data  {self.FILENAME_SUFFIX}")
-        print(f"🚀 開始抓取: {self.FILENAME_SUFFIX}")
+        #print(f"🚀 開始抓取: {self.FILENAME_SUFFIX}")
 
         try:
             # 抓取第一張表
-            print("正在抓取營收狀況...")
+            self.logger.info("正在抓取營收狀況...")
             df1 = self._fetch_with_retry(self.URL)
+            self.logger.info("營收狀況OK")
 
             time.sleep(3) # 休息一下
 
             # 抓取第二張表 (創紀錄統計)
-            print("正在抓取創紀錄統計...")
+            self.logger.info("正在抓取創紀錄統計...")
             df2 = self._fetch_with_retry(self.URL2)
+            self.logger.info("創紀錄統計OK")
 
             # 合併
-            print("合併資料中...")
+            self.logger.info("合併資料中...")
             # 只取 df2 獨有的欄位
             cols_to_use = df2.columns.difference(df1.columns).tolist()
             cols_to_use.append('代號') # 用來對照

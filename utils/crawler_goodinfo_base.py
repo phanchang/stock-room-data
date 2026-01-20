@@ -120,23 +120,27 @@ class GoodinfoBaseCrawler:
 
     def _parse_goodinfo_table(self, table_id: str = "tblStockList") -> pd.DataFrame:
         try:
+            self.logger.info("準備取得page_source")
             page_source = self.driver.page_source
             self.logger.info("取得page_source")
         except Exception as e:
             raise ConnectionError(f"瀏覽器通訊失敗: {e}")
 
         try:
+            self.logger.info("準備取得page_source decode")
             page_source = page_source.encode('latin1').decode('utf-8', errors='ignore')
             self.logger.info("取得page_source decode")
         except:
             pass
 
+        self.logger.info("準備Beautiful souo")
         soup = BeautifulSoup(page_source, 'lxml')
         self.logger.info("完成Beautiful souo")
         # 檢查是否被擋
         if "刷新過快" in str(soup):
             raise ValueError("被 Goodinfo 阻擋 (Rate Limit)")
 
+        self.logger.info("準備取得DataTable")
         data_table = soup.select_one(f'#{table_id}')
         self.logger.info("取得DataTable")
 
@@ -253,6 +257,7 @@ class GoodinfoBaseCrawler:
                 self.logger.info(f"第 {attempt + 1} 次嘗試連線後sleep")
                 self.driver.set_page_load_timeout(15)
                 self.driver.set_script_timeout(15)
+                self.logger.info(f"sleep完畢")
 
                 # 發送請求
                 self.logger.info(f"發送請求")
@@ -267,6 +272,7 @@ class GoodinfoBaseCrawler:
                     self.logger.warning("等待逾時，嘗試直接解析...")
 
                 # 解析
+                self.logger.info(f"df準備解析")
                 df = self._parse_goodinfo_table(table_id)
                 self.logger.info(f"取得解析後df")
                 return df
