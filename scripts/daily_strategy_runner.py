@@ -39,25 +39,6 @@ STRATEGY_MAP = {
 }
 
 
-def run_strategies():
-    # 1. 檢查核心數據 (yFinance)
-    price_path = 'data/indicators/daily_indicators.csv'
-    if not os.path.exists(price_path):
-        print(f"CRITICAL ERROR: {price_path} not found. Terminating.")
-        sys.exit(1)
-
-    df_price = pd.read_csv(price_path)
-
-    # 2. 彈性檢查輔助數據 (Goodinfo)
-    revenue_path = 'data/goodinfo/revenue_high.csv'
-    if os.path.exists(revenue_path):
-        print("Loading Revenue data...")
-        df_rev = pd.read_csv(revenue_path)
-        # 執行相關策略...
-    else:
-        print("WARNING: Revenue data missing. Skipping Revenue strategies.")
-
-    # 執行其他不依賴 Revenue 的策略...
 
 def process_single_stock(args):
     """處理單一股票"""
@@ -136,30 +117,54 @@ def main():
     print("🚀 開始執行策略運算...")
     start_time = time.time()
 
-    # 1. 獲取清單
-    stock_list = get_stock_list(include_market=True)
-    print(f"📋 共 {len(stock_list)} 檔股票")
+    # --- 1. 環境檢查與準備 ---
+    # 確保輸出目錄存在
+    INDICATOR_DIR.mkdir(parents=True, exist_ok=True)
+    (PROJECT_ROOT / "data" / "goodinfo").mkdir(parents=True, exist_ok=True)
 
-    if not stock_list:
-        print("❌ 錯誤：股票清單是空的！")
+    # 檢查核心來源：股票清單
+    stock_list_path = PROJECT_ROOT / "data" / "stock_list.csv"
+    if not stock_list_path.exists():
+        print(f"❌ 錯誤：找不到基礎清單 {stock_list_path}，終止程式。")
         return
 
-    # 2. 平行運算
+    # 檢查核心數據：快取資料夾是否有資料
+    cache_dir = PROJECT_ROOT / "data" / "cache" / "tw"
+    if not cache_dir.exists() or not any(cache_dir.iterdir()):
+        print(f"❌ 錯誤：{cache_dir} 無資料，請先執行更新股價腳本。")
+        return
+
+    # 彈性檢查：Goodinfo 數據 (僅提示，不中止)
+    revenue_path = PROJECT_ROOT / "data" / "goodinfo" / "revenue_high.csv"
+    if revenue_path.exists():
+        print("✅ 偵測到月營收數據，後續策略將納入參考。")
+    else:
+        print("⚠️ 提示：缺少月營收數據，將跳過相關複合篩選。")
+
+    # --- 2. 獲取股票清單 ---
+    stock_list = get_stock_list(include_market=True)
+    print(f"📋 共載入 {len(stock_list)} 檔股票進行分析")
+
+    if not stock_list:
+        print("❌ 錯誤：解析後的股票清單為空！")
+        return
+
+    # --- 3. 平行運算策略 ---
     total_triggers = 0
-    # 注意：Windows 下如果 process_single_stock 噴錯，有時會看不到
-    # 如果這裡還是沒反應，可以試著把 max_workers 改成 1 變成單執行緒除錯
+    # 在 GitHub Actions 環境下，建議 max_workers 不要太高，2-4 即可
     with ProcessPoolExecutor(max_workers=4) as executor:
         results = list(executor.map(process_single_stock, stock_list))
         total_triggers = sum(results)
 
-    # 3. 更新索引
-    print("\n🔧 重建索引...")
+    # --- 4. 更新索引 ---
+    print("\n🔧 正在重建指標索引 (build_indicator_index)...")
     build_indicator_index()
 
-    print(f"\n✅ 完成！耗時: {time.time() - start_time:.2f} 秒")
-    print(f"🎯 累計觸發: {total_triggers} 次訊號")
+    print(f"\n✅ 全部完成！")
+    print(f"⏱️ 總耗時: {time.time() - start_time:.2f} 秒")
+    print(f"🎯 累計觸發: {total_triggers} 次策略訊號")
 
 
 if __name__ == "__main__":
-    # 這裡呼叫你定義好的主函數
-    run_strategies()
+    # 修正：直接呼叫包含邏輯的 main()
+    main()
