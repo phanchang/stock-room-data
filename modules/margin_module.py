@@ -70,6 +70,8 @@ class MarginModule(QWidget):
         title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 14px;")
 
         self.info_label = QLabel(" 等待資料載入...")
+        # 🟢 核心修正：設定固定寬度
+        self.info_label.setFixedWidth(600)
         self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 12px; color: #888;")
         self.info_label.setTextFormat(Qt.TextFormat.RichText)
 

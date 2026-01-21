@@ -3,11 +3,12 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from dotenv import load_dotenv  # 確保讀取 Proxy
+from dotenv import load_dotenv
 
 # UI 元件
+# 🟢 修正：加入 QSizePolicy
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
-                             QTableWidgetItem, QHeaderView, QApplication, QLabel)
+                             QTableWidgetItem, QHeaderView, QApplication, QLabel, QSizePolicy)
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtCore import pyqtSignal, Qt, QThread
 
@@ -15,7 +16,7 @@ from PyQt6.QtCore import pyqtSignal, Qt, QThread
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-# 🟢 引入爬蟲
+# 引入爬蟲
 from utils.crawler_revenue import get_monthly_revenue
 
 plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei']
@@ -72,6 +73,8 @@ class RevenueModule(QWidget):
         title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 14px;")
 
         self.info_label = QLabel(" 等待資料載入...")
+        # 🟢 修正 1：固定寬度防抖動
+        self.info_label.setFixedWidth(600)
         self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 12px; color: #888;")
         self.info_label.setTextFormat(Qt.TextFormat.RichText)
 
@@ -83,6 +86,11 @@ class RevenueModule(QWidget):
         # 2. Canvas
         self.fig = Figure(facecolor='#000000')
         self.canvas = FigureCanvas(self.fig)
+
+        # 🟢 修正 2：設定 Expanding 策略防壓縮
+        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.canvas.updateGeometry()
+
         layout.addWidget(self.canvas, stretch=6)
 
         # 3. Table
@@ -120,8 +128,6 @@ class RevenueModule(QWidget):
         self.info_label.setText("✅ 資料更新完成")
 
         # 資料處理
-        # Crawler Columns: [年月, 營收, 月增率, 去年同期, 年增率, 累計營收, 累計年增率, 日期]
-        # 轉換單位：千元 -> 億元 (除以 100,000)
         df['Revenue'] = df['營收'] / 100000
         df['YoY'] = df['年增率']
         df['Cum_YoY'] = df['累計年增率']

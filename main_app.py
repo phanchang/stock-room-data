@@ -21,7 +21,7 @@ from modules.institutional_module import InstitutionalModule
 from modules.margin_module import MarginModule
 from modules.eps_module import EPSModule
 from modules.ratio_module import RatioModule
-
+from modules.active_etf_module import ActiveETFModule
 
 class SideMenu(QWidget):
     def __init__(self, parent=None):
@@ -65,6 +65,7 @@ class StockWarRoomV3(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("StockWarRoom V3 - 戰情矩陣")
+        # 🟢 設定一個較大的初始解析度，確保 2x2 矩陣有空間
         self.resize(1600, 950)
         self.setStyleSheet("background-color: #000000;")
 
@@ -121,12 +122,14 @@ class StockWarRoomV3(QMainWindow):
         # 比例調整 (左35% 右65% | 上55% 下45%)
         warroom_layout.setColumnStretch(0, 35)
         warroom_layout.setColumnStretch(1, 65)
-        warroom_layout.setRowStretch(0, 55)
-        warroom_layout.setRowStretch(1, 45)
+        warroom_layout.setRowStretch(0, 45)
+        warroom_layout.setRowStretch(1, 55)
 
         self.pages.addWidget(self.warroom_page)
         self.pages.addWidget(QLabel("選股策略頁面", alignment=Qt.AlignmentFlag.AlignCenter))
-        self.pages.addWidget(QLabel("市場焦點頁面", alignment=Qt.AlignmentFlag.AlignCenter))
+        # Page 2: 市場焦點 (🔥 修改這裡)
+        self.market_page = ActiveETFModule()  # 使用新模組
+        self.pages.addWidget(self.market_page)
 
         main_layout.addWidget(self.pages)
 
@@ -150,7 +153,7 @@ class StockWarRoomV3(QMainWindow):
     def connect_signals(self):
         self.side_menu.button_group.idClicked.connect(self.pages.setCurrentIndex)
 
-        # 綁定所有模組的連動
+        # 1. 股票清單 (左上) 連動其他模組
         self.list_module.stock_selected.connect(self.kline_module.load_stock_data)
         self.list_module.stock_selected.connect(self.inst_module.load_inst_data)
         self.list_module.stock_selected.connect(self.margin_module.load_margin_data)
@@ -158,20 +161,45 @@ class StockWarRoomV3(QMainWindow):
         self.list_module.stock_selected.connect(self.eps_module.load_eps_data)
         self.list_module.stock_selected.connect(self.ratio_module.load_ratio_data)
 
+        # 🟢 2. 新增：市場焦點 (ETF) 連動其他模組
+        # 當在 ETF 頁面點擊股票時，自動更新戰情室的數據
+        self.market_page.stock_clicked_signal.connect(self.kline_module.load_stock_data)
+        self.market_page.stock_clicked_signal.connect(self.inst_module.load_inst_data)
+        self.market_page.stock_clicked_signal.connect(self.margin_module.load_margin_data)
+        self.market_page.stock_clicked_signal.connect(self.revenue_module.load_revenue_data)
+        self.market_page.stock_clicked_signal.connect(self.eps_module.load_eps_data)
+        self.market_page.stock_clicked_signal.connect(self.ratio_module.load_ratio_data)
+
+        # 並且自動切回戰情室分頁 (Page 0)，讓使用者看到詳細數據 (可選)
+        # self.market_page.stock_clicked_signal.connect(lambda: self.pages.setCurrentIndex(0))
+
     def load_initial_data(self):
-        # 🟢 定義 mock_df 讓 list_module 有初始資料
+        # 🟢 修正：補齊 StockListModule 所需的所有欄位，避免 KeyError
         mock_df = pd.DataFrame([
-            {'id': '2330_TW', 'name': '台積電', 'price': 1050, 'pct_5': 2.5},
-            {'id': '2317_TW', 'name': '鴻海', 'price': 210.5, 'pct_5': -1.2},
-            {'id': '2454_TW', 'name': '聯發科', 'price': 1200, 'pct_5': 0.8},
-            {'id': '3008_TW', 'name': '大立光', 'price': 2500, 'pct_5': 3.1}
+            {
+                'id': '2330', 'name': '台積電', 'price': 1050,
+                'pct_5': 2.5, 'pct_10': 3.1, 'pct_m': 5.5, 'rev_yoy': 15.2
+            },
+            {
+                'id': '2317', 'name': '鴻海', 'price': 210.5,
+                'pct_5': -1.2, 'pct_10': 0.5, 'pct_m': -2.1, 'rev_yoy': 8.4
+            },
+            {
+                'id': '2454', 'name': '聯發科', 'price': 1200,
+                'pct_5': 0.8, 'pct_10': 1.2, 'pct_m': 3.0, 'rev_yoy': 10.1
+            },
+            {
+                'id': '3008', 'name': '大立光', 'price': 2500,
+                'pct_5': 3.1, 'pct_10': -0.5, 'pct_m': 1.2, 'rev_yoy': -5.3
+            }
         ])
 
         self.list_module.load_data(mock_df)
 
         # 預設載入第一檔
         if not mock_df.empty:
-            fid = mock_df.iloc[0]['id']
+            # 確保格式為 2330_TW
+            fid = f"{mock_df.iloc[0]['id']}_TW"
             self.kline_module.load_stock_data(fid)
             self.inst_module.load_inst_data(fid)
             self.margin_module.load_margin_data(fid)
