@@ -13,7 +13,7 @@ jobs:
         uses: actions/setup-python@v4
         with: {python-version: '3.11'}
       - name: Install dependencies
-        run:  pip install pandas yfinance lxml python-dotenv # 簡化依賴
+        run:  pip install pandas yfinance lxml python-dotenv pyarrow
       - name: Fetch Price & Run Strategy
         run: |
           python scripts/init_cache_tw.py --auto
