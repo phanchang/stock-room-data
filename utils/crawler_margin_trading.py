@@ -1,18 +1,23 @@
 ﻿# ==================================================
-# crawler_margin_trading.py
-# 融資融券（日資料）
-# 資料來源：MoneyDJ
+# utils/crawler_margin_trading.py
+# 融資融券（日資料） - 強制 Proxy 版
 # ==================================================
 
-import requests,os
-import urllib3  # 1. 新增：用來關閉警告
+import requests
+import urllib3
+import urllib.request
 from bs4 import BeautifulSoup
 import pandas as pd
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+import os
+from dotenv import load_dotenv  # 🟢 引入 dotenv
 
+# 載入 .env 檔案
+load_dotenv()
+
+# 關閉 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 
 # --- headers ---
 HEADERS = {
@@ -23,11 +28,15 @@ HEADERS = {
     )
 }
 
+
 def roc_to_ad(date_str: str):
     """民國日期轉西元 datetime"""
-    roc_year, month, day = date_str.split("/")
-    year = int(roc_year) + 1911
-    return datetime(year, int(month), int(day))
+    try:
+        roc_year, month, day = date_str.split("/")
+        year = int(roc_year) + 1911
+        return datetime(year, int(month), int(day))
+    except:
+        return None
 
 
 def clean_number(val: str):
@@ -44,9 +53,27 @@ def clean_number(val: str):
 def get_margin_trading(stock_code: str) -> pd.DataFrame:
     """
     抓取融資融券資料（近 9 個月）
+    邏輯：優先讀取 .env -> 其次自動偵測 -> 最後直連
     """
-    curr_proxy = os.environ.get("HTTP_PROXY")
-    proxies_config = {"http": curr_proxy, "https": curr_proxy} if curr_proxy else None
+
+    # 🟢 1. 優先從 .env 讀取 (最高優先權)
+    env_http = os.getenv("HTTP_PROXY")
+    env_https = os.getenv("HTTPS_PROXY")
+
+    proxies = {}
+
+    if env_http or env_https:
+        print(f"🌐 [網路] 使用 .env 設定的 Proxy: {env_http}")
+        if env_http: proxies['http'] = env_http
+        if env_https: proxies['https'] = env_https
+    else:
+        # 2. 如果 .env 沒設定，才嘗試系統自動偵測
+        sys_proxies = urllib.request.getproxies()
+        if sys_proxies:
+            print(f"🌐 [網路] 偵測到系統 Proxy: {sys_proxies}")
+            proxies = sys_proxies
+        else:
+            print(f"🌐 [網路] 無代理 (直連模式)")
 
     # ---------- 日期區間 ----------
     end_date = datetime.today()
@@ -60,15 +87,18 @@ def get_margin_trading(stock_code: str) -> pd.DataFrame:
         f"?a={stock_code}&c={from_date_str}&d={end_date_str}"
     )
 
-    headers = {"User-Agent": "Mozilla/5.0"}
-    res = requests.get(
-        url,
-        headers=HEADERS,
-        proxies=proxies_config,  # ✅ 這裡使用函數內定義的變數
-        timeout=10,
-        verify=False  # ✅ 解決 SSLError
-    )
-    res.encoding = "big5"
+    try:
+        res = requests.get(
+            url,
+            headers=HEADERS,
+            proxies=proxies,  # ✅ 使用決定好的 Proxy
+            timeout=15,
+            verify=False
+        )
+        res.encoding = "big5"
+    except Exception as e:
+        print(f"❌ [連線失敗] 無法連線至 MoneyDJ: {e}")
+        return pd.DataFrame()
 
     soup = BeautifulSoup(res.text, "html.parser")
 
@@ -89,41 +119,34 @@ def get_margin_trading(stock_code: str) -> pd.DataFrame:
 
         first_text = tds[0].get_text(strip=True)
 
-    # ✅ 只接受真正的「資料列」（民國日期）
-    # 排除：表頭、合計列、空列
         if (
-            "/" not in first_text
-            or len(first_text) != 9      # 114/12/22
-            or not first_text[:3].isdigit()
+                "/" not in first_text
+                or len(first_text) != 9
+                or not first_text[:3].isdigit()
         ):
             continue
 
         raw = [td.get_text(strip=True) for td in tds[:15]]
 
+        dt = roc_to_ad(raw[0])
+        if dt is None: continue
+
         row = [
-            roc_to_ad(raw[0]),
+            dt,
             *[clean_number(v) for v in raw[1:]]
         ]
 
         rows.append(row)
 
     df = pd.DataFrame(rows, columns=columns)
-    df.sort_values("date",ascending=False, inplace=True)
-    df.reset_index(drop=True, inplace=True)
+    if not df.empty:
+        df.sort_values("date", ascending=False, inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        print(f"✅ [成功] 抓取到 {len(df)} 筆資券資料")
 
     return df
 
 
-# ==================================================
-# 簡單列印測試
-# ==================================================
 if __name__ == "__main__":
     df = get_margin_trading("2330")
-
-    print("?? 融資融券資料（前 5 筆）")
     print(df.head())
-
-    print("\n?? 欄位型態")
-    print(df.dtypes)
-
-    print(f"\n?? 總筆數：{len(df)}")
