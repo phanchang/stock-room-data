@@ -22,7 +22,7 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/indicators/  # 只追蹤策略結果
+          git add data/indicators/
           git commit -m "Auto: Update Daily Strategy Indicators" || echo "No changes to commit"
-          git push
-      # 視需求決定是否提交產出的報告 (不含 data/ 原始檔)
+          git pull --rebase origin main  # 🟢 加入這行：先拉回遠端更新，避免衝突
+          git push origin main
