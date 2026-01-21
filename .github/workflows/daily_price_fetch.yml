@@ -22,27 +22,17 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 1. 只加入今天下午產出的指標結果
           git add data/indicators/
-          git commit -m "Auto: Update Daily Strategy Indicators" || echo "No changes to commit"
-          git pull --rebase origin main  # 🟢 加入這行：先拉回遠端更新，避免衝突
+          
+          # 2. 提交指標。如果沒檔案變動（例如今天休市）就直接結束
+          git commit -m "Auto: Update Daily Strategy Indicators" || { echo "No changes to commit"; exit 0; }
+          
+          # 3. 🟢 關鍵：既然清單週日才更新，平日下午產生的任何對 stock_list 或 cache 的變動
+          # 我們通通不要存。reset --hard 會把它們清乾淨，保證下一步 pull 順利。
+          git reset --hard HEAD
+          
+          # 4. 拉取遠端（包含昨晚的營收或上週日的清單）並推回
+          git pull --rebase origin main
           git push origin main
-      - name: Commit and Push Results
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-                
-          # 1. 把所有你要保留的資料夾都 add 進來
-          git add data/indicators/
-          git add data/goodinfo/ || echo "No goodinfo changes"
-             
-          # 2. 提交變更
-          git commit -m "Auto: Update Daily Strategy Indicators" || echo "No changes to commit"
-             
-          # 3. 🟢 關鍵：拋棄所有剩下的、未被 add 的變更 (例如 cache 的更動)
-          # 這樣 git pull --rebase 就不會報錯
-          git checkout .
-          git clean -fd
-                
-                # 4. 拉取並推送
-                git pull --rebase origin main
-                git push origin main
