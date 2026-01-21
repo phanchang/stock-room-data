@@ -1,6 +1,6 @@
 # scripts/daily_strategy_runner.py
 
-import sys
+import os,sys
 from pathlib import Path
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor
@@ -38,6 +38,26 @@ STRATEGY_MAP = {
     "high_60": lambda df: TechnicalStrategies.breakout_n_days_high(df, 60), # 創季新高
 }
 
+
+def run_strategies():
+    # 1. 檢查核心數據 (yFinance)
+    price_path = 'data/indicators/daily_indicators.csv'
+    if not os.path.exists(price_path):
+        print(f"CRITICAL ERROR: {price_path} not found. Terminating.")
+        sys.exit(1)
+
+    df_price = pd.read_csv(price_path)
+
+    # 2. 彈性檢查輔助數據 (Goodinfo)
+    revenue_path = 'data/goodinfo/revenue_high.csv'
+    if os.path.exists(revenue_path):
+        print("Loading Revenue data...")
+        df_rev = pd.read_csv(revenue_path)
+        # 執行相關策略...
+    else:
+        print("WARNING: Revenue data missing. Skipping Revenue strategies.")
+
+    # 執行其他不依賴 Revenue 的策略...
 
 def process_single_stock(args):
     """處理單一股票"""
@@ -141,4 +161,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # 這裡呼叫你定義好的主函數
+    run_strategies()

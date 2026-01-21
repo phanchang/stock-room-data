@@ -1,0 +1,22 @@
+name: Nightly Goodinfo Fetch
+on:
+  schedule:
+    - cron: '0 20 * * *' # 台北 04:00
+  workflow_dispatch:
+
+jobs:
+  fetch-goodinfo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with: {python-version: '3.11'}
+      - name: Install dependencies
+        run: pip install pandas requests beautifulsoup4
+      - name: Revenue High (Critical Timeout)
+        continue-on-error: true
+        run: python scripts/crawler_goodinfo_revenue_high.py --mode fetch
+      - name: Holder Change
+        continue-on-error: true
+        run: python scripts/crawler_goodinfo_holder_change.py --mode fetch

@@ -1,42 +1,22 @@
-# --- 忽略 Python 快取與環境 ---
+# --- 忽略環境與 IDE ---
 __pycache__/
 *.py[cod]
-*$py.class
 .venv/
-env/
 .env
-.DS_Store
-
-# --- 忽略 IDE 設定 ---
-.vscode/
 .idea/
-
-# --- 忽略日誌檔 ---
-logs/
-*.log
+.vscode/
 
 # --- 資料夾策略 (白名單模式) ---
-# 1. 預設忽略 data 下的所有東西
 data/*
 
-# 2. 【保留】基金自動化資料 (Dash 儀表板需要)
+# 保留必要結構與結果
 !data/raw/
 !data/clean/
-
-# 3. 【保留】股票清單與 Goodinfo 爬蟲結果
 !data/stock_list.csv
 !data/goodinfo/
-
-# 4. 【保留】策略運算結果 (產出的指標)
 !data/indicators/
-
-# 5. 【保留】快取的中繼資料 (非股價本身，只是紀錄更新時間，很小可保留)
 !data/cache/
-data/cache/tw/
-# 上面這兩行的意思是：保留 cache 資料夾結構，但忽略裡面的 tw 資料夾 (股價)
-# 如果你想保留 metadata (下載失敗紀錄等)，可以加這行：
 !data/cache/metadata/
 
-# --- 確保副檔名規則不會意外放行 cache 下的檔案 ---
-# 移除全域的 !*.csv 規則，避免誤傳不該傳的檔案
-# 只在上述放行的資料夾內，Git 會自動追蹤裡面的檔案
+# 排除重型數據 (股價快取)
+data/cache/tw/

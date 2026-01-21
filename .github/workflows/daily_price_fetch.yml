@@ -1,0 +1,21 @@
+name: Daily Price & Strategy
+on:
+  schedule:
+    - cron: '0 7 * * 1-5' # 台北 15:00
+  workflow_dispatch:
+
+jobs:
+  run-daily:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with: {python-version: '3.11'}
+      - name: Install dependencies
+        run: pip install pandas yfinance lxml # 簡化依賴
+      - name: Fetch Price & Run Strategy
+        run: |
+          python scripts/init_cache_tw.py --auto
+          python scripts/daily_strategy_runner.py
+      # 視需求決定是否提交產出的報告 (不含 data/ 原始檔)
