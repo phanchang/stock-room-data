@@ -20,3 +20,10 @@ jobs:
       - name: Holder Change
         continue-on-error: true
         run: python scripts/crawler_goodinfo_holder_change.py --mode fetch
+      - name: Commit and Push Results
+        run: |
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git add data/goodinfo/    # 只追蹤 Goodinfo 爬蟲結果
+            git commit -m "Auto: Update Goodinfo Data" || echo "No changes to commit"
+            git push
