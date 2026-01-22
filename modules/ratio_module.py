@@ -7,12 +7,34 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
                              QTableWidgetItem, QHeaderView, QApplication, QLabel)
 from PyQt6.QtGui import QColor, QFont
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal, Qt, QThread
+
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
+# 🔥 引入您的爬蟲
+try:
+    from utils.crawler_profitability import get_profitability
+except ImportError:
+    sys.path.append(str(Path(__file__).resolve().parent.parent))
+    from utils.crawler_profitability import get_profitability
+
 plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei']
 plt.rcParams['axes.unicode_minus'] = False
+
+
+# 🟢 背景工作者
+class RatioWorker(QThread):
+    data_loaded = pyqtSignal(pd.DataFrame)
+
+    def __init__(self, stock_id):
+        super().__init__()
+        self.stock_id = stock_id
+
+    def run(self):
+        print(f"🕷️ [Ratio] 正在爬取 {self.stock_id} 三率資料...")
+        df = get_profitability(self.stock_id)
+        self.data_loaded.emit(df)
 
 
 class RatioModule(QWidget):
@@ -30,7 +52,7 @@ class RatioModule(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # 1. Header
+        # Header
         header_widget = QWidget()
         header_widget.setFixedHeight(35)
         header_widget.setStyleSheet("background-color: #050505; border-bottom: 1px solid #333;")
@@ -40,21 +62,20 @@ class RatioModule(QWidget):
         title = QLabel("獲利能力指標 (三率)")
         title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 14px;")
 
-        self.info_label = QLabel(" 移至圖表查看三率數值")
+        self.info_label = QLabel(" 載入數據中...")
         self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 12px; color: #888;")
-        self.info_label.setTextFormat(Qt.TextFormat.RichText)
 
         header_layout.addWidget(title)
         header_layout.addWidget(self.info_label)
         header_layout.addStretch()
         layout.addWidget(header_widget)
 
-        # 2. Canvas
+        # Canvas
         self.fig = Figure(facecolor='#000000')
         self.canvas = FigureCanvas(self.fig)
         layout.addWidget(self.canvas, stretch=6)
 
-        # 3. Table
+        # Table
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["季度", "毛利率", "營益率", "淨利率"])
@@ -68,68 +89,87 @@ class RatioModule(QWidget):
 
         self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
 
-    def load_ratio_data(self, stock_id):
-        # 暫時使用模擬數據
-        df = self._generate_mock_data()
-        self.update_ui(df)
+    def load_ratio_data(self, full_stock_id):
+        stock_id = full_stock_id.split('_')[0]
+        self.info_label.setText(f"⏳ 正在更新 {stock_id} 數據...")
 
-    def _generate_mock_data(self):
-        quarters = []
-        for year in [2024, 2025]:
-            for q in range(1, 5):
-                quarters.append(f"{year}Q{q}")
+        self.worker = RatioWorker(stock_id)
+        self.worker.data_loaded.connect(self.process_data)
+        self.worker.start()
 
-        # 模擬三率遞減 (毛利 > 營益 > 淨利)
-        gross = np.random.uniform(40, 55, 8)
-        op = gross - np.random.uniform(10, 15, 8)
-        net = op - np.random.uniform(2, 5, 8)
+    def process_data(self, df):
+        if df.empty:
+            self.info_label.setText("⚠️ 查無三率資料")
+            return
 
-        return pd.DataFrame({
-            'Quarter': quarters,
-            'Gross': gross,
-            'Operating': op,
-            'Net': net
-        })
+        try:
+            # 1. 整理欄位與計算
+            df = df.rename(columns={'季別': 'Quarter'})
+
+            # 轉數值
+            for col in ['毛利率', '營益率', '營業收入', '稅後淨利']:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+            # 🔥 計算淨利率 (MoneyDJ 表格可能沒有直接提供百分比)
+            # 公式: (稅後淨利 / 營業收入) * 100
+            # 避免除以零
+            df['淨利率'] = df.apply(
+                lambda row: (row['稅後淨利'] / row['營業收入'] * 100) if row['營業收入'] != 0 else 0,
+                axis=1
+            )
+
+            # 統一欄位名稱方便後續取用
+            df['Gross'] = df['毛利率']
+            df['Operating'] = df['營益率']
+            df['Net'] = df['淨利率']
+
+            self.info_label.setText("✅ 數據更新完成")
+            self.update_ui(df)
+
+        except Exception as e:
+            print(f"❌ [Ratio] 處理錯誤: {e}")
+            self.info_label.setText("❌ 數據解析錯誤")
 
     def update_ui(self, df):
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         ax.set_facecolor('#000000')
 
-        self.plot_df = df.copy()
-        x = np.arange(len(df))
+        # 取前 8 筆並轉為時間正序
+        plot_data = df.head(8).iloc[::-1]
+        self.plot_df = plot_data.copy()
 
-        # 繪製三條折線
-        # 毛利(紫), 營益(橘), 淨利(藍)
-        ax.plot(x, df['Gross'], color='#E040FB', marker='o', linewidth=2, label='毛利率')
-        ax.plot(x, df['Operating'], color='#FF9100', marker='s', linewidth=2, label='營益率')
-        ax.plot(x, df['Net'], color='#2979FF', marker='^', linewidth=2, label='淨利率')
+        x = np.arange(len(plot_data))
+
+        # 繪圖
+        ax.plot(x, plot_data['Gross'], color='#E040FB', marker='o', linewidth=2, label='毛利率')
+        ax.plot(x, plot_data['Operating'], color='#FF9100', marker='s', linewidth=2, label='營益率')
+        ax.plot(x, plot_data['Net'], color='#2979FF', marker='^', linewidth=2, label='淨利率')
 
         # 軸設定
         ax.set_xticks(x)
-        ax.set_xticklabels(df['Quarter'], color='white', fontsize=9)
+        ax.set_xticklabels(plot_data['Quarter'], color='white', fontsize=9)
         ax.tick_params(axis='y', colors='white', labelsize=9)
         ax.grid(True, color='#333', linestyle=':')
 
-        # 邊框
+        # Legend
+        ax.legend(facecolor='#111', edgecolor='#333', labelcolor='white', fontsize=8)
+
         for spine in ax.spines.values():
             spine.set_edgecolor('#444')
 
         self.canvas.draw()
 
         # 表格更新
-        table_df = df.sort_index(ascending=False)
-        self.table.setRowCount(len(table_df))
-
-        for i, (idx, row) in enumerate(table_df.iterrows()):
+        self.table.setRowCount(len(df))
+        for i, (idx, row) in enumerate(df.iterrows()):
             items = [
-                QTableWidgetItem(row['Quarter']),
+                QTableWidgetItem(str(row['Quarter'])),
                 QTableWidgetItem(f"{row['Gross']:.1f}%"),
                 QTableWidgetItem(f"{row['Operating']:.1f}%"),
                 QTableWidgetItem(f"{row['Net']:.1f}%")
             ]
 
-            # 對應折線顏色
             items[1].setForeground(QColor("#E040FB"))
             items[2].setForeground(QColor("#FF9100"))
             items[3].setForeground(QColor("#2979FF"))
@@ -148,9 +188,9 @@ class RatioModule(QWidget):
 
             html = (
                 f"<span style='color:#DDD;'>{q}</span> | "
-                f"<span style='color:#E040FB;'>■ 毛利:{row['Gross']:.1f}%</span>  "
-                f"<span style='color:#FF9100;'>■ 營益:{row['Operating']:.1f}%</span>  "
-                f"<span style='color:#2979FF;'>■ 淨利:{row['Net']:.1f}%</span>"
+                f"<span style='color:#E040FB;'>■ 毛:{row['Gross']:.1f}%</span> "
+                f"<span style='color:#FF9100;'>■ 營:{row['Operating']:.1f}%</span> "
+                f"<span style='color:#2979FF;'>■ 淨:{row['Net']:.1f}%</span>"
             )
             self.info_label.setText(html)
 

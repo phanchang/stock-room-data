@@ -74,12 +74,53 @@ class ActiveETFModule(QWidget):
         self.current_df = None
         self.bar_data = None
         self.line_data = None
+        self.stock_market_map = {}  # 用來存儲 代號 -> 市場別 (TW/TWO)
 
         self.mapping = {
             "00981A": ("ezmoney", "統一-00981A (統一台股增長)"),
             "00991A": ("fhtrust", "復華-00991A (復華未來50)")
         }
+
+        # 🟢 修正 1：啟動時載入市場別資訊
+        self.load_market_info()
         self.init_ui()
+
+    def load_market_info(self):
+        """ 讀取 stock_list.csv 以辨識 TWO 股票 """
+        csv_path = Path("data/stock_list.csv")
+        if csv_path.exists():
+            try:
+                # 嘗試多種編碼讀取
+                for enc in ['utf-8', 'utf-8-sig', 'big5']:
+                    try:
+                        df = pd.read_csv(csv_path, dtype=str, encoding=enc)
+                        df.columns = [c.lower().strip() for c in df.columns]
+
+                        # 找對應欄位
+                        code_col = None
+                        if 'stock_id' in df.columns:
+                            code_col = 'stock_id'
+                        elif 'code' in df.columns:
+                            code_col = 'code'
+                        elif 'id' in df.columns:
+                            code_col = 'id'
+
+                        if code_col and 'market' in df.columns:
+                            for _, row in df.iterrows():
+                                sid = str(row[code_col]).strip()
+                                market = str(row['market']).strip().upper()
+                                self.stock_market_map[sid] = market
+                            print(f"✅ [ETF] 成功載入市場資訊: {len(self.stock_market_map)} 筆")
+                            break
+                    except:
+                        continue
+            except Exception as e:
+                print(f"❌ [ETF] 讀取市場資訊失敗: {e}")
+
+    def get_market_suffix(self, stock_id):
+        """ 查詢該股票是 TW 還是 TWO """
+        # 預設 TW
+        return self.stock_market_map.get(str(stock_id), "TW")
 
     def init_ui(self):
         self.setStyleSheet("background-color: #0E0E0E; color: #E0E0E0;")
@@ -106,7 +147,7 @@ class ActiveETFModule(QWidget):
         """)
         self.combo.currentIndexChanged.connect(self.on_combo_change)
 
-        # 🟢 改用 QTableWidget 實現完美對齊
+        # QTableWidget
         self.stock_table = QTableWidget()
         self.stock_table.setColumnCount(3)
         self.stock_table.setHorizontalHeaderLabels(["代號", "名稱", "權重"])
@@ -115,7 +156,6 @@ class ActiveETFModule(QWidget):
         self.stock_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.stock_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
-        # 表格樣式：無格線、黑底
         self.stock_table.setStyleSheet("""
             QTableWidget { 
                 background: #121212; border: 1px solid #333; gridline-color: #222; font-size: 14px; 
@@ -125,11 +165,10 @@ class ActiveETFModule(QWidget):
             QHeaderView::section { background: #1A1A1A; color: #888; border: none; padding: 4px; font-weight: bold; }
         """)
 
-        # 欄位寬度調整
         header = self.stock_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # 代號
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # 名稱自動延伸
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # 權重
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
 
         self.stock_table.cellClicked.connect(self.on_table_clicked)
 
@@ -151,7 +190,6 @@ class ActiveETFModule(QWidget):
         # 圖表 1: 特殊變化 (Bar)
         self.fig_change = Figure(facecolor='#0E0E0E')
         self.canvas_change = FigureCanvas(self.fig_change)
-        # 綁定 Hover
         self.canvas_change.mpl_connect('motion_notify_event', self.on_bar_hover)
 
         # 圖表 2: 趨勢圖 (Line + Thin Curve)
@@ -201,7 +239,6 @@ class ActiveETFModule(QWidget):
         if len(dates) < 1: return
         latest_date = dates[-1]
 
-        # 🟢 更新 Table (Top 10 Highlight)
         latest_data = df[df['date'] == latest_date].sort_values('weight', ascending=False)
 
         self.stock_table.setRowCount(len(latest_data))
@@ -210,17 +247,14 @@ class ActiveETFModule(QWidget):
             name = str(row.name)
             weight = row.weight
 
-            # 建立表格項目
             item_id = QTableWidgetItem(sid)
             item_name = QTableWidgetItem(name)
             item_weight = QTableWidgetItem(f"{weight}%")
 
-            # 對齊
             item_id.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             item_name.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             item_weight.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-            # Top 10 Highlight
             color = QColor("#FFD700") if idx < 10 else QColor("#AAAAAA")
             font = QFont()
             if idx < 10: font.setBold(True)
@@ -230,7 +264,6 @@ class ActiveETFModule(QWidget):
                 item.setFont(font)
                 self.stock_table.setItem(idx, [item_id, item_name, item_weight].index(item), item)
 
-        # 繪製變化圖
         if len(dates) >= 2:
             prev_date = dates[-2]
             prev_data = df[df['date'] == prev_date]
@@ -261,70 +294,82 @@ class ActiveETFModule(QWidget):
                     return None
 
             merged['action_type'] = merged.apply(classify_action, axis=1)
-            filtered_df = merged.dropna(subset=['action_type']).copy()
-            filtered_df = filtered_df.sort_values('pct_change', ascending=True)
 
-            self.plot_changes(filtered_df)
+            major_df = merged.dropna(subset=['action_type'])
+            if len(major_df) < 15:
+                merged['abs_diff'] = merged['share_diff'].abs()
+                active_df = merged[merged['abs_diff'] > 0]
+                top_active = active_df.sort_values('abs_diff', ascending=False).head(15)
+                final_df = pd.concat([major_df, top_active]).drop_duplicates(subset=['stock_id'])
+            else:
+                final_df = major_df
+
+            final_df = final_df.sort_values('pct_change', ascending=True)
+            self.plot_changes(final_df, latest_date)
 
             if not latest_data.empty:
                 first_id = str(latest_data.iloc[0]['stock_id'])
                 first_name = str(latest_data.iloc[0]['name'])
-                self.plot_trend(first_id, first_name)
+                # 🟢 修正：第一筆資料也要判斷市場別
+                market = self.get_market_suffix(first_id)
+                self.plot_trend(first_id, first_name, market)
 
-    def plot_changes(self, df):
+    def plot_changes(self, df, data_date):
         self.fig_change.clear()
+        ax = self.fig_change.add_subplot(111)
+        self.bar_data = df.reset_index(drop=True)
 
-        if df.empty:
-            ax = self.fig_change.add_subplot(111)
-            ax.text(0.5, 0.5, "今日無重大持股異動", ha='center', va='center', color='#555', fontsize=16)
+        if self.bar_data.empty:
+            ax.text(0.5, 0.5, "期間無任何持股變動", ha='center', va='center', color='#555', fontsize=16)
             ax.axis('off')
             self.canvas_change.draw()
             return
 
-        ax = self.fig_change.add_subplot(111)
-        self.bar_data = df.reset_index(drop=True)
         colors = ['#FF3333' if x >= 0 else '#00FF00' for x in self.bar_data['share_diff']]
         y_pos = np.arange(len(self.bar_data))
-
-        # 🟢 畫 Bar (不顯示文字了)
         ax.barh(y_pos, self.bar_data['pct_change'], color=colors, align='center')
-
         ax.set_yticks(y_pos)
         ax.set_yticklabels(self.bar_data['name'], fontsize=11, fontweight='bold', color='#DDD')
         ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=100))
 
-        ax.set_title("🔥 重大持股異動戰報", color='white', fontsize=14, fontweight='bold', loc='left', pad=10)
+        date_str = data_date.strftime('%Y-%m-%d')
+        ax.set_title(f"🔥 持股異動戰報 (資料日期: {date_str})", color='white', fontsize=14, fontweight='bold',
+                     loc='left', pad=10)
         ax.tick_params(colors='#AAA', labelsize=10)
         ax.grid(axis='x', color='#333', linestyle=':')
-
         for spine in ax.spines.values():
             spine.set_visible(False)
-
         self.canvas_change.draw()
 
     def on_table_clicked(self, row, col):
-        # 從表格獲取代號與名稱
         sid = self.stock_table.item(row, 0).text()
         name = self.stock_table.item(row, 1).text()
-        self.plot_trend(sid, name)
-        self.stock_clicked_signal.emit(f"{sid}_TW")
 
-    def on_stock_clicked(self, item):  # 保留相容性
-        pass
+        # 🟢 修正 2：點擊時查表，獲取正確的市場別 (TW/TWO)
+        market = self.get_market_suffix(sid)
 
-    def plot_trend(self, stock_id, stock_name):
+        self.plot_trend(sid, name, market)
+        self.stock_clicked_signal.emit(f"{sid}_{market}")
+
+    def plot_trend(self, stock_id, stock_name, market="TW"):
         if self.current_df is None: return
 
         trend_data = self.current_df[self.current_df['stock_id'] == str(stock_id)].sort_values('date')
 
         price_data = pd.DataFrame()
-        price_path = Path(f"data/cache/tw/{stock_id}_TW.parquet")
+
+        # 🟢 修正 3：組合正確的路徑 (含市場後綴)
+        price_path = Path(f"data/cache/tw/{stock_id}_{market}.parquet")
+
         if price_path.exists():
-            price_df = pd.read_parquet(price_path)
-            price_df.columns = [c.capitalize() for c in price_df.columns]
-            if not trend_data.empty:
-                min_date = trend_data['date'].min()
-                price_data = price_df[price_df.index >= min_date].copy()
+            try:
+                price_df = pd.read_parquet(price_path)
+                price_df.columns = [c.capitalize() for c in price_df.columns]
+                if not trend_data.empty:
+                    min_date = trend_data['date'].min()
+                    price_data = price_df[price_df.index >= min_date].copy()
+            except:
+                pass
 
         self.fig_trend.clear()
         ax1 = self.fig_trend.add_subplot(111)
@@ -332,7 +377,6 @@ class ActiveETFModule(QWidget):
         ax3 = ax1.twinx()
 
         ax3.spines['right'].set_position(('outward', 60))
-
         ax1.set_zorder(10)
         ax2.set_zorder(11)
         ax3.set_zorder(1)
@@ -364,7 +408,8 @@ class ActiveETFModule(QWidget):
             l2, = ax2.plot(price_data.index, price_data['Close'], color='#FFD700', linewidth=1.5, linestyle='--',
                            alpha=0.9, label='股價(右)')
         else:
-            ax2.text(0.5, 0.5, "無本地股價資料", transform=ax2.transAxes, color='#555', ha='center', va='center')
+            ax2.text(0.5, 0.5, f"無本地股價 ({stock_id}_{market})", transform=ax2.transAxes, color='#555', ha='center',
+                     va='center')
 
         ax1.yaxis.set_major_formatter(mtick.PercentFormatter())
         ax1.set_ylabel("持股權重 %", color='#00E5FF')
@@ -398,10 +443,9 @@ class ActiveETFModule(QWidget):
             shares_prev = int(row['shares_prev'])
             shares_now = int(row['shares_now'])
             pct = float(row['pct_change'])
-            action = row['action_type']
+            action = row['action_type'] if row['action_type'] else ""
             color = "#FF3333" if diff >= 0 else "#00FF00"
 
-            # 🟢 修正：增加單位「張」(除以1000)
             shares_prev_k = int(shares_prev / 1000)
             shares_now_k = int(shares_now / 1000)
             diff_k = int(diff / 1000)
@@ -431,7 +475,6 @@ class ActiveETFModule(QWidget):
             pct = (diff / prev_row['shares']) * 100 if prev_row['shares'] > 0 else 0
             color = "#FF3333" if diff >= 0 else "#00FF00"
 
-            # 🟢 修正：增加單位「張」
             diff_k = int(diff / 1000)
             change_text = f" | <span style='color:{color};'>{diff_k:+,}張 ({pct:+.2f}%)</span>"
 

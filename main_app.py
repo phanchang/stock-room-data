@@ -175,37 +175,26 @@ class StockWarRoomV3(QMainWindow):
 
     def load_initial_data(self):
         # 🟢 修正：補齊 StockListModule 所需的所有欄位，避免 KeyError
-        mock_df = pd.DataFrame([
-            {
-                'id': '2330', 'name': '台積電', 'price': 1050,
-                'pct_5': 2.5, 'pct_10': 3.1, 'pct_m': 5.5, 'rev_yoy': 15.2
-            },
-            {
-                'id': '2317', 'name': '鴻海', 'price': 210.5,
-                'pct_5': -1.2, 'pct_10': 0.5, 'pct_m': -2.1, 'rev_yoy': 8.4
-            },
-            {
-                'id': '2454', 'name': '聯發科', 'price': 1200,
-                'pct_5': 0.8, 'pct_10': 1.2, 'pct_m': 3.0, 'rev_yoy': 10.1
-            },
-            {
-                'id': '3008', 'name': '大立光', 'price': 2500,
-                'pct_5': 3.1, 'pct_10': -0.5, 'pct_m': 1.2, 'rev_yoy': -5.3
-            }
-        ])
 
-        self.list_module.load_data(mock_df)
+        # 直接觸發一次列表刷新 (這會去抓真實資料)
+        self.list_module.refresh_table()
 
-        # 預設載入第一檔
-        if not mock_df.empty:
-            # 確保格式為 2330_TW
-            fid = f"{mock_df.iloc[0]['id']}_TW"
-            self.kline_module.load_stock_data(fid)
-            self.inst_module.load_inst_data(fid)
-            self.margin_module.load_margin_data(fid)
-            self.revenue_module.load_revenue_data(fid)
-            self.eps_module.load_eps_data(fid)
-            self.ratio_module.load_ratio_data(fid)
+        # 預設載入清單中的第一檔 (如果有資料的話)
+        # 這裡我們稍微改寫一下，讓它自動去抓 Table 第一列的代號
+        if self.list_module.table.rowCount() > 0:
+            item = self.list_module.table.item(0, 0)
+            if item:
+                code = item.text()
+                market = item.data(Qt.ItemDataRole.UserRole)
+                fid = f"{code}_{market}"
+
+                print(f"🚀 [系統啟動] 預設載入: {fid}")
+                self.kline_module.load_stock_data(fid)
+                self.inst_module.load_inst_data(fid)
+                self.margin_module.load_margin_data(fid)
+                self.revenue_module.load_revenue_data(fid)
+                self.eps_module.load_eps_data(fid)
+                self.ratio_module.load_ratio_data(fid)
 
 
 if __name__ == "__main__":
