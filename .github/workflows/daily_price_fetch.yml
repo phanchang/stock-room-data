@@ -23,20 +23,20 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 🟢 修正：強制加入 K 線快取、指標結果與股票清單
-          # 使用 -f (force) 確保即使被 .gitignore 忽略也能強制加入，確保 Desktop App 下載得到
+          # 1. 保存重要資料 (使用 -f 強制加入，無視 .gitignore)
           git add -f data/indicators/
           git add -f data/cache/tw/
           git add -f data/stock_list.csv
           
-          # 顯示狀態方便除錯
-          git status
-          
-          # 提交 (Commit) - 這樣就不會被視為 unstaged changes 阻擋 pull
+          # 2. 提交 (先存檔，確保資料安全)
           git commit -m "Auto: Update Price, Strategy & Stock List" || { echo "No changes to commit"; exit 0; }
           
-          # 拉取遠端更新 (Rebase)
+          # 3. 🟢 清理戰場：把剩下沒 add 的雜檔清掉，讓狀態變乾淨
+          # 這是為了解決 "unstaged changes" 報錯的關鍵一步
+          git reset --hard
+          
+          # 4. 融合雲端資料 (處理與 fund_sync 的時間差衝突)
           git pull --rebase origin main
           
-          # 推送
+          # 5. 推送
           git push origin main
