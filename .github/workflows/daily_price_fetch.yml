@@ -23,16 +23,20 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 1. 只加入今天下午產出的指標結果
-          git add data/indicators/
+          # 🟢 修正：強制加入 K 線快取、指標結果與股票清單
+          # 使用 -f (force) 確保即使被 .gitignore 忽略也能強制加入，確保 Desktop App 下載得到
+          git add -f data/indicators/
+          git add -f data/cache/tw/
+          git add -f data/stock_list.csv
           
-          # 2. 提交指標。如果沒檔案變動（例如今天休市）就直接結束
-          git commit -m "Auto: Update Daily Strategy Indicators" || { echo "No changes to commit"; exit 0; }
+          # 顯示狀態方便除錯
+          git status
           
-          # 3. 🟢 關鍵：既然清單週日才更新，平日下午產生的任何對 stock_list 或 cache 的變動
-          # 我們通通不要存。reset --hard 會把它們清乾淨，保證下一步 pull 順利。
-          git reset --hard HEAD
+          # 提交 (Commit) - 這樣就不會被視為 unstaged changes 阻擋 pull
+          git commit -m "Auto: Update Price, Strategy & Stock List" || { echo "No changes to commit"; exit 0; }
           
-          # 4. 拉取遠端（包含昨晚的營收或上週日的清單）並推回
+          # 拉取遠端更新 (Rebase)
           git pull --rebase origin main
+          
+          # 推送
           git push origin main
