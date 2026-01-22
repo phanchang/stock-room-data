@@ -32,6 +32,10 @@ class EPSWorker(QThread):
         super().__init__()
         self.stock_id = stock_id
 
+    from dotenv import load_dotenv  # 記得 import
+
+    # 在 run() 裡第一行加入
+    load_dotenv()
     def run(self):
         print(f"🕷️ [EPS] 正在爬取 {self.stock_id} 獲利能力...")
         df = get_profitability(self.stock_id)

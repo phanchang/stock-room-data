@@ -36,6 +36,13 @@ STRATEGY_MAP = {
     # 🟢 [新增] 創新高策略
     "high_30": lambda df: TechnicalStrategies.breakout_n_days_high(df, 30), # 創月新高
     "high_60": lambda df: TechnicalStrategies.breakout_n_days_high(df, 60), # 創季新高
+
+    # [新增] 均線策略
+    "support_ma_55": lambda df: TechnicalStrategies.near_ma_support(df, 55),
+    "support_ma_200": lambda df: TechnicalStrategies.near_ma_support(df, 200),
+
+    # [新增] Vix
+    "vix_green": lambda df: TechnicalStrategies.vix_green(df),
 }
 
 
