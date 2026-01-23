@@ -95,15 +95,28 @@ class EPSModule(QWidget):
         self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
 
     def load_eps_data(self, full_stock_id):
-        # 解析代號 (例如 "2330_TW" -> "2330")
         stock_id = full_stock_id.split('_')[0]
-        self.info_label.setText(f"⏳ 正在更新 {stock_id} 數據...")
 
-        # 啟動背景執行緒
+        # 🔥 修正重點：強制 UI 狀態重置
+        self.info_label.setText(f"⏳ 正在更新 {stock_id} 數據...")
+        self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 12px; color: #YELLOW;")  # 亮黃色提示
+
+        # 1. 清空舊圖表
+        self.fig.clear()
+        self.canvas.draw()
+
+        # 2. 清空舊表格 (這很重要，不然會誤以為沒更新)
+        self.table.setRowCount(0)
+
+        # 3. 停止舊的 Worker (如果還在跑)
+        if hasattr(self, 'worker') and self.worker.isRunning():
+            self.worker.terminate()
+            self.worker.wait()
+
+        # 4. 啟動新任務
         self.worker = EPSWorker(stock_id)
         self.worker.data_loaded.connect(self.process_data)
         self.worker.start()
-
     def process_data(self, df):
         if df.empty:
             self.info_label.setText("⚠️ 查無 EPS 資料")

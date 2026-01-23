@@ -182,6 +182,38 @@ class StockListModule(QWidget):
         self.current_group = group_name
         self.refresh_table()
 
+        # 放在 modules/stock_list_module.py 裡面
+
+    def add_stock_to_group(self, stock_id, group_name):
+        """ 由外部呼叫：將股票加入指定群組 """
+        # 1. 檢查群組是否存在
+        if group_name not in self.watchlists:
+            print(f"⚠️ 群組 {group_name} 不存在")
+            return
+
+        current_list = self.watchlists[group_name]
+
+        # 2. 檢查是否已存在
+        if stock_id in current_list:
+            print(f"⚠️ {stock_id} 已在 {group_name} 中")
+            return
+
+        # 3. 執行加入
+        current_list.insert(0, stock_id)
+
+        # 4. 存檔
+        self.save_watchlists()
+        print(f"✅ 已將 {stock_id} 加入 {group_name}")
+
+        # 5. 如果目前剛好顯示這個群組，就刷新畫面
+        if self.current_group == group_name:
+            self.refresh_table()
+            self.table.selectRow(0)
+
+            # 自動觸發選取訊號 (選填，看你想不想加入後自動切換過去)
+            # market = self.stock_db.get(stock_id, {}).get('market', 'TW')
+            # self.stock_selected.emit(f"{stock_id}_{market}")
+
     def add_stock_from_input(self):
         text = self.input_stock.text().strip()
         if not text: return

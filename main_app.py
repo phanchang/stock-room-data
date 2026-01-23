@@ -190,13 +190,24 @@ class StockWarRoomV3(QMainWindow):
         # self.market_page.stock_clicked_signal.connect(lambda: self.pages.setCurrentIndex(0))
         # 3. 策略頁面連動
         self.strategy_page.stock_clicked_signal.connect(self.on_strategy_stock_clicked)
+        # 串接策略頁面的「加入自選」請求
+        self.strategy_page.request_add_watchlist.connect(self.on_add_watchlist_request)
+
+    def on_add_watchlist_request(self, stock_id, group_name):
+        # 呼叫 StockListModule 的方法
+        # 注意：您需要在 StockListModule 實作 add_stock_by_code(stock_id, group_name)
+        self.list_module.add_stock_to_group(stock_id, group_name)
 
     def on_strategy_stock_clicked(self, stock_id_full):
         """ 策略選股點擊後的行為 """
-        # 1. 載入該股票數據
-        self.kline_module.load_stock_data(stock_id_full)
-        self.inst_module.load_inst_data(stock_id_full)
-        # ... 載入其他模組 ...
+        self.kline_module.load_stock_data(stock_id_full)  # K線
+        self.inst_module.load_inst_data(stock_id_full)  # 三大法人
+
+        # --- 補上這四行 ---
+        self.margin_module.load_margin_data(stock_id_full)  # 資券
+        self.revenue_module.load_revenue_data(stock_id_full)  # 月營收
+        self.eps_module.load_eps_data(stock_id_full)  # EPS
+        self.ratio_module.load_ratio_data(stock_id_full)  # 三率
 
         # 2. 自動切換回「戰情 (Page 0)」頁面查看詳細圖表
         self.side_menu.button_group.button(0).setChecked(True)

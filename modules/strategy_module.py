@@ -15,7 +15,7 @@ from utils.indicator_index import load_indicator_index
 
 class StrategyModule(QWidget):
     stock_clicked_signal = pyqtSignal(str)
-
+    request_add_watchlist = pyqtSignal(str, str)  # <--- 記得要有這行，不然 emit 會報錯
     def __init__(self):
         super().__init__()
         self.indicator_index = {}
@@ -116,6 +116,19 @@ class StrategyModule(QWidget):
         title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 16px; margin-bottom: 10px;")
         c_layout.addWidget(title)
 
+        # 🔥 2. 執行按鈕 (直接移到標題下方)
+        btn_run = QPushButton("⚡ 執行篩選")
+        btn_run.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_run.setFixedHeight(45)  # 稍微加大
+        btn_run.setStyleSheet("""
+                    QPushButton { 
+                        background: #00E5FF; color: #000; font-weight: bold; font-size: 15px; border-radius: 5px; 
+                    }
+                    QPushButton:hover { background: #00FFFF; }
+                    QPushButton:pressed { background: #00CCCC; }
+                """)
+        btn_run.clicked.connect(self.run_screening)
+        c_layout.addWidget(btn_run)
         # Logic Group
         logic_group = QGroupBox("篩選邏輯")
         logic_group.setStyleSheet(
@@ -169,18 +182,6 @@ class StrategyModule(QWidget):
         scroll.setWidget(scroll_content)
         c_layout.addWidget(scroll)
 
-        # Run Button
-        btn_run = QPushButton("執行篩選")
-        btn_run.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_run.setFixedHeight(40)
-        btn_run.setStyleSheet("""
-            QPushButton { background: #00E5FF; color: #000; font-weight: bold; font-size: 14px; border-radius: 5px; }
-            QPushButton:hover { background: #00FFFF; }
-            QPushButton:pressed { background: #00CCCC; }
-        """)
-        btn_run.clicked.connect(self.run_screening)
-        c_layout.addWidget(btn_run)
-
         # --- 右側：結果表格 ---
         result_panel = QWidget()
         result_panel.setStyleSheet("background: #000;")
@@ -209,13 +210,21 @@ class StrategyModule(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
 
+        # 在 setup_table 方法中修改 styleSheet
         self.table.setStyleSheet("""
-            QTableWidget { background: #000; border: none; gridline-color: #222; color: #dcdcdc; font-size: 14px; }
-            QTableWidget::item { padding: 4px; border-bottom: 1px solid #111; }
-            QTableWidget::item:selected { background: #333; color: #FFF; }
-            QTableWidget::item:hover { background: #1A1A1A; }
-            QHeaderView::section { background: #111; color: #BBB; padding: 4px; border: none; font-weight: bold; border-bottom: 2px solid #333; }
-        """)
+                    QTableWidget { 
+                        background: #000; 
+                        border: none; 
+                        gridline-color: #222; 
+                        color: #dcdcdc; 
+                        font-size: 14px; 
+                        selection-background-color: #333; /* 選中時的背景 */
+                        alternate-background-color: #151515; /* 🔥 偶數行的背景色 (深灰，不要全白) */
+                    }
+                    QTableWidget::item { padding: 4px; border-bottom: 1px solid #111; }
+                    QHeaderView::section { background: #111; color: #BBB; padding: 4px; border: none; font-weight: bold; }
+                """)
+        self.table.setAlternatingRowColors(True)  # 確保這行有開
 
         header = self.table.horizontalHeader()
         for i, cfg in enumerate(self.columns_config):
@@ -271,17 +280,31 @@ class StrategyModule(QWidget):
         self.table.setRowCount(0)
         self.table.setSortingEnabled(False)
 
+        # 市場代號轉譯表
+        market_map = {
+            "上市": "TW", "TWSE": "TW", "TSE": "TW", "TW": "TW",
+            "上櫃": "TWO", "TPEX": "TWO", "OTC": "TWO", "TWO": "TWO"
+        }
+
         for row_idx, stock_id in enumerate(stock_ids):
             self.table.insertRow(row_idx)
 
-            # 1. 取得基本資料
-            market = "TW"
+            # 1. 取得基本資料 (修正 row 未定義的問題)
+            market = "TW"  # 預設值
             name = stock_id
-            if not self.stock_list_df.empty and stock_id in self.stock_list_df.index:
-                name = self.stock_list_df.loc[stock_id].get('name', stock_id)
-                market = self.stock_list_df.loc[stock_id].get('market', 'TW').upper()
 
-            # 2. 讀取 K 線計算價格與漲幅
+            # 🔥 修正重點：先檢查並取得 row 物件
+            if not self.stock_list_df.empty and stock_id in self.stock_list_df.index:
+                row = self.stock_list_df.loc[stock_id]  # 定義 row
+
+                # 取得名稱
+                name = row.get('name', stock_id)
+
+                # 取得市場並標準化
+                raw_market = str(row.get('market', 'TW')).strip().upper()
+                market = market_map.get(raw_market, "TW")
+
+            # 2. 讀取 K 線 (維持原樣)
             price = 0.0
             pct_5d = 0.0
             pct_3m = 0.0
@@ -307,49 +330,41 @@ class StrategyModule(QWidget):
                 except:
                     pass
 
-            # 3. 查表取得外部資料
+            # 3. 查表取得外部資料 (維持原樣)
             rev_info = self.rev_data.get(stock_id, {})
             rev_mom = rev_info.get('mom', '-')
             rev_yoy = rev_info.get('yoy', '-')
             holder_w = self.chip_data.get(stock_id, '-')
-            eps_acc = "-"  # EPS 目前暫無彙總表
+            eps_acc = "-"
 
-            # 4. 填入表格
-            # ID
+            # 4. 填入表格 (維持原樣)
             item_id = QTableWidgetItem(stock_id)
-            item_id.setData(Qt.ItemDataRole.UserRole, f"{stock_id}_{market}")
+            item_id.setData(Qt.ItemDataRole.UserRole, f"{stock_id}_{market}")  # 這裡 market 正確了，點擊後 EPS 才會對
             self.table.setItem(row_idx, 0, item_id)
 
-            # Name
             self.table.setItem(row_idx, 1, QTableWidgetItem(name))
 
-            # Price
             it_price = QTableWidgetItem(f"{price:.1f}")
             it_price.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.table.setItem(row_idx, 2, it_price)
 
-            # Pct Columns (5d, 3m, 6m)
             for c_idx, val in enumerate([pct_5d, pct_3m, pct_6m]):
                 txt = f"{val:+.1f}%" if val != 0 else "-"
                 it = QTableWidgetItem(txt)
                 self._colorize_item(it, val)
                 self.table.setItem(row_idx, 3 + c_idx, it)
 
-            # Revenue (MoM, YoY)
             for c_idx, val_str in enumerate([rev_mom, rev_yoy]):
                 txt = str(val_str) + "%" if val_str != '-' else '-'
                 it = QTableWidgetItem(txt)
                 self._colorize_text_val(it, val_str)
                 self.table.setItem(row_idx, 6 + c_idx, it)
 
-            # Chips (Holder)
-            # 法人買賣張數，不加 %
             txt_holder = str(holder_w) if holder_w != '-' else '-'
             it_holder = QTableWidgetItem(txt_holder)
             self._colorize_text_val(it_holder, holder_w)
             self.table.setItem(row_idx, 8, it_holder)
 
-            # EPS
             it_eps = QTableWidgetItem(eps_acc)
             it_eps.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row_idx, 9, it_eps)
@@ -387,15 +402,64 @@ class StrategyModule(QWidget):
         full_id = item.data(Qt.ItemDataRole.UserRole)
         self.stock_clicked_signal.emit(full_id)
 
+        # 記得在 __init__ 或 init_data 裡先讀取 watchlist.json 取得群組名稱
+        # 或者簡單一點，直接寫死預設群組，或透過 Signal 請求主程式提供群組列表
+        # 這裡示範：發送 Signal 給 MainApp，讓 MainApp 去處理「加入」的動作
+
+     # 1. 新增 Signal
+    request_add_watchlist = pyqtSignal(str, str)  # (stock_id, group_name)
+
     def open_context_menu(self, pos):
+        # 🔥 設定選單樣式 (修正黑底黑字問題)
+        menu_style = """
+            QMenu {
+                background-color: #222; /* 深灰底 */
+                border: 1px solid #444;
+                color: #FFF; /* 白字 */
+            }
+            QMenu::item {
+                padding: 6px 24px;
+                background-color: transparent;
+            }
+            QMenu::item:selected {
+                background-color: #00E5FF; /* 選中變亮青色 */
+                color: #000; /* 選中變黑字 */
+            }
+        """
+
         menu = QMenu()
-        add_action = QAction("➕ 加入自選清單", self)
-        add_action.triggered.connect(self.add_to_watchlist)
-        menu.addAction(add_action)
+        menu.setStyleSheet(menu_style)  # 套用樣式
+
+        # 建立子選單
+        add_menu = QMenu("➕ 加入自選清單", self)
+        add_menu.setStyleSheet(menu_style)  # 子選單也要套用樣式
+
+        # 讀取群組清單
+        groups = ["我的持股", "觀察名單"]
+        try:
+            with open("data/watchlist.json", "r", encoding='utf-8') as f:
+                data = json.load(f)
+                groups = list(data.keys())
+        except:
+            pass
+
+        for group in groups:
+            action = QAction(group, self)
+            # 使用 lambda 綁定參數
+            action.triggered.connect(lambda checked, g=group: self.add_to_watchlist(g))
+            add_menu.addAction(action)
+
+        menu.addMenu(add_menu)
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
-    def add_to_watchlist(self):
+    def add_to_watchlist(self, group_name):
         rows = self.table.selectionModel().selectedRows()
-        # 這裡需要傳遞給 Main App 處理，目前先 print
+        count = 0
         for r in rows:
-            print(f"Add: {self.table.item(r.row(), 0).text()}")
+            stock_id = self.table.item(r.row(), 0).text()
+            # 發送訊號給 MainApp，由 MainApp 去呼叫 stock_list_module 的 add_stock
+            self.request_add_watchlist.emit(stock_id, group_name)
+            count += 1
+
+        # 簡單回饋
+        # QMessageBox.information(self, "完成", f"已將 {count} 檔股票加入【{group_name}】")
