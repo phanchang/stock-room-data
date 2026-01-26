@@ -42,7 +42,8 @@ STRATEGY_MAP = {
     "support_ma_200": lambda df: TechnicalStrategies.near_ma_support(df, 200),
 
     # [新增] Vix
-    "vix_green": lambda df: TechnicalStrategies.vix_green(df),
+    # 這裡的 key 對應 index.json 的目錄名
+    "vix_reversal": lambda df: TechnicalStrategies.vix_reversal(df),
 }
 
 

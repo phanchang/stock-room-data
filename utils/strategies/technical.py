@@ -1,7 +1,7 @@
 # utils/strategies/technical.py
 import pandas as pd
 import numpy as np
-
+from utils.indicators import Indicators # 引用剛剛寫好的計算庫
 
 class TechnicalStrategies:
     """
@@ -173,25 +173,28 @@ class TechnicalStrategies:
         return is_breakout
 
 
-@staticmethod
-def vix_reversal(df: pd.DataFrame, length: int = 22) -> pd.Series:
-    """
-    策略：Vix 恐慌反轉 (綠柱轉灰/消失)
-    意義：股價在底部爆量下殺後，開始止穩。
-    """
-    if len(df) < length: return pd.Series(False, index=df.index)
+    @staticmethod
+    def vix_reversal(df: pd.DataFrame, period: int = 22) -> pd.Series:
+        # 1. 計算 WVF (核心公式)
+        wvf = Indicators.cm_williams_vix_fix(df, period)
 
-    # 計算 Williams Vix Fix
-    period_max = df['Close'].rolling(window=length).max()
-    wvf = ((period_max - df['Low']) / period_max) * 100
+        # 2. 計算 Bollinger Band 條件 (20日, 2倍標準差)
+        wvf_ma = wvf.rolling(20).mean()
+        wvf_std = wvf.rolling(20).std()
+        upper_band = wvf_ma + (2.0 * wvf_std)
 
-    # 定義高標 (恐慌區)
-    wvf_ma = wvf.rolling(20).mean()
-    wvf_std = wvf.rolling(20).std()
-    upper_band = wvf_ma + (2.0 * wvf_std)
+        # 3. 🔥 [補上] 計算 Range High 條件 (參考 Pine Script: lb=50, ph=0.85)
+        # 意思：過去 50 天內 WVF 最高值的 85%
+        range_high = wvf.rolling(50).max() * 0.85
 
-    # 條件：昨天在布林通道上緣(恐慌)，今天掉下來(反轉)
-    is_panic_yesterday = wvf.shift(1) >= upper_band.shift(1)
-    is_calm_today = wvf < upper_band
+        # 4. 定義「恐慌狀態」(綠柱)
+        # 只要滿足 BB 上緣 OR 滿足 Range High，都算是綠柱
+        is_green = (wvf >= upper_band) | (wvf >= range_high)
 
-    return is_panic_yesterday & is_calm_today
+        # 5. 抓反轉訊號 (昨天綠 -> 今天灰)
+        # shift(1) 代表昨天
+        signal = (is_green.shift(1)) & (~is_green)
+
+        return signal
+
+

@@ -173,7 +173,7 @@ class StrategyModule(QWidget):
 
             if key not in self.indicator_index:
                 chk.setText(f"{text} (無資料)")
-                chk.setEnabled(False)
+                #chk.setEnabled(False)
 
             self.checkboxes[key] = chk
             self.checks_layout.addWidget(chk)
