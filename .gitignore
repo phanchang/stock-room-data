@@ -20,3 +20,5 @@ data/*
 
 # 排除重型數據 (股價快取)
 data/cache/tw/
+
+scripts/verify_fundamentals.py
