@@ -10,7 +10,7 @@ import plotly.graph_objs as go
 import dash
 from dash import Dash, html, dcc, Input, Output, State, dash_table
 from utils.crawler_fa import get_fa_ren
-from utils import get_monthly_revenue
+from utils.crawler_revenue import get_monthly_revenue
 from utils.crawler_profitability import get_profitability
 from utils.crawler_margin_trading import get_margin_trading
 # 1️⃣ 在檔案開頭的 import 區塊新增：

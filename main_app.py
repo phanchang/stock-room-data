@@ -25,7 +25,6 @@ from modules.active_etf_module import ActiveETFModule
 from modules.strategy_module import StrategyModule
 
 
-
 class SideMenu(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -68,7 +67,6 @@ class StockWarRoomV3(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("StockWarRoom V3 - 戰情矩陣")
-        # 🟢 設定一個較大的初始解析度，確保 2x2 矩陣有空間
         self.resize(1600, 950)
         self.setStyleSheet("background-color: #000000;")
 
@@ -77,31 +75,26 @@ class StockWarRoomV3(QMainWindow):
         self.load_initial_data()
 
     def init_ui(self):
-        # 設定中央區塊
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        # 1. 整個視窗的主要佈局 (水平排列：左邊是選單，右邊是內容頁)
         main_layout = QHBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # --- 2. 加入側邊選單 (關鍵：要放在 Pages 之前) ---
+        # --- 側邊選單 ---
         self.side_menu = SideMenu()
         main_layout.addWidget(self.side_menu)
 
-        # --- 3. 建立右側堆疊頁面 ---
+        # --- 右側堆疊頁面 ---
         self.pages = QStackedWidget()
 
-        # ==========================================
-        # Page 0: 戰情室 (原本的 2x2 矩陣佈局)
-        # ==========================================
+        # Page 0: 戰情室
         self.warroom_page = QWidget()
         warroom_layout = QGridLayout(self.warroom_page)
         warroom_layout.setContentsMargins(4, 4, 4, 4)
         warroom_layout.setSpacing(4)
 
-        # 實例化各個模組
         self.list_module = StockListModule()
         self.kline_module = KLineModule()
         self.inst_module = InstitutionalModule()
@@ -110,7 +103,6 @@ class StockWarRoomV3(QMainWindow):
         self.eps_module = EPSModule()
         self.ratio_module = RatioModule()
 
-        # 建立 Tab 分頁 (左下 & 右下)
         self.chips_tabs = self._create_tab_widget()
         self.chips_tabs.addTab(self.inst_module, "三大法人")
         self.chips_tabs.addTab(self.margin_module, "資券變化")
@@ -120,37 +112,29 @@ class StockWarRoomV3(QMainWindow):
         self.fund_tabs.addTab(self.eps_module, "EPS")
         self.fund_tabs.addTab(self.ratio_module, "三率")
 
-        # 放入 Grid (位置配置)
-        warroom_layout.addWidget(self.list_module, 0, 0)  # 左上
-        warroom_layout.addWidget(self.kline_module, 0, 1)  # 右上
-        warroom_layout.addWidget(self.chips_tabs, 1, 0)  # 左下
-        warroom_layout.addWidget(self.fund_tabs, 1, 1)  # 右下
+        warroom_layout.addWidget(self.list_module, 0, 0)
+        warroom_layout.addWidget(self.kline_module, 0, 1)
+        warroom_layout.addWidget(self.chips_tabs, 1, 0)
+        warroom_layout.addWidget(self.fund_tabs, 1, 1)
 
-        # 設定比例 (左35% 右65% | 上45% 下55%)
         warroom_layout.setColumnStretch(0, 35)
         warroom_layout.setColumnStretch(1, 65)
         warroom_layout.setRowStretch(0, 45)
         warroom_layout.setRowStretch(1, 55)
 
-        # 將戰情室頁面加入 Stack
         self.pages.addWidget(self.warroom_page)
 
-        # ==========================================
-        # Page 1: 選股策略 (本次新增)
-        # ==========================================
+        # Page 1: 選股策略
         self.strategy_page = StrategyModule()
         self.pages.addWidget(self.strategy_page)
 
-        # ==========================================
-        # Page 2: 市場焦點 (ETF)
-        # ==========================================
+        # Page 2: 市場焦點
         self.market_page = ActiveETFModule()
         self.pages.addWidget(self.market_page)
 
-        # --- 4. 將堆疊頁面加入主佈局 ---
         main_layout.addWidget(self.pages)
+
     def _create_tab_widget(self):
-        """ 統一的 Tab 樣式工廠方法 """
         tabs = QTabWidget()
         tabs.setStyleSheet("""
             QTabWidget::pane { border: 1px solid #333; background: #000; }
@@ -160,67 +144,72 @@ class StockWarRoomV3(QMainWindow):
             }
             QTabBar::tab:selected { 
                 background: #1A1A1A; color: #00E5FF; 
-                border-top: 2px solid #00E5FF; /* 上方亮條 */
+                border-top: 2px solid #00E5FF;
             }
             QTabBar::tab:hover { color: #FFF; }
         """)
         return tabs
 
     def connect_signals(self):
+        # 頁面切換
         self.side_menu.button_group.idClicked.connect(self.pages.setCurrentIndex)
 
-        # 1. 股票清單 (左上) 連動其他模組
-        self.list_module.stock_selected.connect(self.kline_module.load_stock_data)
-        self.list_module.stock_selected.connect(self.inst_module.load_inst_data)
-        self.list_module.stock_selected.connect(self.margin_module.load_margin_data)
-        self.list_module.stock_selected.connect(self.revenue_module.load_revenue_data)
-        self.list_module.stock_selected.connect(self.eps_module.load_eps_data)
-        self.list_module.stock_selected.connect(self.ratio_module.load_ratio_data)
+        # 🔥 [修改] 統一使用 on_stock_changed 來處理所有選股連動
+        # 這樣可以在這裡統一查詢中文名稱，再傳給 KLineModule
+        self.list_module.stock_selected.connect(self.on_stock_changed)
 
-        # 🟢 2. 新增：市場焦點 (ETF) 連動其他模組
-        # 當在 ETF 頁面點擊股票時，自動更新戰情室的數據
-        self.market_page.stock_clicked_signal.connect(self.kline_module.load_stock_data)
-        self.market_page.stock_clicked_signal.connect(self.inst_module.load_inst_data)
-        self.market_page.stock_clicked_signal.connect(self.margin_module.load_margin_data)
-        self.market_page.stock_clicked_signal.connect(self.revenue_module.load_revenue_data)
-        self.market_page.stock_clicked_signal.connect(self.eps_module.load_eps_data)
-        self.market_page.stock_clicked_signal.connect(self.ratio_module.load_ratio_data)
+        # 市場焦點連動
+        self.market_page.stock_clicked_signal.connect(self.on_stock_changed)
 
-        # 並且自動切回戰情室分頁 (Page 0)，讓使用者看到詳細數據 (可選)
-        # self.market_page.stock_clicked_signal.connect(lambda: self.pages.setCurrentIndex(0))
-        # 3. 策略頁面連動
+        # 策略頁面連動
         self.strategy_page.stock_clicked_signal.connect(self.on_strategy_stock_clicked)
-        # 串接策略頁面的「加入自選」請求
         self.strategy_page.request_add_watchlist.connect(self.on_add_watchlist_request)
 
-    def on_add_watchlist_request(self, stock_id, group_name):
-        # 呼叫 StockListModule 的方法
-        # 注意：您需要在 StockListModule 實作 add_stock_by_code(stock_id, group_name)
-        self.list_module.add_stock_to_group(stock_id, group_name)
+    def get_stock_name(self, full_stock_id):
+        """ 🔥 [新增] 輔助函式：從 StockListModule 的 DataFrame 查中文名稱 """
+        try:
+            stock_id = full_stock_id.split('_')[0]
+            # 確保 list_module 已經載入過資料
+            if hasattr(self.list_module, 'stock_list_df') and not self.list_module.stock_list_df.empty:
+                df = self.list_module.stock_list_df
+                if stock_id in df.index:
+                    return df.loc[stock_id, 'name']
+        except Exception:
+            pass
+        return ""
+
+    def on_stock_changed(self, full_stock_id):
+        """ 🔥 [新增] 統一處理選股邏輯 """
+        # 1. 取得股票名稱
+        stock_name = self.get_stock_name(full_stock_id)
+
+        # 2. 通知 KLine (傳入 ID 和 Name)
+        self.kline_module.load_stock_data(full_stock_id, stock_name)
+
+        # 3. 通知其他模組 (只需 ID)
+        self.inst_module.load_inst_data(full_stock_id)
+        self.margin_module.load_margin_data(full_stock_id)
+        self.revenue_module.load_revenue_data(full_stock_id)
+        self.eps_module.load_eps_data(full_stock_id)
+        self.ratio_module.load_ratio_data(full_stock_id)
 
     def on_strategy_stock_clicked(self, stock_id_full):
         """ 策略選股點擊後的行為 """
-        self.kline_module.load_stock_data(stock_id_full)  # K線
-        self.inst_module.load_inst_data(stock_id_full)  # 三大法人
+        # 直接呼叫統一介面，保持行為一致
+        self.on_stock_changed(stock_id_full)
 
-        # --- 補上這四行 ---
-        self.margin_module.load_margin_data(stock_id_full)  # 資券
-        self.revenue_module.load_revenue_data(stock_id_full)  # 月營收
-        self.eps_module.load_eps_data(stock_id_full)  # EPS
-        self.ratio_module.load_ratio_data(stock_id_full)  # 三率
-
-        # 2. 自動切換回「戰情 (Page 0)」頁面查看詳細圖表
+        # 自動切換回「戰情 (Page 0)」
         self.side_menu.button_group.button(0).setChecked(True)
         self.pages.setCurrentIndex(0)
 
-    def load_initial_data(self):
-        # 🟢 修正：補齊 StockListModule 所需的所有欄位，避免 KeyError
+    def on_add_watchlist_request(self, stock_id, group_name):
+        self.list_module.add_stock_to_group(stock_id, group_name)
 
-        # 直接觸發一次列表刷新 (這會去抓真實資料)
+    def load_initial_data(self):
+        # 觸發列表刷新
         self.list_module.refresh_table()
 
-        # 預設載入清單中的第一檔 (如果有資料的話)
-        # 這裡我們稍微改寫一下，讓它自動去抓 Table 第一列的代號
+        # 預設載入清單中的第一檔
         if self.list_module.table.rowCount() > 0:
             item = self.list_module.table.item(0, 0)
             if item:
@@ -228,8 +217,15 @@ class StockWarRoomV3(QMainWindow):
                 market = item.data(Qt.ItemDataRole.UserRole)
                 fid = f"{code}_{market}"
 
-                print(f"🚀 [系統啟動] 預設載入: {fid}")
-                self.kline_module.load_stock_data(fid)
+                # 取得名稱 (從列表的第二欄 '名稱' 抓取最準)
+                name_item = self.list_module.table.item(0, 1)
+                name = name_item.text() if name_item else ""
+
+                print(f"🚀 [系統啟動] 預設載入: {fid} {name}")
+
+                # 🔥 [修改] 呼叫統一介面 (其實可以直接 call on_stock_changed，但為了明確傳入 name，手動 call 也行)
+                self.kline_module.load_stock_data(fid, name)
+
                 self.inst_module.load_inst_data(fid)
                 self.margin_module.load_margin_data(fid)
                 self.revenue_module.load_revenue_data(fid)
