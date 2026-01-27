@@ -1,0 +1,715 @@
+2026-01-19 17:30:58,510 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-19 17:32:22,869 - selenium.webdriver.common.selenium_manager - WARNING - Exception managing chrome: error sending request for url (https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json)
+2026-01-19 17:32:22,869 - selenium.webdriver.common.selenium_manager - WARNING - The chromedriver version (142.0.7444.162) detected in PATH at C:\Users\andychang\Desktop\每日選股\chromedriver-win64\chromedriver.exe might not be compatible with the detected chrome version (143.0.7499.170); currently, chromedriver  is recommended for chrome 143.*, so it is advised to delete the driver in PATH and retry
+2026-01-19 17:32:22,871 - selenium.webdriver.common.selenium_manager - WARNING - Error sending stats to Plausible: error sending request for url (https://plausible.io/api/event)
+2026-01-19 17:33:31,103 - GoodinfoRevenueHighCrawler - WARNING - 嘗試失敗: Message: timeout: Timed out receiving message from renderer: 60.000
+  (Session info: chrome=143.0.7499.170)
+Stacktrace:
+Symbols not available. Dumping unresolved backtrace:
+	0x7ff6404aa235
+	0x7ff640202650
+	0x7ff63ff916dd
+	0x7ff63ff7e8ed
+	0x7ff63ff7e5db
+	0x7ff63ff7c145
+	0x7ff63ff7cbcb
+	0x7ff63ff8bc2e
+	0x7ff63ffa245a
+	0x7ff63ffa96ba
+	0x7ff63ff7d37e
+	0x7ff63ffa2184
+	0x7ff64003be26
+	0x7ff63ffdb0ed
+	0x7ff63ffdbf63
+	0x7ff6404d5d60
+	0x7ff6404cfe8a
+	0x7ff6404f1005
+	0x7ff64021d73e
+	0x7ff640224e3f
+	0x7ff64020b7e4
+	0x7ff64020b99f
+	0x7ff6401f1908
+	0x7ff866e57374
+	0x7ff86705cc91
+
+2026-01-19 17:33:38,312 - GoodinfoRevenueHighCrawler - INFO - 第 2 次嘗試連線...
+2026-01-19 17:35:02,578 - selenium.webdriver.common.selenium_manager - WARNING - Exception managing chrome: error sending request for url (https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json)
+2026-01-19 17:35:02,578 - selenium.webdriver.common.selenium_manager - WARNING - The chromedriver version (142.0.7444.162) detected in PATH at C:\Users\andychang\Desktop\每日選股\chromedriver-win64\chromedriver.exe might not be compatible with the detected chrome version (143.0.7499.170); currently, chromedriver  is recommended for chrome 143.*, so it is advised to delete the driver in PATH and retry
+2026-01-19 17:36:21,608 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-19 17:37:13,326 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-19 17:37:13,326 - GoodinfoRevenueHighCrawler - WARNING - 嘗試失敗: 'GoodinfoRevenueHighCrawler' object has no attribute '_setup_driver'
+2026-01-19 17:37:18,328 - GoodinfoRevenueHighCrawler - INFO - 第 2 次嘗試連線...
+2026-01-19 17:37:18,328 - GoodinfoRevenueHighCrawler - WARNING - 嘗試失敗: 'GoodinfoRevenueHighCrawler' object has no attribute '_setup_driver'
+2026-01-19 17:37:23,329 - GoodinfoRevenueHighCrawler - INFO - 第 3 次嘗試連線...
+2026-01-19 17:37:23,329 - GoodinfoRevenueHighCrawler - WARNING - 嘗試失敗: 'GoodinfoRevenueHighCrawler' object has no attribute '_setup_driver'
+2026-01-19 17:40:42,170 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-19 17:40:42,171 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome 使用 Proxy: 10.160.3.88:8080
+2026-01-19 17:40:43,595 - urllib3.poolmanager - INFO - Redirecting http://localhost:2516/session -> http://10.12.5.113
+2026-01-19 17:40:43,742 - GoodinfoRevenueHighCrawler - WARNING - 指定 Driver 啟動失敗 (Message: <HTML><HEAD>
+<TITLE>Access Denied</TITLE>
+</HEAD>
+<BODY>
+<FONT face="Helvetica">
+<big><strong></strong></big><BR>
+</FONT>
+<blockquote>
+<TABLE border=0 cellPadding=1 width="80%">
+<TR><TD>
+<FONT face="Helvetica">
+<big>Access Denied (policy_denied)</big>
+<BR>
+<BR>
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+Your system policy has denied access to the requested URL.
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica" SIZE=2>
+<BR>
+For assistance, contact your network support team.
+</FONT>
+</TD></TR>
+</TABLE>
+</blockquote>
+</FONT>
+</BODY></HTML>
+)，嘗試自動尋找...
+2026-01-19 17:40:44,670 - selenium.webdriver.common.selenium_manager - WARNING - The chromedriver version (142.0.7444.162) detected in PATH at C:\Users\andychang\Desktop\每日選股\chromedriver-win64\chromedriver.exe might not be compatible with the detected chrome version (143.0.7499.170); currently, chromedriver 143.0.7499.192 is recommended for chrome 143.*, so it is advised to delete the driver in PATH and retry
+2026-01-19 17:40:45,332 - urllib3.poolmanager - INFO - Redirecting http://localhost:2524/session -> http://10.12.5.113
+2026-01-19 17:40:45,479 - GoodinfoRevenueHighCrawler - WARNING - 嘗試失敗: Message: <HTML><HEAD>
+<TITLE>Access Denied</TITLE>
+</HEAD>
+<BODY>
+<FONT face="Helvetica">
+<big><strong></strong></big><BR>
+</FONT>
+<blockquote>
+<TABLE border=0 cellPadding=1 width="80%">
+<TR><TD>
+<FONT face="Helvetica">
+<big>Access Denied (policy_denied)</big>
+<BR>
+<BR>
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+Your system policy has denied access to the requested URL.
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica" SIZE=2>
+<BR>
+For assistance, contact your network support team.
+</FONT>
+</TD></TR>
+</TABLE>
+</blockquote>
+</FONT>
+</BODY></HTML>
+
+2026-01-19 17:40:50,480 - GoodinfoRevenueHighCrawler - INFO - 第 2 次嘗試連線...
+2026-01-19 17:40:50,481 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome 使用 Proxy: 10.160.3.88:8080
+2026-01-19 17:40:51,144 - urllib3.poolmanager - INFO - Redirecting http://localhost:2533/session -> http://10.12.5.113
+2026-01-19 17:40:51,278 - GoodinfoRevenueHighCrawler - WARNING - 指定 Driver 啟動失敗 (Message: <HTML><HEAD>
+<TITLE>Access Denied</TITLE>
+</HEAD>
+<BODY>
+<FONT face="Helvetica">
+<big><strong></strong></big><BR>
+</FONT>
+<blockquote>
+<TABLE border=0 cellPadding=1 width="80%">
+<TR><TD>
+<FONT face="Helvetica">
+<big>Access Denied (policy_denied)</big>
+<BR>
+<BR>
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+Your system policy has denied access to the requested URL.
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica" SIZE=2>
+<BR>
+For assistance, contact your network support team.
+</FONT>
+</TD></TR>
+</TABLE>
+</blockquote>
+</FONT>
+</BODY></HTML>
+)，嘗試自動尋找...
+2026-01-19 17:40:51,371 - selenium.webdriver.common.selenium_manager - WARNING - The chromedriver version (142.0.7444.162) detected in PATH at C:\Users\andychang\Desktop\每日選股\chromedriver-win64\chromedriver.exe might not be compatible with the detected chrome version (143.0.7499.170); currently, chromedriver 143.0.7499.192 is recommended for chrome 143.*, so it is advised to delete the driver in PATH and retry
+2026-01-19 17:40:52,024 - urllib3.poolmanager - INFO - Redirecting http://localhost:2540/session -> http://10.12.5.113
+2026-01-19 17:40:52,174 - GoodinfoRevenueHighCrawler - WARNING - 嘗試失敗: Message: <HTML><HEAD>
+<TITLE>Access Denied</TITLE>
+</HEAD>
+<BODY>
+<FONT face="Helvetica">
+<big><strong></strong></big><BR>
+</FONT>
+<blockquote>
+<TABLE border=0 cellPadding=1 width="80%">
+<TR><TD>
+<FONT face="Helvetica">
+<big>Access Denied (policy_denied)</big>
+<BR>
+<BR>
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+Your system policy has denied access to the requested URL.
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica" SIZE=2>
+<BR>
+For assistance, contact your network support team.
+</FONT>
+</TD></TR>
+</TABLE>
+</blockquote>
+</FONT>
+</BODY></HTML>
+
+2026-01-19 17:40:57,175 - GoodinfoRevenueHighCrawler - INFO - 第 3 次嘗試連線...
+2026-01-19 17:40:57,175 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome 使用 Proxy: 10.160.3.88:8080
+2026-01-19 17:40:57,826 - urllib3.poolmanager - INFO - Redirecting http://localhost:2548/session -> http://10.12.5.113
+2026-01-19 17:40:57,968 - GoodinfoRevenueHighCrawler - WARNING - 指定 Driver 啟動失敗 (Message: <HTML><HEAD>
+<TITLE>Access Denied</TITLE>
+</HEAD>
+<BODY>
+<FONT face="Helvetica">
+<big><strong></strong></big><BR>
+</FONT>
+<blockquote>
+<TABLE border=0 cellPadding=1 width="80%">
+<TR><TD>
+<FONT face="Helvetica">
+<big>Access Denied (policy_denied)</big>
+<BR>
+<BR>
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+Your system policy has denied access to the requested URL.
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica" SIZE=2>
+<BR>
+For assistance, contact your network support team.
+</FONT>
+</TD></TR>
+</TABLE>
+</blockquote>
+</FONT>
+</BODY></HTML>
+)，嘗試自動尋找...
+2026-01-19 17:40:58,053 - selenium.webdriver.common.selenium_manager - WARNING - The chromedriver version (142.0.7444.162) detected in PATH at C:\Users\andychang\Desktop\每日選股\chromedriver-win64\chromedriver.exe might not be compatible with the detected chrome version (143.0.7499.170); currently, chromedriver 143.0.7499.192 is recommended for chrome 143.*, so it is advised to delete the driver in PATH and retry
+2026-01-19 17:40:58,564 - urllib3.poolmanager - INFO - Redirecting http://localhost:2554/session -> http://10.12.5.113
+2026-01-19 17:40:58,704 - GoodinfoRevenueHighCrawler - WARNING - 嘗試失敗: Message: <HTML><HEAD>
+<TITLE>Access Denied</TITLE>
+</HEAD>
+<BODY>
+<FONT face="Helvetica">
+<big><strong></strong></big><BR>
+</FONT>
+<blockquote>
+<TABLE border=0 cellPadding=1 width="80%">
+<TR><TD>
+<FONT face="Helvetica">
+<big>Access Denied (policy_denied)</big>
+<BR>
+<BR>
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+Your system policy has denied access to the requested URL.
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica" SIZE=2>
+<BR>
+For assistance, contact your network support team.
+</FONT>
+</TD></TR>
+</TABLE>
+</blockquote>
+</FONT>
+</BODY></HTML>
+
+2026-01-19 17:41:41,301 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-19 17:41:41,301 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome 使用 Proxy: 10.160.3.88:8080
+2026-01-19 17:41:41,945 - urllib3.poolmanager - INFO - Redirecting http://localhost:2583/session -> http://10.12.5.113
+2026-01-19 17:41:42,094 - GoodinfoRevenueHighCrawler - WARNING - 指定 Driver 啟動失敗 (Message: <HTML><HEAD>
+<TITLE>Access Denied</TITLE>
+</HEAD>
+<BODY>
+<FONT face="Helvetica">
+<big><strong></strong></big><BR>
+</FONT>
+<blockquote>
+<TABLE border=0 cellPadding=1 width="80%">
+<TR><TD>
+<FONT face="Helvetica">
+<big>Access Denied (policy_denied)</big>
+<BR>
+<BR>
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+Your system policy has denied access to the requested URL.
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica" SIZE=2>
+<BR>
+For assistance, contact your network support team.
+</FONT>
+</TD></TR>
+</TABLE>
+</blockquote>
+</FONT>
+</BODY></HTML>
+)，嘗試自動尋找...
+2026-01-19 17:41:42,182 - selenium.webdriver.common.selenium_manager - WARNING - The chromedriver version (142.0.7444.162) detected in PATH at C:\Users\andychang\Desktop\每日選股\chromedriver-win64\chromedriver.exe might not be compatible with the detected chrome version (143.0.7499.170); currently, chromedriver 143.0.7499.192 is recommended for chrome 143.*, so it is advised to delete the driver in PATH and retry
+2026-01-19 17:41:42,825 - urllib3.poolmanager - INFO - Redirecting http://localhost:2590/session -> http://10.12.5.113
+2026-01-19 17:41:42,972 - GoodinfoRevenueHighCrawler - WARNING - 嘗試失敗: Message: <HTML><HEAD>
+<TITLE>Access Denied</TITLE>
+</HEAD>
+<BODY>
+<FONT face="Helvetica">
+<big><strong></strong></big><BR>
+</FONT>
+<blockquote>
+<TABLE border=0 cellPadding=1 width="80%">
+<TR><TD>
+<FONT face="Helvetica">
+<big>Access Denied (policy_denied)</big>
+<BR>
+<BR>
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+Your system policy has denied access to the requested URL.
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica" SIZE=2>
+<BR>
+For assistance, contact your network support team.
+</FONT>
+</TD></TR>
+</TABLE>
+</blockquote>
+</FONT>
+</BODY></HTML>
+
+2026-01-19 17:41:47,973 - GoodinfoRevenueHighCrawler - INFO - 第 2 次嘗試連線...
+2026-01-19 17:41:47,973 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome 使用 Proxy: 10.160.3.88:8080
+2026-01-19 17:41:48,607 - urllib3.poolmanager - INFO - Redirecting http://localhost:2598/session -> http://10.12.5.113
+2026-01-19 17:41:48,744 - GoodinfoRevenueHighCrawler - WARNING - 指定 Driver 啟動失敗 (Message: <HTML><HEAD>
+<TITLE>Access Denied</TITLE>
+</HEAD>
+<BODY>
+<FONT face="Helvetica">
+<big><strong></strong></big><BR>
+</FONT>
+<blockquote>
+<TABLE border=0 cellPadding=1 width="80%">
+<TR><TD>
+<FONT face="Helvetica">
+<big>Access Denied (policy_denied)</big>
+<BR>
+<BR>
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+Your system policy has denied access to the requested URL.
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica" SIZE=2>
+<BR>
+For assistance, contact your network support team.
+</FONT>
+</TD></TR>
+</TABLE>
+</blockquote>
+</FONT>
+</BODY></HTML>
+)，嘗試自動尋找...
+2026-01-19 17:41:48,828 - selenium.webdriver.common.selenium_manager - WARNING - The chromedriver version (142.0.7444.162) detected in PATH at C:\Users\andychang\Desktop\每日選股\chromedriver-win64\chromedriver.exe might not be compatible with the detected chrome version (143.0.7499.170); currently, chromedriver 143.0.7499.192 is recommended for chrome 143.*, so it is advised to delete the driver in PATH and retry
+2026-01-19 17:41:49,472 - urllib3.poolmanager - INFO - Redirecting http://localhost:2604/session -> http://10.12.5.113
+2026-01-19 17:41:49,625 - GoodinfoRevenueHighCrawler - WARNING - 嘗試失敗: Message: <HTML><HEAD>
+<TITLE>Access Denied</TITLE>
+</HEAD>
+<BODY>
+<FONT face="Helvetica">
+<big><strong></strong></big><BR>
+</FONT>
+<blockquote>
+<TABLE border=0 cellPadding=1 width="80%">
+<TR><TD>
+<FONT face="Helvetica">
+<big>Access Denied (policy_denied)</big>
+<BR>
+<BR>
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+Your system policy has denied access to the requested URL.
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica" SIZE=2>
+<BR>
+For assistance, contact your network support team.
+</FONT>
+</TD></TR>
+</TABLE>
+</blockquote>
+</FONT>
+</BODY></HTML>
+
+2026-01-19 17:41:54,626 - GoodinfoRevenueHighCrawler - INFO - 第 3 次嘗試連線...
+2026-01-19 17:41:54,626 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome 使用 Proxy: 10.160.3.88:8080
+2026-01-19 17:41:55,270 - urllib3.poolmanager - INFO - Redirecting http://localhost:2613/session -> http://10.12.5.113
+2026-01-19 17:41:55,417 - GoodinfoRevenueHighCrawler - WARNING - 指定 Driver 啟動失敗 (Message: <HTML><HEAD>
+<TITLE>Access Denied</TITLE>
+</HEAD>
+<BODY>
+<FONT face="Helvetica">
+<big><strong></strong></big><BR>
+</FONT>
+<blockquote>
+<TABLE border=0 cellPadding=1 width="80%">
+<TR><TD>
+<FONT face="Helvetica">
+<big>Access Denied (policy_denied)</big>
+<BR>
+<BR>
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+Your system policy has denied access to the requested URL.
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica" SIZE=2>
+<BR>
+For assistance, contact your network support team.
+</FONT>
+</TD></TR>
+</TABLE>
+</blockquote>
+</FONT>
+</BODY></HTML>
+)，嘗試自動尋找...
+2026-01-19 17:41:55,503 - selenium.webdriver.common.selenium_manager - WARNING - The chromedriver version (142.0.7444.162) detected in PATH at C:\Users\andychang\Desktop\每日選股\chromedriver-win64\chromedriver.exe might not be compatible with the detected chrome version (143.0.7499.170); currently, chromedriver 143.0.7499.192 is recommended for chrome 143.*, so it is advised to delete the driver in PATH and retry
+2026-01-19 17:41:56,159 - urllib3.poolmanager - INFO - Redirecting http://localhost:2619/session -> http://10.12.5.113
+2026-01-19 17:41:56,170 - GoodinfoRevenueHighCrawler - WARNING - 嘗試失敗: Message: <HTML><HEAD>
+<TITLE>Access Denied</TITLE>
+</HEAD>
+<BODY>
+<FONT face="Helvetica">
+<big><strong></strong></big><BR>
+</FONT>
+<blockquote>
+<TABLE border=0 cellPadding=1 width="80%">
+<TR><TD>
+<FONT face="Helvetica">
+<big>Access Denied (policy_denied)</big>
+<BR>
+<BR>
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+Your system policy has denied access to the requested URL.
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica">
+
+</FONT>
+</TD></TR>
+<TR><TD>
+<FONT face="Helvetica" SIZE=2>
+<BR>
+For assistance, contact your network support team.
+</FONT>
+</TD></TR>
+</TABLE>
+</blockquote>
+</FONT>
+</BODY></HTML>
+
+2026-01-19 17:44:25,103 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-19 17:44:25,103 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome 使用 Proxy: 10.160.3.88:8080
+2026-01-19 17:44:43,059 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-19 17:44:43,059 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome 使用 Proxy: 10.160.3.88:8080
+2026-01-19 17:46:07,498 - GoodinfoHolderChangeCrawler - INFO - 第 1 次嘗試連線...
+2026-01-19 17:46:07,499 - GoodinfoHolderChangeCrawler - INFO - 🔒 Chrome 使用 Proxy: 10.160.3.88:8080
+2026-01-20 10:25:04,214 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-20 10:25:04,215 - GoodinfoRevenueHighCrawler - INFO - 🏠 偵測到本機環境：嘗試載入 Proxy 與指定 Driver
+2026-01-20 10:25:04,216 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome Proxy 已啟用
+2026-01-20 10:25:22,279 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-20 10:25:22,279 - GoodinfoRevenueHighCrawler - INFO - 🏠 偵測到本機環境：嘗試載入 Proxy 與指定 Driver
+2026-01-20 10:25:22,280 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome Proxy 已啟用
+2026-01-20 10:29:41,298 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-20 10:29:41,298 - GoodinfoRevenueHighCrawler - INFO - ☁️ 偵測到雲端環境：使用自動下載 Linux Driver，不使用 Proxy
+2026-01-20 10:31:05,631 - selenium.webdriver.common.selenium_manager - WARNING - Exception managing chrome: error sending request for url (https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json)
+2026-01-20 10:31:05,631 - selenium.webdriver.common.selenium_manager - WARNING - The chromedriver version (142.0.7444.162) detected in PATH at C:\Users\andychang\Desktop\每日選股\chromedriver-win64\chromedriver.exe might not be compatible with the detected chrome version (143.0.7499.170); currently, chromedriver  is recommended for chrome 143.*, so it is advised to delete the driver in PATH and retry
+2026-01-20 10:31:05,631 - selenium.webdriver.common.selenium_manager - WARNING - Error sending stats to Plausible: error sending request for url (https://plausible.io/api/event)
+2026-01-20 10:31:23,445 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-20 10:31:23,445 - GoodinfoRevenueHighCrawler - INFO - ☁️ 偵測到雲端環境：使用自動下載 Linux Driver，不使用 Proxy
+2026-01-20 12:22:22,845 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-20 12:22:22,846 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：載入 Proxy 設定
+2026-01-20 12:22:22,846 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome Proxy 已啟用
+2026-01-20 12:22:32,107 - GoodinfoRevenueHighCrawler - INFO - ✓ 偵測到表格元素
+2026-01-20 12:22:33,667 - GoodinfoRevenueHighCrawler - WARNING - 解析錯誤: Goodinfo 頻率限制 (Rate Limit)，需要冷卻
+2026-01-20 12:23:00,872 - GoodinfoRevenueHighCrawler - INFO - 第 2 次嘗試連線...
+2026-01-20 12:23:00,873 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：載入 Proxy 設定
+2026-01-20 12:23:00,873 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome Proxy 已啟用
+2026-01-20 12:23:09,451 - GoodinfoRevenueHighCrawler - INFO - ✓ 偵測到表格元素
+2026-01-20 12:23:10,793 - GoodinfoRevenueHighCrawler - WARNING - 解析錯誤: Goodinfo 頻率限制 (Rate Limit)，需要冷卻
+2026-01-20 12:23:47,971 - GoodinfoRevenueHighCrawler - INFO - 第 3 次嘗試連線...
+2026-01-20 12:23:47,971 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：載入 Proxy 設定
+2026-01-20 12:23:47,972 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome Proxy 已啟用
+2026-01-20 12:23:55,875 - GoodinfoRevenueHighCrawler - INFO - ✓ 偵測到表格元素
+2026-01-20 12:23:58,040 - GoodinfoRevenueHighCrawler - WARNING - 解析錯誤: Goodinfo 頻率限制 (Rate Limit)，需要冷卻
+2026-01-20 12:25:14,508 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-20 12:25:14,509 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：極速模式啟動
+2026-01-20 12:25:28,682 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-20 12:25:28,683 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：極速模式啟動
+2026-01-20 12:27:57,271 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-20 12:27:57,271 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：極速模式啟動 (Proxy + 指定 Driver)
+2026-01-20 12:27:57,272 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome Proxy 已啟用
+2026-01-20 12:28:04,855 - GoodinfoRevenueHighCrawler - INFO - ✓ 在 6 秒時偵測到表格
+2026-01-20 12:28:11,099 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-20 12:28:11,099 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：極速模式啟動 (Proxy + 指定 Driver)
+2026-01-20 12:28:11,099 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome Proxy 已啟用
+2026-01-20 12:28:20,396 - GoodinfoRevenueHighCrawler - INFO - ✓ 在 7 秒時偵測到表格
+2026-01-20 12:36:07,111 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-20 12:36:07,111 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：極速模式啟動 (Proxy + 指定 Driver)
+2026-01-20 12:36:07,112 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome Proxy 已啟用
+2026-01-20 12:36:14,944 - GoodinfoRevenueHighCrawler - INFO - ✓ 在 6 秒時偵測到表格
+2026-01-20 12:36:21,301 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-20 12:36:21,302 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：極速模式啟動 (Proxy + 指定 Driver)
+2026-01-20 12:36:21,302 - GoodinfoRevenueHighCrawler - INFO - 🔒 Chrome Proxy 已啟用
+2026-01-20 12:36:30,814 - GoodinfoRevenueHighCrawler - INFO - ✓ 在 8 秒時偵測到表格
+2026-01-20 14:23:43,271 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-20 14:23:43,272 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：啟動 Windows Driver
+2026-01-20 14:23:43,272 - GoodinfoRevenueHighCrawler - INFO - 🔒 Proxy: 10.160.3.88:8080
+2026-01-20 14:23:51,354 - GoodinfoRevenueHighCrawler - INFO - ✓ 偵測到表格
+2026-01-20 14:23:58,557 - GoodinfoRevenueHighCrawler - INFO - 第 1 次嘗試連線...
+2026-01-20 14:23:58,558 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：啟動 Windows Driver
+2026-01-20 14:23:58,558 - GoodinfoRevenueHighCrawler - INFO - 🔒 Proxy: 10.160.3.88:8080
+2026-01-20 14:24:08,686 - GoodinfoRevenueHighCrawler - INFO - ✓ 偵測到表格
+2026-01-20 15:43:58,335 - GoodinfoRevenueHighCrawler - INFO - 🚀 開始抓取 (優化策略): 月營收創新高
+2026-01-20 15:43:58,336 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：啟動 Windows Driver
+2026-01-20 15:43:58,337 - GoodinfoRevenueHighCrawler - INFO - 🔒 Proxy: 10.160.3.88:8080
+2026-01-20 15:43:59,254 - GoodinfoRevenueHighCrawler - INFO - 正在載入初始頁面...
+2026-01-20 15:44:05,936 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source
+2026-01-20 15:44:06,140 - GoodinfoRevenueHighCrawler - INFO - 取得page_source
+2026-01-20 15:44:06,140 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source decode
+2026-01-20 15:44:06,140 - GoodinfoRevenueHighCrawler - INFO - 準備Beautiful souo
+2026-01-20 15:44:06,614 - GoodinfoRevenueHighCrawler - INFO - 完成Beautiful souo
+2026-01-20 15:44:06,926 - GoodinfoRevenueHighCrawler - INFO - 準備取得DataTable
+2026-01-20 15:44:06,932 - GoodinfoRevenueHighCrawler - INFO - 取得DataTable
+2026-01-20 15:44:07,395 - GoodinfoRevenueHighCrawler - INFO - 取得df_list
+2026-01-20 15:44:07,397 - GoodinfoRevenueHighCrawler - INFO - ✅ 初始頁面 (創紀錄統計) 資料抓取成功
+2026-01-20 15:44:07,397 - GoodinfoRevenueHighCrawler - INFO - 🔗 正在點擊頁籤: //a[text()='營收狀況']
+2026-01-20 15:44:37,907 - GoodinfoRevenueHighCrawler - ERROR - ❌ 點擊後等待表格更新超時: //a[text()='營收狀況']
+2026-01-20 15:44:37,907 - GoodinfoRevenueHighCrawler - ERROR - ❌ 抓取失敗: 點擊切換至「營收狀況」頁籤失敗
+2026-01-20 15:44:52,806 - GoodinfoRevenueHighCrawler - INFO - 🚀 開始抓取 (優化策略): 月營收創新高
+2026-01-20 15:44:52,807 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：啟動 Windows Driver
+2026-01-20 15:44:52,807 - GoodinfoRevenueHighCrawler - INFO - 🔒 Proxy: 10.160.3.88:8080
+2026-01-20 15:44:53,693 - GoodinfoRevenueHighCrawler - INFO - 正在載入初始頁面...
+2026-01-20 15:45:00,713 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source
+2026-01-20 15:45:00,876 - GoodinfoRevenueHighCrawler - INFO - 取得page_source
+2026-01-20 15:45:00,876 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source decode
+2026-01-20 15:45:00,876 - GoodinfoRevenueHighCrawler - INFO - 準備Beautiful souo
+2026-01-20 15:45:01,335 - GoodinfoRevenueHighCrawler - INFO - 完成Beautiful souo
+2026-01-20 15:45:01,621 - GoodinfoRevenueHighCrawler - INFO - 準備取得DataTable
+2026-01-20 15:45:01,626 - GoodinfoRevenueHighCrawler - INFO - 取得DataTable
+2026-01-20 15:45:02,032 - GoodinfoRevenueHighCrawler - INFO - 取得df_list
+2026-01-20 15:45:02,034 - GoodinfoRevenueHighCrawler - INFO - ✅ 初始頁面 (創紀錄統計) 資料抓取成功
+2026-01-20 15:45:02,034 - GoodinfoRevenueHighCrawler - INFO - 🔗 正在點擊頁籤: //a[text()='營收狀況']
+2026-01-20 15:45:32,507 - GoodinfoRevenueHighCrawler - ERROR - ❌ 點擊後等待表格更新超時: //a[text()='營收狀況']
+2026-01-20 15:45:32,507 - GoodinfoRevenueHighCrawler - ERROR - ❌ 抓取失敗: 點擊切換至「營收狀況」頁籤失敗
+2026-01-20 15:53:17,497 - GoodinfoRevenueHighCrawler - INFO - 🚀 開始抓取 (優化策略): 月營收創新高
+2026-01-20 15:53:17,498 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：啟動 Windows Driver
+2026-01-20 15:53:17,498 - GoodinfoRevenueHighCrawler - INFO - 🔒 Proxy: 10.160.3.88:8080
+2026-01-20 15:53:18,385 - GoodinfoRevenueHighCrawler - INFO - 正在載入初始頁面...
+2026-01-20 15:53:25,712 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source
+2026-01-20 15:53:25,889 - GoodinfoRevenueHighCrawler - INFO - 取得page_source
+2026-01-20 15:53:25,889 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source decode
+2026-01-20 15:53:25,890 - GoodinfoRevenueHighCrawler - INFO - 準備Beautiful souo
+2026-01-20 15:53:26,354 - GoodinfoRevenueHighCrawler - INFO - 完成Beautiful souo
+2026-01-20 15:53:26,650 - GoodinfoRevenueHighCrawler - INFO - 準備取得DataTable
+2026-01-20 15:53:26,655 - GoodinfoRevenueHighCrawler - INFO - 取得DataTable
+2026-01-20 15:53:27,131 - GoodinfoRevenueHighCrawler - INFO - 取得df_list
+2026-01-20 15:53:27,133 - GoodinfoRevenueHighCrawler - INFO - ✅ 初始頁面 (創紀錄統計) 資料抓取成功
+2026-01-20 15:53:27,133 - GoodinfoRevenueHighCrawler - INFO - 🔗 [Robust] 正在點擊頁籤: //a[text()='營收狀況']
+2026-01-20 15:53:27,172 - GoodinfoRevenueHighCrawler - INFO -    - 監視元素初始文字: '代號'
+2026-01-20 15:55:43,387 - GoodinfoRevenueHighCrawler - ERROR - ❌ 點擊或等待文字變更時發生錯誤: HTTPConnectionPool(host='localhost', port=9772): Read timed out. (read timeout=120)
+2026-01-20 15:55:43,387 - GoodinfoRevenueHighCrawler - ERROR - ❌ 抓取失敗: 點擊切換至「營收狀況」頁籤失敗
+2026-01-20 15:57:43,404 - urllib3.connectionpool - WARNING - Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ReadTimeoutError("HTTPConnectionPool(host='localhost', port=9772): Read timed out. (read timeout=120)")': /session/4e59d7bad1c1c822b828ef7baf8d27d7/screenshot
+2026-01-20 15:58:26,463 - GoodinfoRevenueHighCrawler - INFO - 🚀 開始抓取 (返璞歸真策略): 月營收創新高
+2026-01-20 15:58:26,464 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：啟動 Windows Driver
+2026-01-20 15:58:26,464 - GoodinfoRevenueHighCrawler - INFO - 🔒 Proxy: 10.160.3.88:8080
+2026-01-20 15:58:27,331 - GoodinfoRevenueHighCrawler - INFO - 正在抓取第一張表 (營收狀況)...
+2026-01-20 15:58:27,524 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source
+2026-01-20 15:58:27,531 - GoodinfoRevenueHighCrawler - INFO - 取得page_source
+2026-01-20 15:58:27,531 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source decode
+2026-01-20 15:58:27,531 - GoodinfoRevenueHighCrawler - INFO - 取得page_source decode
+2026-01-20 15:58:27,531 - GoodinfoRevenueHighCrawler - INFO - 準備Beautiful souo
+2026-01-20 15:58:27,533 - GoodinfoRevenueHighCrawler - INFO - 完成Beautiful souo
+2026-01-20 15:58:27,534 - GoodinfoRevenueHighCrawler - INFO - 準備取得DataTable
+2026-01-20 15:58:27,534 - GoodinfoRevenueHighCrawler - INFO - 取得DataTable
+2026-01-20 15:58:27,534 - GoodinfoRevenueHighCrawler - ERROR - ❌ 抓取失敗: 頁面載入不完整 (找不到表格)
+2026-01-20 15:59:40,156 - GoodinfoRevenueHighCrawler - INFO - 🚀 開始抓取 (穩定修正策略): 月營收創新高
+2026-01-20 15:59:40,157 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：啟動 Windows Driver
+2026-01-20 15:59:40,157 - GoodinfoRevenueHighCrawler - INFO - 🔒 Proxy: 10.160.3.88:8080
+2026-01-20 15:59:41,017 - GoodinfoRevenueHighCrawler - INFO - 正在抓取第一張表 (營收狀況)...
+2026-01-20 15:59:41,279 - GoodinfoRevenueHighCrawler - INFO - 等待表格 #1 出現...
+2026-01-20 15:59:47,629 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source
+2026-01-20 15:59:47,793 - GoodinfoRevenueHighCrawler - INFO - 取得page_source
+2026-01-20 15:59:47,793 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source decode
+2026-01-20 15:59:47,794 - GoodinfoRevenueHighCrawler - INFO - 準備Beautiful souo
+2026-01-20 15:59:48,251 - GoodinfoRevenueHighCrawler - INFO - 完成Beautiful souo
+2026-01-20 15:59:48,538 - GoodinfoRevenueHighCrawler - INFO - 準備取得DataTable
+2026-01-20 15:59:48,545 - GoodinfoRevenueHighCrawler - INFO - 取得DataTable
+2026-01-20 15:59:48,955 - GoodinfoRevenueHighCrawler - INFO - 取得df_list
+2026-01-20 15:59:48,957 - GoodinfoRevenueHighCrawler - INFO - ✅ 第一張表抓取成功
+2026-01-20 15:59:48,957 - GoodinfoRevenueHighCrawler - INFO - 正在抓取第二張表 (創紀錄統計)...
+2026-01-20 15:59:50,101 - GoodinfoRevenueHighCrawler - INFO - 等待表格 #2 出現...
+2026-01-20 15:59:54,854 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source
+2026-01-20 15:59:55,302 - GoodinfoRevenueHighCrawler - INFO - 取得page_source
+2026-01-20 15:59:55,303 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source decode
+2026-01-20 15:59:55,303 - GoodinfoRevenueHighCrawler - INFO - 準備Beautiful souo
+2026-01-20 15:59:55,927 - GoodinfoRevenueHighCrawler - INFO - 完成Beautiful souo
+2026-01-20 15:59:56,425 - GoodinfoRevenueHighCrawler - INFO - 準備取得DataTable
+2026-01-20 15:59:56,431 - GoodinfoRevenueHighCrawler - INFO - 取得DataTable
+2026-01-20 15:59:56,850 - GoodinfoRevenueHighCrawler - INFO - 取得df_list
+2026-01-20 15:59:56,852 - GoodinfoRevenueHighCrawler - INFO - ✅ 第二張表抓取成功
+2026-01-20 15:59:56,852 - GoodinfoRevenueHighCrawler - INFO - 合併資料中...
+2026-01-20 15:59:56,858 - GoodinfoRevenueHighCrawler - INFO - ✅ 成功儲存至: C:\Users\andychang\Desktop\每日選股\StockWarRoomV3\data\goodinfo\revenue_high\20260120_月營收創新高.csv
+2026-01-20 16:03:49,554 - GoodinfoHolderChangeCrawler - INFO - 第 1 次嘗試連線...
+2026-01-20 16:03:49,555 - GoodinfoHolderChangeCrawler - INFO - 🏠 本機環境：啟動 Windows Driver
+2026-01-20 16:03:49,555 - GoodinfoHolderChangeCrawler - INFO - 🔒 Proxy: 10.160.3.88:8080
+2026-01-20 16:03:50,455 - GoodinfoHolderChangeCrawler - INFO - 第 1 次嘗試連線後sleep
+2026-01-20 16:03:50,457 - GoodinfoHolderChangeCrawler - INFO - sleep完畢
+2026-01-20 16:03:50,457 - GoodinfoHolderChangeCrawler - INFO - 發送請求
+2026-01-20 16:03:50,644 - GoodinfoHolderChangeCrawler - INFO - 發送請求完畢
+2026-01-20 16:03:57,422 - GoodinfoHolderChangeCrawler - INFO - ✓ 偵測到表格
+2026-01-20 16:03:57,422 - GoodinfoHolderChangeCrawler - INFO - df準備解析
+2026-01-20 16:03:57,423 - GoodinfoHolderChangeCrawler - INFO - 準備取得page_source
+2026-01-20 16:03:57,600 - GoodinfoHolderChangeCrawler - INFO - 取得page_source
+2026-01-20 16:03:57,600 - GoodinfoHolderChangeCrawler - INFO - 準備取得page_source decode
+2026-01-20 16:03:57,600 - GoodinfoHolderChangeCrawler - INFO - 準備Beautiful souo
+2026-01-20 16:03:58,115 - GoodinfoHolderChangeCrawler - INFO - 完成Beautiful souo
+2026-01-20 16:03:58,423 - GoodinfoHolderChangeCrawler - INFO - 準備取得DataTable
+2026-01-20 16:03:58,429 - GoodinfoHolderChangeCrawler - INFO - 取得DataTable
+2026-01-20 16:03:58,828 - GoodinfoHolderChangeCrawler - INFO - 取得df_list
+2026-01-20 16:03:58,830 - GoodinfoHolderChangeCrawler - INFO - 取得解析後df
+2026-01-20 17:02:57,659 - GoodinfoRevenueHighCrawler - INFO - 🚀 開始抓取 (穩定修正策略): 月營收創新高
+2026-01-20 17:02:57,660 - GoodinfoRevenueHighCrawler - INFO - 🏠 本機環境：啟動 Windows Driver
+2026-01-20 17:02:57,660 - GoodinfoRevenueHighCrawler - INFO - 🔒 Proxy: 10.160.3.88:8080
+2026-01-20 17:02:58,539 - GoodinfoRevenueHighCrawler - INFO - 正在抓取第一張表 (營收狀況)...
+2026-01-20 17:02:58,815 - GoodinfoRevenueHighCrawler - INFO - 等待表格 #1 出現...
+2026-01-20 17:03:05,913 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source
+2026-01-20 17:03:06,104 - GoodinfoRevenueHighCrawler - INFO - 取得page_source
+2026-01-20 17:03:06,104 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source decode
+2026-01-20 17:03:06,105 - GoodinfoRevenueHighCrawler - INFO - 準備Beautiful souo
+2026-01-20 17:03:06,563 - GoodinfoRevenueHighCrawler - INFO - 完成Beautiful souo
+2026-01-20 17:03:06,852 - GoodinfoRevenueHighCrawler - INFO - 準備取得DataTable
+2026-01-20 17:03:06,857 - GoodinfoRevenueHighCrawler - INFO - 取得DataTable
+2026-01-20 17:03:07,311 - GoodinfoRevenueHighCrawler - INFO - 取得df_list
+2026-01-20 17:03:07,312 - GoodinfoRevenueHighCrawler - INFO - ✅ 第一張表抓取成功
+2026-01-20 17:03:07,313 - GoodinfoRevenueHighCrawler - INFO - 正在抓取第二張表 (創紀錄統計)...
+2026-01-20 17:03:08,649 - GoodinfoRevenueHighCrawler - INFO - 等待表格 #2 出現...
+2026-01-20 17:03:13,473 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source
+2026-01-20 17:03:13,645 - GoodinfoRevenueHighCrawler - INFO - 取得page_source
+2026-01-20 17:03:13,645 - GoodinfoRevenueHighCrawler - INFO - 準備取得page_source decode
+2026-01-20 17:03:13,645 - GoodinfoRevenueHighCrawler - INFO - 準備Beautiful souo
+2026-01-20 17:03:14,138 - GoodinfoRevenueHighCrawler - INFO - 完成Beautiful souo
+2026-01-20 17:03:14,430 - GoodinfoRevenueHighCrawler - INFO - 準備取得DataTable
+2026-01-20 17:03:14,435 - GoodinfoRevenueHighCrawler - INFO - 取得DataTable
+2026-01-20 17:03:14,816 - GoodinfoRevenueHighCrawler - INFO - 取得df_list
+2026-01-20 17:03:14,817 - GoodinfoRevenueHighCrawler - INFO - ✅ 第二張表抓取成功
+2026-01-20 17:03:14,818 - GoodinfoRevenueHighCrawler - INFO - 合併資料中...
+2026-01-20 17:03:14,825 - GoodinfoRevenueHighCrawler - INFO - ✅ 成功儲存至: C:\Users\andychang\Desktop\每日選股\StockWarRoomV3\data\goodinfo\revenue_high\20260120_月營收創新高.csv
