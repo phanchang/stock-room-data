@@ -21,10 +21,11 @@ jobs:
       - name: Prepare Data Directories (Safe Clean)
         run: |
           echo "🧹 正在整理資料夾結構..."
-          # 🟢 優化：確保目錄存在，且只清理特定的快取與指標，不刪除整個 data 目錄
+          # 🟢 優化：建立所有可能用到的目錄，防止 Python 找不到路徑
           mkdir -p data/cache/tw
           mkdir -p data/indicators
           mkdir -p data/temp
+          mkdir -p data/meta 
           
           # 只刪除內容，保留目錄結構
           rm -f data/cache/tw/* || echo "Cache already empty"
@@ -33,12 +34,15 @@ jobs:
       - name: Generate Stock List (Missing File Protection)
         run: |
           echo "📋 檢查並產生股票清單..."
-          # 🟢 關鍵：先跑這支確保 data/stock_list.csv 一定存在
+          # 🟢 再次確保目錄存在 (雙重保險)
+          mkdir -p data
           python scripts/update_stock_list.py
 
       - name: Fetch Price & Run Strategy
         run: |
           # 執行 K 線下載與策略計算
+          # 🟢 再次確保 cache 目錄存在
+          mkdir -p data/cache/tw
           python scripts/init_cache_tw.py --auto --force
           python scripts/daily_strategy_runner.py
 
@@ -47,13 +51,14 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 🟢 使用 -f 強制加入，並加上 existence check 避免報錯
           if [ -f "data/stock_list.csv" ]; then git add -f data/stock_list.csv; fi
           if [ -d "data/indicators" ]; then git add -f data/indicators/; fi
           if [ -d "data/cache/tw" ]; then git add -f data/cache/tw/; fi
           
           git commit -m "Auto: Price & Strategy Update ($(date +'%Y-%m-%d'))" || echo "No changes to commit"
           
-          # 🟢 一勞永逸的衝突解決策略
+          # 🟢 同樣加入強制清理，防止衝突
+          git reset --hard HEAD
+          
           git pull --rebase -X theirs origin main
           git push origin main
