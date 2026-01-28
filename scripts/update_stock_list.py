@@ -5,6 +5,7 @@ import time
 import os
 import requests
 import urllib3
+import io  # 🟢 新增：用於解決 pandas read_html 誤判問題
 from dotenv import load_dotenv
 
 # 1. 禁用 SSL 安全警告 (解決家裡環境的 SSL 報錯)
@@ -44,8 +45,10 @@ def fetch_isin_table(mode_code, market_type, proxies):
         response = requests.get(url, proxies=proxies, timeout=15, verify=False)
         response.encoding = 'cp950'
 
+        # 🟢 關鍵修正：使用 io.StringIO 包裝，防止 Pandas 誤把 HTML 當作檔名
         # 解析 HTML
-        dfs = pd.read_html(response.text, header=0)
+        dfs = pd.read_html(io.StringIO(response.text), header=0)
+
         if not dfs: return []
 
         df = dfs[0]
@@ -67,7 +70,8 @@ def fetch_isin_table(mode_code, market_type, proxies):
         print(f"✅ 取得 {len(stock_data)} 筆 {market_type} 股票資料")
         return stock_data
     except Exception as e:
-        print(f"❌ 下載失敗 {market_type}: {e}")
+        # 只顯示簡短錯誤訊息，避免印出整個 HTML
+        print(f"❌ 下載失敗 {market_type}: {str(e).splitlines()[0]}")
         return []
 
 
@@ -90,7 +94,10 @@ def main():
 
     # 3. 輸出 CSV (標頭: stock_id, name, market, industry)
     df = pd.DataFrame(all_stocks)
+
+    # 確保目錄存在
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+
     df.to_csv(OUTPUT_PATH, index=False, encoding="utf-8-sig")
 
     print("=" * 60)
