@@ -1,22 +1,30 @@
-# --- 忽略環境與 IDE ---
+# --- 系統與 IDE 檔案 ---
 __pycache__/
 *.py[cod]
+*$py.class
 .venv/
 .env
 .idea/
 .vscode/
+.DS_Store
+Thumbs.db
 
-# --- 資料夾策略 (核彈級忽略) ---
-# 直接忽略 data 底下所有東西，不管是資料夾還是檔案
-data/*
+# --- 數據資料夾 (核心忽略區) ---
+# 這些資料夾在本地產生的檔案「絕對不會」被 Git 偵測到
+# 雲端 GitHub Actions 會透過 git add -f 強制突破此封鎖來存檔
+data/cache/
+data/indicators/
+data/goodinfo/
+data/temp/
 
-# --- 下面這些「全部刪掉」或是「加 # 註解掉」 ---
-# !data/raw/
-# !data/clean/
-# !data/stock_list.csv
-# !data/goodinfo/
-# !data/indicators/
-# !data/cache/
-# !data/cache/metadata/
+# --- 特定數據檔案 ---
+data/stock_list.csv
+data/chips_revenue_raw.csv
+data/戰情室終極版.csv
 
-# --- 忽略特定腳本 ---
+# --- 日誌與暫存 ---
+utils/logs/
+*.log
+temp/
+scripts/test_*.py
+scripts/verify_*.py
