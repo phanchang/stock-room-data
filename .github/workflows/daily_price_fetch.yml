@@ -1,7 +1,7 @@
 name: Daily Price & Strategy
 on:
   schedule:
-    - cron: '30 7 * * 1-5' # 🟢 改為台北 15:30 (UTC 07:30) 確保盤後資料完整
+    - cron: '30 7 * * 1-5' # 台北 15:30
   workflow_dispatch:
 
 jobs:
@@ -15,22 +15,31 @@ jobs:
         with: { python-version: '3.11' }
 
       - name: Install dependencies
-        run: pip install pandas yfinance lxml python-dotenv numpy pyarrow
-
-      - name: Clean up Old Data (Force Refresh)
         run: |
-          echo "🧹 開始清理舊資料..."
-          # 🟢 強制刪除所有 K 線快取與指標，確保砍掉重練
-          rm -rf data/cache/tw/*
-          rm -rf data/indicators/*
-          echo "✅ 清理完成，準備重新下載。"
+          pip install pandas yfinance lxml python-dotenv numpy pyarrow requests beautifulsoup4
+
+      - name: Prepare Data Directories (Safe Clean)
+        run: |
+          echo "🧹 正在整理資料夾結構..."
+          # 🟢 優化：確保目錄存在，且只清理特定的快取與指標，不刪除整個 data 目錄
+          mkdir -p data/cache/tw
+          mkdir -p data/indicators
+          mkdir -p data/temp
+          
+          # 只刪除內容，保留目錄結構
+          rm -f data/cache/tw/* || echo "Cache already empty"
+          rm -f data/indicators/* || echo "Indicators already empty"
+
+      - name: Generate Stock List (Missing File Protection)
+        run: |
+          echo "📋 檢查並產生股票清單..."
+          # 🟢 關鍵：先跑這支確保 data/stock_list.csv 一定存在
+          python scripts/update_stock_list.py
 
       - name: Fetch Price & Run Strategy
         run: |
-          # 🟢 加入 --force 參數，強制重新下載全歷史
+          # 執行 K 線下載與策略計算
           python scripts/init_cache_tw.py --auto --force
-          
-          # 重新計算指標 (此時指標資料夾是空的，會生成全新的)
           python scripts/daily_strategy_runner.py
 
       - name: Commit and Push Results
@@ -38,19 +47,13 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 1. 強制加入新生成的資料
-          git add -f data/indicators/
-          git add -f data/cache/tw/
-          git add -f data/stock_list.csv
+          # 🟢 使用 -f 強制加入，並加上 existence check 避免報錯
+          if [ -f "data/stock_list.csv" ]; then git add -f data/stock_list.csv; fi
+          if [ -d "data/indicators" ]; then git add -f data/indicators/; fi
+          if [ -d "data/cache/tw" ]; then git add -f data/cache/tw/; fi
           
-          # 2. 提交
-          git commit -m "Auto: Force Refresh Price & Strategy" || { echo "No changes to commit"; exit 0; }
+          git commit -m "Auto: Price & Strategy Update ($(date +'%Y-%m-%d'))" || echo "No changes to commit"
           
-          # 3. 清理戰場
-          git reset --hard
-          
-          # 4. 融合雲端資料
-          git pull --rebase origin main
-          
-          # 5. 推送
+          # 🟢 一勞永逸的衝突解決策略
+          git pull --rebase -X theirs origin main
           git push origin main

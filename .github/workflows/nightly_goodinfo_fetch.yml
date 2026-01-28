@@ -24,7 +24,9 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/goodinfo/
+          # 🟢 修正：使用 -f 強制加入被 ignore 的資料夾
+          git add -f data/goodinfo/
           git commit -m "Auto: Update Goodinfo Data" || echo "No changes to commit"
-          git pull --rebase origin main  # 🟢 加入這行：先拉回遠端更新，避免衝突
+          # 🟢 修正：使用 rebase 並設定策略，若有衝突以雲端(新產生的)為主
+          git pull --rebase -X theirs origin main  # 🟢 加入這行：先拉回遠端更新，避免衝突
           git push origin main
