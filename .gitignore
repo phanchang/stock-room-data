@@ -6,19 +6,17 @@ __pycache__/
 .idea/
 .vscode/
 
-# --- 資料夾策略 (白名單模式) ---
+# --- 資料夾策略 (核彈級忽略) ---
+# 直接忽略 data 底下所有東西，不管是資料夾還是檔案
 data/*
 
-# 保留必要結構與結果
-!data/raw/
-!data/clean/
-!data/stock_list.csv
-!data/goodinfo/
-!data/indicators/
-!data/cache/
-!data/cache/metadata/
+# --- 下面這些「全部刪掉」或是「加 # 註解掉」 ---
+# !data/raw/
+# !data/clean/
+# !data/stock_list.csv
+# !data/goodinfo/
+# !data/indicators/
+# !data/cache/
+# !data/cache/metadata/
 
-# 排除重型數據 (股價快取)
-data/cache/tw/
-
-scripts/verify_fundamentals.py
+# --- 忽略特定腳本 ---
