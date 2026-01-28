@@ -1,465 +1,563 @@
 import sys
-import json
 import pandas as pd
 from pathlib import Path
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget,
-                             QTableWidgetItem, QHeaderView, QCheckBox, QPushButton,
-                             QScrollArea, QSplitter, QGroupBox, QRadioButton, QButtonGroup,
-                             QMenu, QMessageBox, QAbstractItemView, QApplication)
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QAction
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+                             QTableView, QHeaderView, QGroupBox, QComboBox,
+                             QDoubleSpinBox, QPushButton, QCheckBox,
+                             QAbstractItemView, QMenu, QMessageBox, QSplitter,
+                             QScrollArea, QFrame, QDialog, QGridLayout, QDialogButtonBox)
+from PyQt6.QtCore import Qt, pyqtSignal, QAbstractTableModel, QSortFilterProxyModel
+from PyQt6.QtGui import QColor, QAction, QCursor
 
-# 引用現有的 Helper
-from utils.indicator_index import load_indicator_index
+# --- 設定檔 ---
+
+# 1. 欄位設定 (順序: 基本 -> 動能 -> 籌碼 -> 估值 -> 訊號)
+COLUMN_CONFIG = {
+    'sid': {'name': '代號', 'show': True, 'tip': '股票代號'},
+    'name': {'name': '名稱', 'show': True, 'tip': '股票名稱'},
+    'industry': {'name': '產業', 'show': True, 'tip': '所屬產業類別'},
+    '現價': {'name': '股價', 'show': True, 'tip': '最新收盤價'},
+
+    '漲幅5d': {'name': '5日%', 'show': False, 'tip': '近5日漲跌幅 (短線動能)'},
+    '漲幅20d': {'name': '月漲幅', 'show': True, 'tip': '近20日漲跌幅 (波段強度)'},
+    '漲幅60d': {'name': '季漲幅', 'show': True, 'tip': '近60日漲跌幅 (中長線趨勢)'},
+    '量比': {'name': '量比', 'show': True, 'tip': '今日量 / 5日均量 (>1量增, >2爆量)'},
+    'VCP壓縮': {'name': '波動度', 'show': True, 'tip': 'VCP指數，越低(<5)代表籌碼越安定'},
+
+    'm_sum_5d': {'name': '融資5日', 'show': True, 'tip': '融資近5日增減 (負數代表散戶退場)'},
+    't_sum_5d': {'name': '投信5日', 'show': True, 'tip': '投信近5日買賣超 (正數代表認養)'},
+    'f_sum_5d': {'name': '外資5日', 'show': False, 'tip': '外資近5日買賣超'},
+
+    'pe': {'name': '本益比', 'show': True, 'tip': '股價 / EPS (<15便宜)'},
+    'pbr': {'name': '股淨比', 'show': False, 'tip': '股價 / 淨值 (<1低估)'},
+    'yield': {'name': '殖利率', 'show': True, 'tip': '現金股利 / 股價 (>4%高息)'},
+
+    '強勢特徵': {'name': '強勢特徵', 'show': True, 'tip': '系統自動偵測的策略訊號'}
+}
+
+# 2. 強勢特徵說明 (Tooltip)
+TAG_DESCRIPTIONS = {
+    '超強勢': 'RS強度 > 90，全市場最強的前 10% 股票',
+    '波動壓縮': 'VCP < 3%，股價狹幅盤整，籌碼極度安定，可能變盤',
+    '投信認養': '投信連續買超 3 天以上',
+    '散戶退場': '融資今日大幅減少 > 200 張',
+    '波段黑馬': '近一季漲幅 > 30%，趨勢向上',
+    '突破30週': '股價帶量突破 30 週均線 (MA150)',
+    '創季高': '股價創近 60 日新高',
+    '20日盤整': '近 20 日股價在箱型區間整理',
+    '策略_強勢多頭': '均線多頭排列 (MA5 > MA20 > MA60)',
+}
+
+
+# --- 欄位選擇視窗 (一次選完再關閉) ---
+class ColumnSelectorDialog(QDialog):
+    def __init__(self, config, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("👁️ 欄位顯示設定")
+        self.config = config
+        self.checkboxes = {}
+        self.init_ui()
+        self.setStyleSheet(
+            "QDialog { background: #222; color: #FFF; } QCheckBox { color: #EEE; font-size: 14px; padding: 5px; }")
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        grid = QGridLayout()
+
+        row, col = 0, 0
+        for key, info in self.config.items():
+            chk = QCheckBox(info['name'])
+            chk.setChecked(info['show'])
+            chk.setToolTip(info['tip'])
+            self.checkboxes[key] = chk
+            grid.addWidget(chk, row, col)
+            col += 1
+            if col > 2:  # 3欄換行
+                col = 0
+                row += 1
+
+        layout.addLayout(grid)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def get_selection(self):
+        return {k: chk.isChecked() for k, chk in self.checkboxes.items()}
+
+
+# --- 資料模型 ---
+class StrategyTableModel(QAbstractTableModel):
+    def __init__(self, df=pd.DataFrame(), visible_cols=[]):
+        super().__init__()
+        self._df = df
+        self.visible_cols = visible_cols
+
+    def update_data(self, df, visible_cols):
+        self.beginResetModel()
+        self._df = df
+        self.visible_cols = visible_cols
+        self.endResetModel()
+
+    def rowCount(self, parent=None):
+        return self._df.shape[0]
+
+    def columnCount(self, parent=None):
+        return len(self.visible_cols)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid(): return None
+        col_key = self.visible_cols[index.column()]
+        value = self._df.iloc[index.row()][col_key]
+
+        if role == Qt.ItemDataRole.DisplayRole:
+            if isinstance(value, (int, float)):
+                if '漲幅' in col_key or 'yield' in col_key or 'VCP' in col_key: return f"{value:.2f}%"
+                if col_key in ['pe', 'pbr', '量比']: return f"{value:.2f}"
+                return f"{value:,.0f}"
+            return str(value)
+
+        if role == Qt.ItemDataRole.ForegroundRole:
+            if isinstance(value, (int, float)):
+                if '漲幅' in col_key or 'sum' in col_key or '買賣超' in col_key:
+                    if value > 0: return QColor("#FF4444")
+                    if value < 0: return QColor("#00CC00")
+            if col_key == '強勢特徵' and value: return QColor("#FFD700")
+            return QColor("#E0E0E0")
+
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            if isinstance(value, (int, float)) or col_key in ['現價']:
+                return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+
+        return None
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal:
+            col_key = self.visible_cols[section]
+            config = COLUMN_CONFIG.get(col_key, {})
+            if role == Qt.ItemDataRole.DisplayRole: return config.get('name', col_key)
+            if role == Qt.ItemDataRole.ToolTipRole: return config.get('tip', '')
+        if orientation == Qt.Orientation.Vertical and role == Qt.ItemDataRole.DisplayRole:
+            return str(section + 1)
+        return None
+
+
+# --- 三段式排序 Proxy Model ---
+class ThreeStateSortProxy(QSortFilterProxyModel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.last_col = -1
+        self.sort_state = 0  # 0: None, 1: Asc, 2: Desc
+
+    def sort(self, column, order):
+        # 覆寫排序邏輯
+        self.layoutAboutToBeChanged.emit()
+
+        if column != self.last_col:
+            # 換欄位，重置為 Asc
+            self.sort_state = 1
+            super().sort(column, Qt.SortOrder.AscendingOrder)
+        else:
+            # 同欄位，循環狀態
+            self.sort_state = (self.sort_state + 1) % 3
+            if self.sort_state == 0:
+                # 復原 (設回 -1 代表不排序)
+                super().sort(-1, Qt.SortOrder.AscendingOrder)
+            elif self.sort_state == 1:
+                super().sort(column, Qt.SortOrder.AscendingOrder)
+            else:
+                super().sort(column, Qt.SortOrder.DescendingOrder)
+
+        self.last_col = column
+        self.layoutChanged.emit()
 
 
 class StrategyModule(QWidget):
     stock_clicked_signal = pyqtSignal(str)
-    request_add_watchlist = pyqtSignal(str, str)  # <--- 記得要有這行，不然 emit 會報錯
-    def __init__(self):
-        super().__init__()
-        self.indicator_index = {}
-        self.stock_list_df = None
-        self.rev_data = {}
-        self.chip_data = {}
+    request_add_watchlist = pyqtSignal(str, str)
 
-        self.strategies_map = {
-            "📊 5日盤整 (量縮)": "consol_5",
-            "📊 10日盤整 (量縮)": "consol_10",
-            "📊 20日盤整 (量縮)": "consol_20",
-            "📊 60日盤整 (量縮)": "consol_60",
-            "🚀 突破 30週均線 (爆量)": "break_30w",
-            "🚀 創 30日新高": "high_30",
-            "🚀 創 60日新高": "high_60",
-            "🔥 強勢多頭排列": "strong_uptrend",
-            "📈 回測 55MA 支撐 (均線向上)": "support_ma_55",
-            "📈 回測 200MA 支撐 (均線向上)": "support_ma_200",
-            "🟢 Vix 恐慌反轉 (綠柱轉灰)": "vix_reversal",
-        }
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.full_df = pd.DataFrame()
+        self.display_df = pd.DataFrame()
+        self.stock_list_df = pd.DataFrame()
 
-        self.columns_config = [
-            ("id", "代號", 60),
-            ("name", "名稱", 80),
-            ("close", "股價", 70),
-            ("pct_5d", "5日%", 60),
-            ("pct_3m", "3月%", 60),
-            ("pct_6m", "半年%", 60),
-            ("rev_mom", "營收MoM", 70),
-            ("rev_yoy", "營收YoY", 70),
-            ("holder_w", "法人買賣", 80),  # 顯示張數
-            ("eps_acc", "累計EPS", 70)
-        ]
-
-        self.init_data()
         self.init_ui()
-
-    def init_data(self):
-        """ 載入所有需要的靜態資料與彙總表 """
-        self.indicator_index = load_indicator_index()
-
-        # 1. 股票基本資料
-        try:
-            self.stock_list_df = pd.read_csv("data/stock_list.csv", dtype=str)
-            self.stock_list_df.set_index('stock_id', inplace=True)
-            # 處理欄位名稱 (轉小寫去空白)
-            self.stock_list_df.columns = [c.lower().strip() for c in self.stock_list_df.columns]
-        except Exception:
-            self.stock_list_df = pd.DataFrame()
-
-        # 2. 載入全市場月營收 (來自 crawler_bulk_summary.py)
-        self.rev_data = {}
-        try:
-            rev_path = Path("data/summary/all_revenue.csv")
-            if rev_path.exists():
-                df = pd.read_csv(rev_path, dtype=str)
-                df.columns = [c.lower().strip() for c in df.columns]
-
-                for _, row in df.iterrows():
-                    sid = row.get('stock_id')
-                    if sid:
-                        self.rev_data[str(sid)] = {
-                            'mom': row.get('mom', '-'),
-                            'yoy': row.get('yoy', '-')
-                        }
-        except Exception as e:
-            print(f"⚠️ 載入營收資料失敗: {e}")
-
-        # 3. 載入全市場籌碼 (來自 crawler_bulk_summary.py)
-        self.chip_data = {}
-        try:
-            chip_path = Path("data/summary/all_chips.csv")
-            if chip_path.exists():
-                df = pd.read_csv(chip_path, dtype=str)
-                df.columns = [c.lower().strip() for c in df.columns]
-                # 欄位是 stock_id, net_buy, net_buy_sheets
-                for _, row in df.iterrows():
-                    sid = row.get('stock_id')
-                    if sid:
-                        self.chip_data[str(sid)] = row.get('net_buy_sheets', '-')
-        except Exception as e:
-            print(f"⚠️ 載入籌碼資料失敗: {e}")
+        self.load_stock_list()
+        self.load_data()
 
     def init_ui(self):
-        main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # --- 左側：控制面板 ---
-        control_panel = QWidget()
-        control_panel.setFixedWidth(280)
-        control_panel.setStyleSheet("background: #111; border-right: 1px solid #333;")
-        c_layout = QVBoxLayout(control_panel)
+        control_widget = QWidget()
+        control_widget.setFixedWidth(280)
+        # 深灰底，邊框
+        control_widget.setStyleSheet("background-color: #1A1A1A; border-right: 1px solid #333;")
+        ctrl_layout = QVBoxLayout(control_widget)
+        ctrl_layout.setSpacing(12)
+        ctrl_layout.setContentsMargins(10, 15, 10, 15)
 
-        title = QLabel("策略選股濾網")
-        title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 16px; margin-bottom: 10px;")
-        c_layout.addWidget(title)
+        # 標題
+        title = QLabel("🎯 戰略選股濾網")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #00E5FF; border: none;")
+        ctrl_layout.addWidget(title)
 
-        # 🔥 2. 執行按鈕 (直接移到標題下方)
-        btn_run = QPushButton("⚡ 執行篩選")
-        btn_run.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_run.setFixedHeight(45)  # 稍微加大
-        btn_run.setStyleSheet("""
-                    QPushButton { 
-                        background: #00E5FF; color: #000; font-weight: bold; font-size: 15px; border-radius: 5px; 
-                    }
-                    QPushButton:hover { background: #00FFFF; }
-                    QPushButton:pressed { background: #00CCCC; }
-                """)
-        btn_run.clicked.connect(self.run_screening)
-        c_layout.addWidget(btn_run)
-        # Logic Group
-        logic_group = QGroupBox("篩選邏輯")
-        logic_group.setStyleSheet(
-            "QGroupBox { border: 1px solid #444; margin-top: 10px; color: #DDD; font-weight: bold; }")
-        l_layout = QHBoxLayout(logic_group)
+        # 功能按鈕
+        btn_layout = QHBoxLayout()
+        self.btn_reload = QPushButton("🔄 重新載入")
+        self.btn_reload.setToolTip("當您在後台執行完運算腳本後，\n點此按鈕可立即讀取最新數據，無需重啟程式。")
+        self.btn_reload.setStyleSheet("""
+            QPushButton { background: #333; color: white; border: 1px solid #555; padding: 6px; border-radius: 4px; }
+            QPushButton:hover { border-color: #00E5FF; background: #444; }
+        """)
+        self.btn_reload.clicked.connect(self.load_data)
 
-        self.rb_intersect = QRadioButton("交集 (完全符合)")
-        self.rb_union = QRadioButton("聯集 (符合任一)")
-        self.rb_intersect.setChecked(True)
+        self.btn_cols = QPushButton("👁️ 欄位顯示")
+        self.btn_cols.setToolTip("開啟視窗勾選想要顯示的欄位")
+        self.btn_cols.setStyleSheet(self.btn_reload.styleSheet())
+        self.btn_cols.clicked.connect(self.open_column_selector)
 
-        self.logic_btn_group = QButtonGroup(self)
-        self.logic_btn_group.addButton(self.rb_intersect)
-        self.logic_btn_group.addButton(self.rb_union)
-        self.logic_btn_group.buttonClicked.connect(self.run_screening)
+        btn_layout.addWidget(self.btn_reload)
+        btn_layout.addWidget(self.btn_cols)
+        ctrl_layout.addLayout(btn_layout)
 
-        for rb in [self.rb_union, self.rb_intersect]:
-            rb.setStyleSheet(
-                "QRadioButton { color: #BBB; } QRadioButton::indicator:checked { background-color: #00E5FF; border: 2px solid #00E5FF; border-radius: 6px; }")
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet("color: #444;")
+        ctrl_layout.addWidget(line)
 
-        l_layout.addWidget(self.rb_intersect)
-        l_layout.addWidget(self.rb_union)
-        c_layout.addWidget(logic_group)
+        # 1. 產業
+        lbl_ind = QLabel("📂 產業類別:")
+        lbl_ind.setStyleSheet("color: #DDD; font-weight: bold; border: none;")
+        ctrl_layout.addWidget(lbl_ind)
 
-        # Checkboxes
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("border: none; background: transparent;")
-
-        scroll_content = QWidget()
-        self.checks_layout = QVBoxLayout(scroll_content)
-        self.checks_layout.setSpacing(8)
-
-        self.checkboxes = {}
-        for text, key in self.strategies_map.items():
-            chk = QCheckBox(text)
-            chk.setStyleSheet("""
-                QCheckBox { color: #CCC; font-size: 14px; spacing: 5px; }
-                QCheckBox::indicator { width: 18px; height: 18px; border: 1px solid #555; border-radius: 3px; background: #222; }
-                QCheckBox::indicator:checked { background: #00E5FF; border-color: #00E5FF; }
-                QCheckBox:disabled { color: #555; }
-            """)
-
-            if key not in self.indicator_index:
-                chk.setText(f"{text} (無資料)")
-                #chk.setEnabled(False)
-
-            self.checkboxes[key] = chk
-            self.checks_layout.addWidget(chk)
-
-        self.checks_layout.addStretch()
-        scroll.setWidget(scroll_content)
-        c_layout.addWidget(scroll)
-
-        # --- 右側：結果表格 ---
-        result_panel = QWidget()
-        result_panel.setStyleSheet("background: #000;")
-        r_layout = QVBoxLayout(result_panel)
-
-        self.lbl_status = QLabel("請勾選左側策略並執行篩選...")
-        self.lbl_status.setStyleSheet("color: #888; padding: 5px;")
-        r_layout.addWidget(self.lbl_status)
-
-        self.table = QTableWidget()
-        self.setup_table()
-        r_layout.addWidget(self.table)
-
-        splitter.addWidget(control_panel)
-        splitter.addWidget(result_panel)
-        splitter.setStretchFactor(1, 1)
-
-        main_layout.addWidget(splitter)
-
-    def setup_table(self):
-        col_names = [c[1] for c in self.columns_config]
-        self.table.setColumnCount(len(col_names))
-        self.table.setHorizontalHeaderLabels(col_names)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
-
-        # 在 setup_table 方法中修改 styleSheet
-        self.table.setStyleSheet("""
-                    QTableWidget { 
-                        background: #000; 
-                        border: none; 
-                        gridline-color: #222; 
-                        color: #dcdcdc; 
-                        font-size: 14px; 
-                        selection-background-color: #333; /* 選中時的背景 */
-                        alternate-background-color: #151515; /* 🔥 偶數行的背景色 (深灰，不要全白) */
-                    }
-                    QTableWidget::item { padding: 4px; border-bottom: 1px solid #111; }
-                    QHeaderView::section { background: #111; color: #BBB; padding: 4px; border: none; font-weight: bold; }
-                """)
-        self.table.setAlternatingRowColors(True)  # 確保這行有開
-
-        header = self.table.horizontalHeader()
-        for i, cfg in enumerate(self.columns_config):
-            header.setSectionResizeMode(i, QHeaderView.ResizeMode.Fixed)
-            self.table.setColumnWidth(i, cfg[2])
-
-        self.table.cellDoubleClicked.connect(self.on_row_double_clicked)
-        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.table.customContextMenuRequested.connect(self.open_context_menu)
-
-    def run_screening(self):
-        selected_keys = [k for k, chk in self.checkboxes.items() if chk.isChecked()]
-
-        if not selected_keys:
-            self.table.setRowCount(0)
-            self.lbl_status.setText("⚠️ 請至少勾選一個策略")
-            return
-
-        self.lbl_status.setText("篩選運算中...")
-        QApplication.processEvents()
-
-        # 設定回溯天數
-        lookback_days = 3
-        import datetime
-        today = datetime.date.today()
-        cutoff_date_str = (today - datetime.timedelta(days=lookback_days)).strftime('%Y-%m-%d')
-
-        sets = []
-        for key in selected_keys:
-            stock_data = self.indicator_index.get(key, {})
-            valid_stocks = set()
-            for stock_id, dates in stock_data.items():
-                if dates:
-                    last_date = dates[-1]
-                    if last_date >= cutoff_date_str:
-                        valid_stocks.add(stock_id)
-            sets.append(valid_stocks)
-
-        if not sets:
-            final_stocks = set()
-        else:
-            if self.rb_intersect.isChecked():
-                final_stocks = set.intersection(*sets)
-            else:
-                final_stocks = set.union(*sets)
-
-        final_list = sorted(list(final_stocks))
-
-        self.lbl_status.setText(f"篩選完成：近 {lookback_days} 日符合共 {len(final_list)} 檔")
-        self.populate_table(final_list)
-
-    def populate_table(self, stock_ids):
-        self.table.setRowCount(0)
-        self.table.setSortingEnabled(False)
-
-        # 市場代號轉譯表
-        market_map = {
-            "上市": "TW", "TWSE": "TW", "TSE": "TW", "TW": "TW",
-            "上櫃": "TWO", "TPEX": "TWO", "OTC": "TWO", "TWO": "TWO"
-        }
-
-        for row_idx, stock_id in enumerate(stock_ids):
-            self.table.insertRow(row_idx)
-
-            # 1. 取得基本資料 (修正 row 未定義的問題)
-            market = "TW"  # 預設值
-            name = stock_id
-
-            # 🔥 修正重點：先檢查並取得 row 物件
-            if not self.stock_list_df.empty and stock_id in self.stock_list_df.index:
-                row = self.stock_list_df.loc[stock_id]  # 定義 row
-
-                # 取得名稱
-                name = row.get('name', stock_id)
-
-                # 取得市場並標準化
-                raw_market = str(row.get('market', 'TW')).strip().upper()
-                market = market_map.get(raw_market, "TW")
-
-            # 2. 讀取 K 線 (維持原樣)
-            price = 0.0
-            pct_5d = 0.0
-            pct_3m = 0.0
-            pct_6m = 0.0
-
-            parquet_path = Path(f"data/cache/tw/{stock_id}_{market}.parquet")
-            if parquet_path.exists():
-                try:
-                    df = pd.read_parquet(parquet_path)
-                    if not df.empty:
-                        closes = df['Close'].values
-                        price = closes[-1]
-
-                        def calc_pct(days):
-                            if len(closes) > days:
-                                ref = closes[-(days + 1)]
-                                if ref > 0: return ((price - ref) / ref) * 100
-                            return 0.0
-
-                        pct_5d = calc_pct(5)
-                        pct_3m = calc_pct(60)
-                        pct_6m = calc_pct(120)
-                except:
-                    pass
-
-            # 3. 查表取得外部資料 (維持原樣)
-            rev_info = self.rev_data.get(stock_id, {})
-            rev_mom = rev_info.get('mom', '-')
-            rev_yoy = rev_info.get('yoy', '-')
-            holder_w = self.chip_data.get(stock_id, '-')
-            eps_acc = "-"
-
-            # 4. 填入表格 (維持原樣)
-            item_id = QTableWidgetItem(stock_id)
-            item_id.setData(Qt.ItemDataRole.UserRole, f"{stock_id}_{market}")  # 這裡 market 正確了，點擊後 EPS 才會對
-            self.table.setItem(row_idx, 0, item_id)
-
-            self.table.setItem(row_idx, 1, QTableWidgetItem(name))
-
-            it_price = QTableWidgetItem(f"{price:.1f}")
-            it_price.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.table.setItem(row_idx, 2, it_price)
-
-            for c_idx, val in enumerate([pct_5d, pct_3m, pct_6m]):
-                txt = f"{val:+.1f}%" if val != 0 else "-"
-                it = QTableWidgetItem(txt)
-                self._colorize_item(it, val)
-                self.table.setItem(row_idx, 3 + c_idx, it)
-
-            for c_idx, val_str in enumerate([rev_mom, rev_yoy]):
-                txt = str(val_str) + "%" if val_str != '-' else '-'
-                it = QTableWidgetItem(txt)
-                self._colorize_text_val(it, val_str)
-                self.table.setItem(row_idx, 6 + c_idx, it)
-
-            txt_holder = str(holder_w) if holder_w != '-' else '-'
-            it_holder = QTableWidgetItem(txt_holder)
-            self._colorize_text_val(it_holder, holder_w)
-            self.table.setItem(row_idx, 8, it_holder)
-
-            it_eps = QTableWidgetItem(eps_acc)
-            it_eps.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(row_idx, 9, it_eps)
-
-        self.table.setSortingEnabled(True)
-
-    def _colorize_item(self, item, val):
-        """ 處理數值型態的上色 """
-        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        if val > 0:
-            item.setForeground(QColor("#FF3333"))
-        elif val < 0:
-            item.setForeground(QColor("#00FF00"))
-        else:
-            item.setForeground(QColor("#dcdcdc"))
-
-    def _colorize_text_val(self, item, text_val):
-        """ 處理字串型態的上色 """
-        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        try:
-            # 移除 % 或 , 等符號後轉 float 判斷正負
-            clean_val = str(text_val).replace('%', '').replace(',', '').strip()
-            val = float(clean_val)
-            if val > 0:
-                item.setForeground(QColor("#FF3333"))
-            elif val < 0:
-                item.setForeground(QColor("#00FF00"))
-            else:
-                item.setForeground(QColor("#dcdcdc"))
-        except:
-            item.setForeground(QColor("#dcdcdc"))
-
-    def on_row_double_clicked(self, row, col):
-        item = self.table.item(row, 0)
-        full_id = item.data(Qt.ItemDataRole.UserRole)
-        self.stock_clicked_signal.emit(full_id)
-
-        # 記得在 __init__ 或 init_data 裡先讀取 watchlist.json 取得群組名稱
-        # 或者簡單一點，直接寫死預設群組，或透過 Signal 請求主程式提供群組列表
-        # 這裡示範：發送 Signal 給 MainApp，讓 MainApp 去處理「加入」的動作
-
-     # 1. 新增 Signal
-    request_add_watchlist = pyqtSignal(str, str)  # (stock_id, group_name)
-
-    def open_context_menu(self, pos):
-        # 🔥 設定選單樣式 (修正黑底黑字問題)
-        menu_style = """
-            QMenu {
-                background-color: #222; /* 深灰底 */
-                border: 1px solid #444;
-                color: #FFF; /* 白字 */
+        self.combo_industry = QComboBox()
+        # 下拉選單 CSS：強制白字，解決黑字問題
+        self.combo_industry.setStyleSheet("""
+            QComboBox { 
+                padding: 5px; background: #252525; color: #FFF; border: 1px solid #555; border-radius: 3px;
             }
-            QMenu::item {
-                padding: 6px 24px;
-                background-color: transparent;
+            QComboBox::drop-down { border: none; }
+            QComboBox::down-arrow { image: none; border-left: 2px solid #888; border-bottom: 2px solid #888; width: 8px; height: 8px; transform: rotate(-45deg); margin-right: 5px;}
+            QComboBox QAbstractItemView {
+                background: #333; color: #FFF; selection-background-color: #00E5FF; selection-color: #000;
             }
-            QMenu::item:selected {
-                background-color: #00E5FF; /* 選中變亮青色 */
-                color: #000; /* 選中變黑字 */
-            }
+        """)
+        self.combo_industry.addItem("全部")
+        self.combo_industry.currentIndexChanged.connect(self.apply_filters)
+        ctrl_layout.addWidget(self.combo_industry)
+
+        # 2. 數值篩選
+        gb_val = QGroupBox("📊 數值過濾")
+        # 群組框 CSS
+        gb_val.setStyleSheet("""
+            QGroupBox { border: 1px solid #444; margin-top: 8px; padding-top: 15px; font-weight: bold; color: #00E5FF; }
+        """)
+        gb_layout = QVBoxLayout(gb_val)
+        gb_layout.setSpacing(10)
+
+        # SpinBox CSS：修復上下按鈕
+        spin_style = """
+            QDoubleSpinBox { background: #222; color: #FFF; border: 1px solid #555; padding: 2px; }
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 15px; background: #444; }
+            QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover { background: #666; }
         """
 
-        menu = QMenu()
-        menu.setStyleSheet(menu_style)  # 套用樣式
+        def add_filter_row(label, spin_widget):
+            row = QHBoxLayout()
+            lbl = QLabel(label)
+            lbl.setStyleSheet("color: #CCC; border: none;")
+            row.addWidget(lbl)
+            spin_widget.setStyleSheet(spin_style)
+            spin_widget.valueChanged.connect(self.apply_filters)
+            row.addWidget(spin_widget)
+            gb_layout.addLayout(row)
 
-        # 建立子選單
-        add_menu = QMenu("➕ 加入自選清單", self)
-        add_menu.setStyleSheet(menu_style)  # 子選單也要套用樣式
+        self.spin_yield = QDoubleSpinBox()
+        self.spin_yield.setSuffix("%")
+        self.spin_yield.setRange(0, 20)
+        self.spin_yield.setSingleStep(0.5)
+        add_filter_row("殖利率 >", self.spin_yield)
 
-        # 讀取群組清單
-        groups = ["我的持股", "觀察名單"]
+        self.spin_roc20 = QDoubleSpinBox()
+        self.spin_roc20.setSuffix("%")
+        self.spin_roc20.setRange(-50, 500)
+        add_filter_row("月漲幅 >", self.spin_roc20)
+
+        self.spin_pe = QDoubleSpinBox()
+        self.spin_pe.setRange(0, 200)
+        add_filter_row("本益比 <", self.spin_pe)
+        self.spin_pe.setValue(0)  # 0 代表不限
+
+        self.spin_vol_ratio = QDoubleSpinBox()
+        self.spin_vol_ratio.setRange(0, 50)
+        self.spin_vol_ratio.setSingleStep(0.1)
+        add_filter_row("量比 >", self.spin_vol_ratio)
+
+        ctrl_layout.addWidget(gb_val)
+
+        # 3. 特徵標籤
+        lbl_tag = QLabel("🔥 強勢特徵 (符合任一):")
+        lbl_tag.setStyleSheet("color: #DDD; font-weight: bold; margin-top: 10px; border: none;")
+        ctrl_layout.addWidget(lbl_tag)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("background: transparent; border: none;")
+        self.tag_container = QWidget()
+        self.tag_layout = QVBoxLayout(self.tag_container)
+        self.tag_layout.setContentsMargins(2, 0, 0, 0)
+        self.tag_layout.setSpacing(2)
+        scroll.setWidget(self.tag_container)
+        ctrl_layout.addWidget(scroll)
+
+        # 狀態
+        self.lbl_status = QLabel("就緒")
+        self.lbl_status.setStyleSheet("color: #888; margin-top: 5px; border: none; font-size: 12px;")
+        ctrl_layout.addWidget(self.lbl_status)
+
+        self.chk_tags = []
+
+        # --- 右側：表格 ---
+        table_widget = QWidget()
+        table_layout = QVBoxLayout(table_widget)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.table_view = QTableView()
+        self.table_view.setAlternatingRowColors(True)
+        self.table_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table_view.setSortingEnabled(True)
+
+        self.table_view.setStyleSheet("""
+            QTableView { 
+                background-color: #080808; 
+                color: #E0E0E0; 
+                gridline-color: #333; 
+                alternate-background-color: #121212;
+                font-size: 14px;
+                border: none;
+            }
+            QHeaderView::section { 
+                background-color: #2D2D2D; 
+                color: #FFF; 
+                padding: 5px; 
+                border: none; 
+                border-right: 1px solid #444;
+                border-bottom: 1px solid #444;
+                font-weight: bold;
+            }
+            QHeaderView::section:hover { background-color: #444; }
+            QHeaderView::down-arrow { image: none; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 5px solid #00E5FF; margin-right: 5px; }
+            QHeaderView::up-arrow { image: none; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 5px solid #00E5FF; margin-right: 5px; }
+
+            QTableView::item:selected { background-color: #004466; color: #FFF; }
+            QToolTip { background-color: #222; color: #FFF; border: 1px solid #00E5FF; padding: 5px; }
+        """)
+
+        self.model = StrategyTableModel()
+        # 使用自訂的 3段式排序 Proxy
+        self.proxy_model = ThreeStateSortProxy()
+        self.proxy_model.setSourceModel(self.model)
+        self.table_view.setModel(self.proxy_model)
+
+        self.table_view.doubleClicked.connect(self.on_table_double_clicked)
+        self.table_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table_view.customContextMenuRequested.connect(self.open_context_menu)
+
+        table_layout.addWidget(self.table_view)
+
+        splitter.addWidget(control_widget)
+        splitter.addWidget(table_widget)
+        splitter.setStretchFactor(1, 1)
+        layout.addWidget(splitter)
+
+    def load_stock_list(self):
         try:
-            with open("data/watchlist.json", "r", encoding='utf-8') as f:
-                data = json.load(f)
-                groups = list(data.keys())
+            path = Path(__file__).resolve().parent.parent / "data" / "stock_list.csv"
+            if path.exists():
+                self.stock_list_df = pd.read_csv(path, dtype=str)
+                if 'stock_id' in self.stock_list_df.columns:
+                    self.stock_list_df.set_index('stock_id', inplace=True)
         except:
             pass
 
-        for group in groups:
-            action = QAction(group, self)
-            # 使用 lambda 綁定參數
-            action.triggered.connect(lambda checked, g=group: self.add_to_watchlist(g))
-            add_menu.addAction(action)
+    def load_data(self):
+        try:
+            base_path = Path(__file__).resolve().parent.parent
+            f_path = base_path / "data" / "strategy_results" / "factor_snapshot.parquet"
+            if not f_path.exists():
+                f_path = base_path / "data" / "strategy_results" / "戰情室今日快照_全中文版.csv"
 
+            if not f_path.exists():
+                self.lbl_status.setText("❌ 無數據")
+                return
+
+            if f_path.suffix == '.parquet':
+                df = pd.read_parquet(f_path)
+            else:
+                df = pd.read_csv(f_path)
+
+            if df.empty: return
+
+            self.full_df = df.copy()
+            if 'sid' in self.full_df.columns:
+                self.full_df['sid'] = self.full_df['sid'].astype(str).str.strip()
+
+            # 強制轉換數值，確保排序正確
+            for col in self.full_df.columns:
+                if '漲幅' in col or 'sum' in col or col in ['現價', '量比', 'VCP壓縮', 'pe', 'pbr', 'yield']:
+                    self.full_df[col] = pd.to_numeric(self.full_df[col], errors='coerce').fillna(0)
+
+            self.update_industry_combo()
+            self._update_tag_checkboxes()
+            self.apply_filters()
+
+            self.lbl_status.setText(f"數據更新時間: {pd.Timestamp.now().strftime('%H:%M:%S')}")
+
+        except Exception as e:
+            print(f"❌ 載入失敗: {e}")
+            self.lbl_status.setText("數據錯誤")
+
+    def update_industry_combo(self):
+        if 'industry' in self.full_df.columns:
+            industries = ["全部"] + sorted(self.full_df['industry'].dropna().unique().tolist())
+            curr = self.combo_industry.currentText()
+            self.combo_industry.blockSignals(True)
+            self.combo_industry.clear()
+            self.combo_industry.addItems(industries)
+            if curr in industries: self.combo_industry.setCurrentText(curr)
+            self.combo_industry.blockSignals(False)
+
+    def _update_tag_checkboxes(self):
+        # 清空
+        while self.tag_layout.count():
+            child = self.tag_layout.takeAt(0)
+            if child.widget(): child.widget().deleteLater()
+        self.chk_tags.clear()
+
+        if '強勢特徵' not in self.full_df.columns: return
+
+        all_tags = set()
+        for tags in self.full_df['強勢特徵'].dropna():
+            for t in str(tags).split(','):
+                t = t.strip()
+                if t: all_tags.add(t)
+
+        for tag in sorted(list(all_tags)):
+            chk = QCheckBox(tag)
+            # Checkbox CSS: 白字
+            chk.setStyleSheet("QCheckBox { color: #EEE; } QCheckBox::indicator:checked { background-color: #00E5FF; }")
+            # 設定提示文字
+            tip = TAG_DESCRIPTIONS.get(tag, "策略特徵")
+            chk.setToolTip(tip)
+
+            chk.stateChanged.connect(self.apply_filters)
+            self.tag_layout.addWidget(chk)
+            self.chk_tags.append(chk)
+
+    def open_column_selector(self):
+        """ 開啟欄位選擇視窗 """
+        dlg = ColumnSelectorDialog(COLUMN_CONFIG, self)
+        if dlg.exec():
+            new_selection = dlg.get_selection()
+            for k, v in new_selection.items():
+                COLUMN_CONFIG[k]['show'] = v
+            self.apply_filters()
+
+    def apply_filters(self):
+        if self.full_df.empty: return
+        df = self.full_df.copy()
+
+        # 1. 產業
+        ind = self.combo_industry.currentText()
+        if ind != "全部": df = df[df['industry'] == ind]
+
+        # 2. 數值
+        if self.spin_yield.value() > 0 and 'yield' in df.columns:
+            df = df[df['yield'] >= self.spin_yield.value()]
+
+        if self.spin_roc20.value() != 0 and '漲幅20d' in df.columns:
+            df = df[df['漲幅20d'] >= self.spin_roc20.value()]
+
+        if self.spin_pe.value() > 0 and 'pe' in df.columns:
+            df = df[(df['pe'] > 0) & (df['pe'] <= self.spin_pe.value())]
+
+        if self.spin_vol_ratio.value() > 0 and '量比' in df.columns:
+            df = df[df['量比'] >= self.spin_vol_ratio.value()]
+
+        # 3. 標籤
+        selected_tags = [chk.text() for chk in self.chk_tags if chk.isChecked()]
+        if selected_tags and '強勢特徵' in df.columns:
+            mask = df['強勢特徵'].apply(lambda x: any(t in str(x) for t in selected_tags))
+            df = df[mask]
+
+        # 4. 顯示資料
+        visible_cols = [k for k, v in COLUMN_CONFIG.items() if v['show'] and k in df.columns]
+        self.display_df = df[visible_cols].copy()
+
+        # 預設排序 (若原本沒排序)
+        if '漲幅20d' in self.display_df.columns and self.proxy_model.sort_state == 0:
+            self.display_df = self.display_df.sort_values('漲幅20d', ascending=False)
+
+        self.model.update_data(self.display_df, visible_cols)
+        # 刷新 Proxy
+        self.proxy_model.invalidate()
+
+        self.lbl_status.setText(f"篩選結果: {len(self.display_df)} 檔")
+
+        # 調整欄寬
+        header = self.table_view.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        for i, col in enumerate(visible_cols):
+            if col == '強勢特徵':
+                header.resizeSection(i, 200)
+            elif col == 'name':
+                header.resizeSection(i, 80)
+            else:
+                header.resizeSection(i, 70)
+
+    def on_table_double_clicked(self, index):
+        # 透過 Proxy 找回原始 Row
+        src_idx = self.proxy_model.mapToSource(index)
+        row = src_idx.row()
+        sid = str(self.display_df.iloc[row]['sid'])
+
+        # 自動判斷市場
+        market = "TW"
+        if not self.stock_list_df.empty and sid in self.stock_list_df.index:
+            m_code = str(self.stock_list_df.loc[sid, 'market']).strip().upper()
+            if m_code in ['TWO', 'OTC', '上櫃']: market = "TWO"
+
+        full_id = f"{sid}_{market}"
+        print(f"📡 發送訊號: {full_id}")
+        self.stock_clicked_signal.emit(full_id)
+
+    def open_context_menu(self, pos):
+        menu = QMenu()
+        menu.setStyleSheet(
+            "QMenu { background: #222; color: #FFF; border: 1px solid #555; } QMenu::item:selected { background: #004466; }")
+
+        add_menu = QMenu("➕ 加入自選群組", self)
+        groups = ["我的持股", "觀察名單", "高股息"]
+        for g in groups:
+            action = QAction(g, self)
+            action.triggered.connect(lambda checked, group=g: self.add_to_watchlist(group))
+            add_menu.addAction(action)
         menu.addMenu(add_menu)
-        menu.exec(self.table.viewport().mapToGlobal(pos))
+        menu.exec(QCursor.pos())
 
     def add_to_watchlist(self, group_name):
-        rows = self.table.selectionModel().selectedRows()
+        rows = self.table_view.selectionModel().selectedRows()
         count = 0
-        for r in rows:
-            stock_id = self.table.item(r.row(), 0).text()
-            # 發送訊號給 MainApp，由 MainApp 去呼叫 stock_list_module 的 add_stock
-            self.request_add_watchlist.emit(stock_id, group_name)
+        for idx in rows:
+            src_idx = self.proxy_model.mapToSource(idx)
+            sid = str(self.display_df.iloc[src_idx.row()]['sid'])
+            self.request_add_watchlist.emit(sid, group_name)
             count += 1
-
-        # 簡單回饋
-        # QMessageBox.information(self, "完成", f"已將 {count} 檔股票加入【{group_name}】")
+        QMessageBox.information(self, "完成", f"已加入 {count} 檔至 {group_name}")
