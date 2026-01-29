@@ -10,17 +10,25 @@ __pycache__/
 Thumbs.db
 
 # --- 數據資料夾 (核心忽略區) ---
-# 這些資料夾在本地產生的檔案「絕對不會」被 Git 偵測到
-# 雲端 GitHub Actions 會透過 git add -f 強制突破此封鎖來存檔
+# 先忽略 data 下的所有東西 (作為基底)
+data/*
+
+# --- 【關鍵修正】例外放行區 (用 ! 來反向追蹤) ---
+# 告訴 Git：「data 下的這些資料夾我要留著，不要忽略！」
+!data/raw/
+!data/clean/
+!data/stock_list.csv
+
+# (選擇性) 如果 goodinfo 你也想保留，就把下面這行前面的 # 拿掉
+# !data/goodinfo/
+
+# --- 再次確保忽略垃圾 (雙重保險) ---
+# 即使放行了資料夾，裡面的暫存檔還是要擋掉
 data/cache/
 data/indicators/
-data/goodinfo/
 data/temp/
-
-# --- 特定數據檔案 ---
-data/stock_list.csv
-data/chips_revenue_raw.csv
 data/戰情室終極版.csv
+data/chips_revenue_raw.csv
 
 # --- 日誌與暫存 ---
 utils/logs/
@@ -28,4 +36,3 @@ utils/logs/
 temp/
 scripts/test_*.py
 scripts/verify_*.py
-data/
