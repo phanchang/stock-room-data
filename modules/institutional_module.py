@@ -6,14 +6,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
-                             QTableWidgetItem, QHeaderView, QApplication, QLabel)
+                             QTableWidgetItem, QHeaderView, QApplication, QLabel, QPushButton, QSizePolicy)
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtCore import pyqtSignal, Qt, QThread
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-# 確保引用正確
 from utils.crawler_fa import get_fa_ren
 
 plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei']
@@ -44,6 +43,8 @@ class InstitutionalModule(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.current_stock_id = ""
+        self.current_stock_name = ""
         self.raw_df = None
         self.plot_df = None
         self.worker = None
@@ -64,29 +65,53 @@ class InstitutionalModule(QWidget):
 
         # 1. Header
         header_widget = QWidget()
-        header_widget.setFixedHeight(35)
+        header_widget.setFixedHeight(45)
         header_widget.setStyleSheet("background-color: #050505; border-bottom: 1px solid #333;")
-
         header_layout = QHBoxLayout(header_widget)
         header_layout.setContentsMargins(10, 0, 10, 0)
+        header_layout.setSpacing(15)
 
-        title = QLabel("三大法人買賣超 (即時爬蟲)")
-        title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 14px;")
+        self.lbl_stock_info = QLabel("請選擇股票")
+        self.lbl_stock_info.setStyleSheet(
+            "color: #FFFF00; font-weight: bold; font-size: 18px; font-family: 'Microsoft JhengHei';")
 
-        self.info_label = QLabel(" 移至圖表查看數據")
-        self.info_label.setFixedWidth(600)
-        self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 12px; color: #888;")
-        self.info_label.setTextFormat(Qt.TextFormat.RichText)
+        sep = QLabel("|")
+        sep.setStyleSheet("color: #444; font-size: 16px;")
 
+        title = QLabel("三大法人買賣超")
+        title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 16px;")
+
+        self.info_label = QLabel("移動滑鼠查看數據...")
+        self.info_label.setFixedWidth(400)
+        self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 13px; color: #888;")
+
+        self.lbl_update_date = QLabel("")
+        self.lbl_update_date.setStyleSheet(
+            "color: #FF8800; font-size: 12px; border: 1px solid #555; padding: 2px 4px; border-radius: 3px;")
+        self.lbl_update_date.setVisible(False)
+
+        self.btn_toggle_chart = QPushButton("切換視圖")
+        self.btn_toggle_chart.setFixedSize(80, 26)
+        self.btn_toggle_chart.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_toggle_chart.setStyleSheet("""
+            QPushButton { background: #333; color: #CCC; border: 1px solid #555; border-radius: 3px; font-size: 12px; }
+            QPushButton:hover { background: #555; color: white; }
+        """)
+        self.btn_toggle_chart.clicked.connect(self.toggle_chart_visibility)
+
+        header_layout.addWidget(self.lbl_stock_info)
+        header_layout.addWidget(sep)
         header_layout.addWidget(title)
         header_layout.addWidget(self.info_label)
         header_layout.addStretch()
-
+        header_layout.addWidget(self.lbl_update_date)
+        header_layout.addWidget(self.btn_toggle_chart)
         layout.addWidget(header_widget)
 
         # 2. Canvas
         self.fig = Figure(facecolor='#000000')
         self.canvas = FigureCanvas(self.fig)
+        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout.addWidget(self.canvas, stretch=7)
 
         # 3. Table
@@ -94,8 +119,9 @@ class InstitutionalModule(QWidget):
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(["期間", "外資", "投信", "自營", "合計"])
         self.table.setStyleSheet("""
-            QTableWidget { background-color: #000000; gridline-color: #333; color: #FFF; border: none; font-size: 13px; }
-            QHeaderView::section { background-color: #1A1A1A; color: #00FFFF; font-weight: bold; height: 32px; border: 1px solid #333; }
+            QTableWidget { background-color: #000000; gridline-color: #333; color: #FFF; border: none; font-size: 15px; font-family: 'Consolas', 'Microsoft JhengHei'; }
+            QHeaderView::section { background-color: #1A1A1A; color: #00FFFF; font-weight: bold; height: 32px; border: 1px solid #333; font-size: 13px; }
+            QTableWidget::item { padding: 4px; }
         """)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setVisible(False)
@@ -103,8 +129,31 @@ class InstitutionalModule(QWidget):
 
         self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
 
-    def load_inst_data(self, stock_id):
-        self.info_label.setText("⏳ 正在連線 MoneyDJ...")
+    def toggle_chart_visibility(self):
+        is_visible = self.canvas.isVisible()
+        self.canvas.setVisible(not is_visible)
+
+        if is_visible:
+            self.btn_toggle_chart.setText("顯示圖表")
+            self.btn_toggle_chart.setStyleSheet("background: #004444; color: white; border: 1px solid #00E5FF;")
+        else:
+            self.btn_toggle_chart.setText("隱藏圖表")
+            self.btn_toggle_chart.setStyleSheet("background: #333; color: #CCC; border: 1px solid #555;")
+
+    def load_inst_data(self, stock_id, stock_name=""):
+        self.current_stock_id = stock_id
+        self.current_stock_name = stock_name
+
+        display_id = stock_id.split('_')[0]
+
+        # 🔥 修正：顯示代號+名稱
+        if stock_name:
+            self.lbl_stock_info.setText(f"{display_id} {stock_name}")
+        else:
+            self.lbl_stock_info.setText(f"{display_id}")
+
+        self.info_label.setText("⏳ 更新數據中...")
+        self.lbl_update_date.setVisible(False)
         self.table.setRowCount(0)
         self.fig.clear()
         self.canvas.draw()
@@ -121,15 +170,17 @@ class InstitutionalModule(QWidget):
             self.info_label.setText("❌ 查無資料")
             return
 
-        self.info_label.setText("✅ 資料更新完成")
-
+        self.info_label.setText("✅ 更新完成")
         df['Date'] = pd.to_datetime(df['日期'])
-
-        # 🟢 修正：直接使用原始數據，不再除以 1000
-        # 如果爬蟲抓下來是股數，這裡就會顯示股數；如果是張數，就是張數。
         df['Foreign'] = df['外資買賣超股數']
         df['Trust'] = df['投信買賣超股數']
         df['Dealer'] = df['自營商買賣超股數']
+
+        # 更新日期
+        if not df.empty:
+            last_date = df['Date'].max()
+            self.lbl_update_date.setText(f"資料日期: {last_date.strftime('%Y-%m-%d')}")
+            self.lbl_update_date.setVisible(True)
 
         self.raw_df = df
         self.update_ui(df)
@@ -169,6 +220,8 @@ class InstitutionalModule(QWidget):
         for spine in self.ax1.spines.values():
             spine.set_edgecolor('#444')
 
+        self.ax1.legend(facecolor='#111', edgecolor='#333', labelcolor='white', fontsize=8, loc='upper left')
+
         self.canvas.draw()
 
         periods = [1, 5, 10, 20]
@@ -190,7 +243,7 @@ class InstitutionalModule(QWidget):
             g_total = sum(vals)
             item_t = QTableWidgetItem(f"{int(g_total):+,d}")
             item_t.setForeground(QColor("#FF3333" if g_total >= 0 else "#00FF00"))
-            item_t.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
+            item_t.setFont(QFont("Consolas", 12, QFont.Weight.Bold))
             item_t.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(i, 4, item_t)
 
@@ -219,7 +272,7 @@ class InstitutionalModule(QWidget):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     module = InstitutionalModule()
-    module.load_inst_data("2330_TW")
-    module.resize(800, 600)
+    module.load_inst_data("2330_TW", "台積電")
+    module.resize(800, 500)
     module.show()
     sys.exit(app.exec())

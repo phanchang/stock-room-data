@@ -16,13 +16,13 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.dates as mdates
 
-# 設定 matplotlib 風格
 plt.style.use('dark_background')
 plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei']
 plt.rcParams['axes.unicode_minus'] = False
 
-
 # --- 數據抓取線程 ---
+
+
 class ETFDataWorker(QThread):
     data_fetched = pyqtSignal(pd.DataFrame, str)
 
@@ -74,29 +74,24 @@ class ActiveETFModule(QWidget):
         self.current_df = None
         self.bar_data = None
         self.line_data = None
-        self.stock_market_map = {}  # 用來存儲 代號 -> 市場別 (TW/TWO)
+        self.stock_market_map = {}
 
         self.mapping = {
             "00981A": ("ezmoney", "統一-00981A (統一台股增長)"),
             "00991A": ("fhtrust", "復華-00991A (復華未來50)")
         }
 
-        # 🟢 修正 1：啟動時載入市場別資訊
         self.load_market_info()
         self.init_ui()
 
     def load_market_info(self):
-        """ 讀取 stock_list.csv 以辨識 TWO 股票 """
         csv_path = Path("data/stock_list.csv")
         if csv_path.exists():
             try:
-                # 嘗試多種編碼讀取
                 for enc in ['utf-8', 'utf-8-sig', 'big5']:
                     try:
                         df = pd.read_csv(csv_path, dtype=str, encoding=enc)
                         df.columns = [c.lower().strip() for c in df.columns]
-
-                        # 找對應欄位
                         code_col = None
                         if 'stock_id' in df.columns:
                             code_col = 'stock_id'
@@ -110,7 +105,6 @@ class ActiveETFModule(QWidget):
                                 sid = str(row[code_col]).strip()
                                 market = str(row['market']).strip().upper()
                                 self.stock_market_map[sid] = market
-                            print(f"✅ [ETF] 成功載入市場資訊: {len(self.stock_market_map)} 筆")
                             break
                     except:
                         continue
@@ -118,16 +112,12 @@ class ActiveETFModule(QWidget):
                 print(f"❌ [ETF] 讀取市場資訊失敗: {e}")
 
     def get_market_suffix(self, stock_id):
-        """ 查詢該股票是 TW 還是 TWO """
-        # 預設 TW
         return self.stock_market_map.get(str(stock_id), "TW")
 
     def init_ui(self):
         self.setStyleSheet("background-color: #0E0E0E; color: #E0E0E0;")
-
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(5, 5, 5, 5)
-
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # --- 左側面板 ---
@@ -135,19 +125,34 @@ class ActiveETFModule(QWidget):
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
-        title = QLabel("🚀 主動式基金戰情")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #00E5FF; margin-bottom: 5px;")
+        # 🔥 左側標題列
+        left_header = QWidget()
+        left_header.setFixedHeight(45)
+        left_header.setStyleSheet("background: #050505; border-bottom: 1px solid #333;")
+        lh_layout = QHBoxLayout(left_header)
+        lh_layout.setContentsMargins(5, 0, 5, 0)
+
+        lbl_title = QLabel("主動式基金")
+        lbl_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #00E5FF;")
 
         self.combo = QComboBox()
         items = [v[1] for v in self.mapping.values()]
         self.combo.addItems(items)
         self.combo.setStyleSheet("""
-            QComboBox { background: #1A1A1A; color: #FFF; border: 1px solid #333; padding: 5px; font-size: 14px; }
+            QComboBox { background: #222; color: #FFF; border: 1px solid #444; padding: 4px; font-size: 14px; }
             QComboBox::drop-down { border: none; }
         """)
         self.combo.currentIndexChanged.connect(self.on_combo_change)
 
-        # QTableWidget
+        lh_layout.addWidget(lbl_title)
+        lh_layout.addStretch()
+        left_layout.addWidget(left_header)
+        left_layout.addWidget(self.combo)
+
+        lbl_top = QLabel("🔥 持股權重排行 (Top 10)")
+        lbl_top.setStyleSheet("color: #FFD700; font-weight: bold; margin-top: 5px;")
+        left_layout.addWidget(lbl_top)
+
         self.stock_table = QTableWidget()
         self.stock_table.setColumnCount(3)
         self.stock_table.setHorizontalHeaderLabels(["代號", "名稱", "權重"])
@@ -157,9 +162,7 @@ class ActiveETFModule(QWidget):
         self.stock_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
         self.stock_table.setStyleSheet("""
-            QTableWidget { 
-                background: #121212; border: 1px solid #333; gridline-color: #222; font-size: 14px; 
-            }
+            QTableWidget { background: #121212; border: 1px solid #333; gridline-color: #222; font-size: 14px; font-family: 'Consolas', 'Microsoft JhengHei'; }
             QTableWidget::item { padding: 5px; border-bottom: 1px solid #222; }
             QTableWidget::item:selected { background: #2A2A2A; color: #00E5FF; }
             QHeaderView::section { background: #1A1A1A; color: #888; border: none; padding: 4px; font-weight: bold; }
@@ -169,12 +172,8 @@ class ActiveETFModule(QWidget):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-
         self.stock_table.cellClicked.connect(self.on_table_clicked)
 
-        left_layout.addWidget(title)
-        left_layout.addWidget(self.combo)
-        left_layout.addWidget(QLabel("🔥 持股權重排行 (Top 10)"))
         left_layout.addWidget(self.stock_table)
 
         # --- 右側面板 ---
@@ -182,22 +181,34 @@ class ActiveETFModule(QWidget):
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(10, 0, 0, 0)
 
-        self.info_label = QLabel(" 💡 移動滑鼠至圖表查看數據")
-        self.info_label.setFixedHeight(30)
-        self.info_label.setStyleSheet("background: #050505; color: #888; padding: 5px; font-family: Consolas;")
-        self.info_label.setTextFormat(Qt.TextFormat.RichText)
+        # 🔥 右側標題列
+        right_header = QWidget()
+        right_header.setFixedHeight(45)
+        right_header.setStyleSheet("background: #050505; border-bottom: 1px solid #333;")
+        rh_layout = QHBoxLayout(right_header)
+        rh_layout.setContentsMargins(5, 0, 5, 0)
 
-        # 圖表 1: 特殊變化 (Bar)
+        # 🔥 ETF 資訊顯示
+        self.lbl_etf_info = QLabel("")
+        self.lbl_etf_info.setStyleSheet("color: #FFFF00; font-weight: bold; font-size: 16px;")
+
+        self.info_label = QLabel(" 💡 移動滑鼠至圖表查看數據")
+        self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 13px; color: #888;")
+
+        rh_layout.addWidget(self.lbl_etf_info)
+        rh_layout.addStretch()
+        rh_layout.addWidget(self.info_label)
+
+        right_layout.addWidget(right_header)
+
         self.fig_change = Figure(facecolor='#0E0E0E')
         self.canvas_change = FigureCanvas(self.fig_change)
         self.canvas_change.mpl_connect('motion_notify_event', self.on_bar_hover)
 
-        # 圖表 2: 趨勢圖 (Line + Thin Curve)
         self.fig_trend = Figure(facecolor='#0E0E0E')
         self.canvas_trend = FigureCanvas(self.fig_trend)
         self.canvas_trend.mpl_connect('motion_notify_event', self.on_line_hover)
 
-        right_layout.addWidget(self.info_label)
         right_layout.addWidget(self.canvas_change, stretch=4)
         right_layout.addWidget(self.canvas_trend, stretch=6)
 
@@ -207,7 +218,6 @@ class ActiveETFModule(QWidget):
         splitter.setStretchFactor(1, 7)
 
         main_layout.addWidget(splitter)
-
         self.on_combo_change(0)
 
     def on_combo_change(self, index):
@@ -215,6 +225,11 @@ class ActiveETFModule(QWidget):
         if index < len(keys):
             etf_id = keys[index]
             provider = self.mapping[etf_id][0]
+            etf_name = self.mapping[etf_id][1]
+
+            # 🔥 更新 ETF 資訊
+            self.lbl_etf_info.setText(etf_name)
+
             self.load_data(etf_id, provider)
 
     def load_data(self, etf_id, provider):
@@ -310,7 +325,6 @@ class ActiveETFModule(QWidget):
             if not latest_data.empty:
                 first_id = str(latest_data.iloc[0]['stock_id'])
                 first_name = str(latest_data.iloc[0]['name'])
-                # 🟢 修正：第一筆資料也要判斷市場別
                 market = self.get_market_suffix(first_id)
                 self.plot_trend(first_id, first_name, market)
 
@@ -344,10 +358,7 @@ class ActiveETFModule(QWidget):
     def on_table_clicked(self, row, col):
         sid = self.stock_table.item(row, 0).text()
         name = self.stock_table.item(row, 1).text()
-
-        # 🟢 修正 2：點擊時查表，獲取正確的市場別 (TW/TWO)
         market = self.get_market_suffix(sid)
-
         self.plot_trend(sid, name, market)
         self.stock_clicked_signal.emit(f"{sid}_{market}")
 
@@ -357,8 +368,6 @@ class ActiveETFModule(QWidget):
         trend_data = self.current_df[self.current_df['stock_id'] == str(stock_id)].sort_values('date')
 
         price_data = pd.DataFrame()
-
-        # 🟢 修正 3：組合正確的路徑 (含市場後綴)
         price_path = Path(f"data/cache/tw/{stock_id}_{market}.parquet")
 
         if price_path.exists():

@@ -4,24 +4,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-# UI 元件
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
-                             QTableWidgetItem, QHeaderView, QApplication, QLabel)
+                             QTableWidgetItem, QHeaderView, QApplication, QLabel, QPushButton, QSizePolicy)
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtCore import pyqtSignal, Qt, QThread
 
-# 圖表元件
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-# 🟢 引用你的爬蟲 (請確保 crawler_margin_trading.py 在 utils 資料夾下)
 from utils.crawler_margin_trading import get_margin_trading
 
 plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei']
 plt.rcParams['axes.unicode_minus'] = False
 
 
-# --- 背景工作執行緒 (避免卡死介面) ---
 class MarginWorker(QThread):
     data_fetched = pyqtSignal(pd.DataFrame)
 
@@ -30,7 +26,6 @@ class MarginWorker(QThread):
         self.stock_id = stock_id
 
     def run(self):
-        # 呼叫你的爬蟲函數 (輸入純數字代號)
         clean_id = self.stock_id.split('_')[0].split('.')[0]
         try:
             print(f"🚀 [爬蟲啟動] 正在抓取 {clean_id} 的資券資料...")
@@ -46,9 +41,11 @@ class MarginModule(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.current_stock_id = ""
+        self.current_stock_name = ""
         self.raw_df = None
         self.plot_df = None
-        self.worker = None  # 儲存 thread 實體
+        self.worker = None
         self.stock_changed.connect(self.load_margin_data)
         self.init_ui()
 
@@ -60,30 +57,55 @@ class MarginModule(QWidget):
 
         # 1. Header
         header_widget = QWidget()
-        header_widget.setFixedHeight(35)
+        header_widget.setFixedHeight(45)
         header_widget.setStyleSheet("background-color: #050505; border-bottom: 1px solid #333;")
-
         header_layout = QHBoxLayout(header_widget)
         header_layout.setContentsMargins(10, 0, 10, 0)
+        header_layout.setSpacing(15)
 
-        title = QLabel("資券籌碼分析 (即時爬蟲)")
-        title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 14px;")
+        self.lbl_stock_info = QLabel("請選擇股票")
+        self.lbl_stock_info.setStyleSheet(
+            "color: #FFFF00; font-weight: bold; font-size: 18px; font-family: 'Microsoft JhengHei';")
 
-        self.info_label = QLabel(" 等待資料載入...")
-        # 🟢 核心修正：設定固定寬度
-        self.info_label.setFixedWidth(600)
-        self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 12px; color: #888;")
+        sep = QLabel("|")
+        sep.setStyleSheet("color: #444; font-size: 16px;")
+
+        title = QLabel("資券籌碼分析")
+        title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 16px;")
+
+        self.info_label = QLabel("移動滑鼠查看數據...")
+        self.info_label.setFixedWidth(400)
+        self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 13px; color: #888;")
         self.info_label.setTextFormat(Qt.TextFormat.RichText)
 
+        self.lbl_update_date = QLabel("")
+        self.lbl_update_date.setStyleSheet(
+            "color: #FF8800; font-size: 12px; border: 1px solid #555; padding: 2px 4px; border-radius: 3px;")
+        self.lbl_update_date.setVisible(False)
+
+        self.btn_toggle_chart = QPushButton("切換視圖")
+        self.btn_toggle_chart.setFixedSize(80, 26)
+        self.btn_toggle_chart.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_toggle_chart.setStyleSheet("""
+            QPushButton { background: #333; color: #CCC; border: 1px solid #555; border-radius: 3px; font-size: 12px; }
+            QPushButton:hover { background: #555; color: white; }
+        """)
+        self.btn_toggle_chart.clicked.connect(self.toggle_chart_visibility)
+
+        header_layout.addWidget(self.lbl_stock_info)
+        header_layout.addWidget(sep)
         header_layout.addWidget(title)
         header_layout.addWidget(self.info_label)
         header_layout.addStretch()
+        header_layout.addWidget(self.lbl_update_date)
+        header_layout.addWidget(self.btn_toggle_chart)
 
         layout.addWidget(header_widget)
 
         # 2. Canvas
         self.fig = Figure(facecolor='#000000')
         self.canvas = FigureCanvas(self.fig)
+        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout.addWidget(self.canvas, stretch=6)
 
         # 3. Table
@@ -91,8 +113,9 @@ class MarginModule(QWidget):
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(["日期", "融資餘額", "融資增減", "融券餘額", "融券增減"])
         self.table.setStyleSheet("""
-            QTableWidget { background-color: #000000; gridline-color: #333; color: #FFF; border: none; font-size: 13px; }
-            QHeaderView::section { background-color: #1A1A1A; color: #00FFFF; font-weight: bold; height: 30px; border: 1px solid #333; }
+            QTableWidget { background-color: #000000; gridline-color: #333; color: #FFF; border: none; font-size: 15px; font-family: 'Consolas', 'Microsoft JhengHei'; }
+            QHeaderView::section { background-color: #1A1A1A; color: #00FFFF; font-weight: bold; height: 32px; border: 1px solid #333; font-size: 13px; }
+            QTableWidget::item { padding: 4px; }
         """)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setVisible(False)
@@ -100,15 +123,37 @@ class MarginModule(QWidget):
 
         self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
 
-    def load_margin_data(self, stock_id):
-        self.info_label.setText("⏳ 正在連線 MoneyDJ 抓取中...")
-        self.table.setRowCount(0)  # 清空表格
+    def toggle_chart_visibility(self):
+        is_visible = self.canvas.isVisible()
+        self.canvas.setVisible(not is_visible)
+
+        if is_visible:
+            self.btn_toggle_chart.setText("顯示圖表")
+            self.btn_toggle_chart.setStyleSheet("background: #004444; color: white; border: 1px solid #00E5FF;")
+        else:
+            self.btn_toggle_chart.setText("隱藏圖表")
+            self.btn_toggle_chart.setStyleSheet("background: #333; color: #CCC; border: 1px solid #555;")
+
+    def load_margin_data(self, stock_id, stock_name=""):
+        self.current_stock_id = stock_id
+        self.current_stock_name = stock_name
+
+        display_id = stock_id.split('_')[0]
+
+        # 🔥 修正：顯示代號+名稱
+        if stock_name:
+            self.lbl_stock_info.setText(f"{display_id} {stock_name}")
+        else:
+            self.lbl_stock_info.setText(f"{display_id}")
+
+        self.info_label.setText("⏳ 抓取中...")
+        self.lbl_update_date.setVisible(False)
+        self.table.setRowCount(0)
         self.fig.clear()
         self.canvas.draw()
 
-        # 啟動背景執行緒
         if self.worker is not None and self.worker.isRunning():
-            self.worker.terminate()  # 如果有舊的在跑，先停掉
+            self.worker.terminate()
 
         self.worker = MarginWorker(stock_id)
         self.worker.data_fetched.connect(self.on_data_received)
@@ -116,14 +161,18 @@ class MarginModule(QWidget):
 
     def on_data_received(self, df):
         if df.empty:
-            self.info_label.setText("❌ 查無資料或連線失敗")
+            self.info_label.setText("❌ 查無資料")
             return
 
-        self.info_label.setText("✅ 資料更新完成")
-
-        # 欄位對應 (Crawler -> UI)
-        # 你的爬蟲欄位: date, fin_balance, fin_change, short_balance, short_change, ratio
+        self.info_label.setText("✅ 更新完成")
         self.raw_df = df
+
+        # 更新日期
+        if not df.empty and 'date' in df.columns:
+            last_date = df['date'].max()
+            self.lbl_update_date.setText(f"資料日期: {last_date.strftime('%Y-%m-%d')}")
+            self.lbl_update_date.setVisible(True)
+
         self.update_ui(df)
 
     def update_ui(self, df):
@@ -132,23 +181,18 @@ class MarginModule(QWidget):
         self.ax2 = self.ax1.twinx()
         self.ax1.set_facecolor('#000000')
 
-        # 取最近 60 天畫圖
-        self.plot_df = df.head(60).iloc[::-1].reset_index(drop=True)  # 反轉順序讓舊在左、新在右
+        self.plot_df = df.head(60).iloc[::-1].reset_index(drop=True)
 
         x = np.arange(len(self.plot_df))
         dates = self.plot_df['date'].dt.strftime('%m/%d').tolist()
 
-        # 繪圖
         width = 0.35
-        # fin_balance = 融資餘額, short_balance = 融券餘額
         self.ax1.bar(x - width / 2, self.plot_df['fin_balance'], width, color='#FF3333', label='融資', alpha=0.8)
         self.ax1.bar(x + width / 2, self.plot_df['short_balance'], width, color='#00FF00', label='融券', alpha=0.8)
 
-        # 券資比
         self.ax2.plot(x, self.plot_df['ratio'], color='#FFFF00', linewidth=1.5, marker='o', markersize=3,
                       label='券資比')
 
-        # 軸設定
         self.ax1.set_xticks(x[::5])
         self.ax1.set_xticklabels(dates[::5], color='white', fontsize=8)
         self.ax1.tick_params(axis='y', colors='#FF8888', labelsize=8)
@@ -161,7 +205,6 @@ class MarginModule(QWidget):
 
         self.canvas.draw()
 
-        # 更新表格 (顯示前 20 筆)
         display_df = df.head(20)
         self.table.setRowCount(len(display_df))
         for i, row in display_df.iterrows():
@@ -173,7 +216,6 @@ class MarginModule(QWidget):
                 QTableWidgetItem(f"{int(row['short_change']):+,}")
             ]
 
-            # 顏色: 增減欄位紅正綠負
             items[2].setForeground(QColor("#FF3333" if row['fin_change'] >= 0 else "#00FF00"))
             items[4].setForeground(QColor("#FF3333" if row['short_change'] >= 0 else "#00FF00"))
 
@@ -204,7 +246,7 @@ class MarginModule(QWidget):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     win = MarginModule()
-    win.load_margin_data("2330")  # 測試用
-    win.resize(600, 400)
+    win.load_margin_data("2330_TW", "台積電")
+    win.resize(600, 500)
     win.show()
     sys.exit(app.exec())

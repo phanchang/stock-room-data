@@ -21,7 +21,7 @@ except ImportError:
 
 def calculate_advanced_factors(df):
     """
-    計算技術因子與策略訊號 (V3.9.1 - 布林寬度 + ILSS + 全特徵回歸版)
+    計算技術因子與策略訊號 (V4.0 - 找回假跌破 + ILSS)
     """
     if df is None or len(df) < 205: return None
 
@@ -36,8 +36,7 @@ def calculate_advanced_factors(df):
 
     vol_ratio = df['Volume'].iloc[-1] / df['Volume'].tail(5).mean() if df['Volume'].tail(5).mean() > 0 else 0
 
-    # [New] 布林通道寬度 (Bollinger Bandwidth)
-    # 公式: (4 * std) / ma
+    # [New] 布林通道寬度
     ma20 = df['Close'].rolling(20).mean()
     std20 = df['Close'].rolling(20).std()
 
@@ -46,13 +45,24 @@ def calculate_advanced_factors(df):
     bb_width_series[mask] = (4 * std20[mask]) / ma20[mask] * 100
     current_bb_width = bb_width_series.iloc[-1]
 
-    # [New] 時間性盤整判定 (Rolling Max)
+    # 盤整判定
     s_consol_5 = int(bb_width_series.rolling(5).max().iloc[-1] < 10)
     s_consol_10 = int(bb_width_series.rolling(10).max().iloc[-1] < 12)
     s_consol_20 = int(bb_width_series.rolling(20).max().iloc[-1] < 15)
     s_consol_60 = int(bb_width_series.rolling(60).max().iloc[-1] < 18)
 
-    # --- 2. ILSS 主力掃單策略 ---
+    # --- 2. 舊版假跌破 (Fake Breakdown) ---
+    # 定義: 昨日收盤 < 月線 AND 今日收盤 > 月線 AND 今日收紅
+    s_fake_breakdown = 0
+    try:
+        if (df['Close'].iloc[-2] < ma20.iloc[-2] and
+                df['Close'].iloc[-1] > ma20.iloc[-1] and
+                df['Close'].iloc[-1] > df['Open'].iloc[-1]):
+            s_fake_breakdown = 1
+    except:
+        pass
+
+    # --- 3. ILSS 主力掃單策略 (進階版) ---
     s_ilss_sweep = 0
     try:
         ma200 = df['Close'].rolling(200).mean()
@@ -79,20 +89,16 @@ def calculate_advanced_factors(df):
     except:
         pass
 
-    # --- 3. 其他輔助訊號 (全特徵補完) ---
+    # --- 4. 其他輔助訊號 ---
     def check_recent(series):
         return int(series.tail(3).any())
 
     s_break_30w = check_recent(TechnicalStrategies.break_30w_ma(df))
     s_uptrend = int(TechnicalStrategies.strong_uptrend(df).iloc[-1])
-
-    # 創新高
     s_high_60 = check_recent(TechnicalStrategies.breakout_n_days_high(df, 60))
-    s_high_30 = check_recent(TechnicalStrategies.breakout_n_days_high(df, 30))  # [補回]
-
-    # 支撐回測
+    s_high_30 = check_recent(TechnicalStrategies.breakout_n_days_high(df, 30))
     s_ma55_sup = check_recent(TechnicalStrategies.near_ma_support(df, 55))
-    s_ma200_sup = check_recent(TechnicalStrategies.near_ma_support(df, 200))  # [補回]
+    s_ma200_sup = check_recent(TechnicalStrategies.near_ma_support(df, 200))
     s_vix_rev = check_recent(TechnicalStrategies.vix_reversal(df))
 
     return {
@@ -109,19 +115,20 @@ def calculate_advanced_factors(df):
         'str_consol_20': s_consol_20,
         'str_consol_60': s_consol_60,
         'str_ilss_sweep': s_ilss_sweep,
+        'str_fake_breakdown': s_fake_breakdown,  # [回來了]
 
         'str_break_30w': s_break_30w,
         'str_uptrend': s_uptrend,
         'str_high_60': s_high_60,
-        'str_high_30': s_high_30,  # [補回]
+        'str_high_30': s_high_30,
         'str_ma55_sup': s_ma55_sup,
-        'str_ma200_sup': s_ma200_sup,  # [補回]
+        'str_ma200_sup': s_ma200_sup,
         'str_vix_rev': s_vix_rev
     }
 
 
 def main():
-    print(f"🚀 戰情室因子運算啟動 (V3.9.1 - 全特徵回歸版) | {datetime.now():%H:%M:%S}")
+    print(f"🚀 戰情室因子運算啟動 (V4.0 - 修正版) | {datetime.now():%H:%M:%S}")
     cache = CacheManager()
     raw_path = project_root / 'data' / 'temp' / 'chips_revenue_raw.csv'
     if not raw_path.exists():
@@ -151,11 +158,11 @@ def main():
         final_df['RS強度'] = final_df['漲幅20d'].rank(pct=True) * 100
         final_df['RS強度'] = final_df['RS強度'].round(1)
 
-    # --- [標籤生成核心] (補回所有遺失邏輯) ---
+    # --- 標籤生成 ---
     def get_strong_tags(row):
         tags = []
 
-        # 1. 盤整 (布林寬度)
+        # 1. 盤整
         if row.get('str_consol_60', 0) == 1: tags.append('盤整60日')
         if row.get('str_consol_20', 0) == 1: tags.append('盤整20日')
         if row.get('str_consol_10', 0) == 1: tags.append('盤整10日')
@@ -167,30 +174,33 @@ def main():
         elif bbw < 8.0:
             tags.append('波動壓縮')
 
-        # 2. ILSS
+        # 2. ILSS 與 假跌破 (並存)
+        # 頂級訊號: ILSS
         if row.get('str_ilss_sweep', 0) == 1:
             if row.get('rev_cum_yoy', 0) > 0 and (row.get('m_net_today', 0) < 0 or row.get('m_sum_5d', 0) < 0):
                 tags.append('主力掃單(ILSS)')
-            else:
-                tags.append('假跌破')
 
-        # 3. 趨勢與型態 (全數補回)
+        # 一般訊號: 舊版假跌破 (只要破月線站回就算)
+        if row.get('str_fake_breakdown', 0) == 1:
+            tags.append('假跌破')
+
+        # 3. 趨勢與型態
         if row.get('RS強度', 0) > 90: tags.append('超強勢')
-        if row.get('漲幅60d', 0) > 30: tags.append('波段黑馬')  # [補回]
+        if row.get('漲幅60d', 0) > 30: tags.append('波段黑馬')
 
         if row.get('str_break_30w', 0) == 1: tags.append('突破30週')
         if row.get('str_uptrend', 0) == 1: tags.append('強勢多頭')
         if row.get('str_high_60', 0) == 1: tags.append('創季高')
-        if row.get('str_high_30', 0) == 1: tags.append('創月高')  # [補回]
+        if row.get('str_high_30', 0) == 1: tags.append('創月高')
 
-        # 4. 籌碼與支撐 (全數補回)
+        # 4. 籌碼與支撐
         if row.get('is_tu_yang', 0) == 1: tags.append('土洋對作')
         if row.get('t_streak', 0) >= 3: tags.append('投信認養')
         if row.get('m_net_today', 0) < -200: tags.append('散戶退場')
 
         if row.get('str_ma55_sup', 0) == 1: tags.append('回測季線')
-        if row.get('str_ma200_sup', 0) == 1: tags.append('回測年線')  # [補回]
-        if row.get('str_vix_rev', 0) == 1: tags.append('Vix反轉')  # [補回]
+        if row.get('str_ma200_sup', 0) == 1: tags.append('回測年線')
+        if row.get('str_vix_rev', 0) == 1: tags.append('Vix反轉')
 
         return ','.join(tags)
 
@@ -213,7 +223,7 @@ def main():
     strategy_dir.mkdir(parents=True, exist_ok=True)
     final_df.to_parquet(strategy_dir / 'factor_snapshot.parquet')
     output_df.to_csv(strategy_dir / '戰情室今日快照_全中文版.csv', encoding='utf-8-sig', index=False)
-    print("✅ V3.9.1 運算完成！")
+    print("✅ V4.0 運算完成！")
 
 
 if __name__ == "__main__":

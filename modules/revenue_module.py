@@ -5,25 +5,20 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from dotenv import load_dotenv
 
-# UI 元件
-# 🟢 修正：加入 QSizePolicy
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
-                             QTableWidgetItem, QHeaderView, QApplication, QLabel, QSizePolicy)
+                             QTableWidgetItem, QHeaderView, QApplication, QLabel, QSizePolicy, QPushButton)
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtCore import pyqtSignal, Qt, QThread
 
-# 圖表元件
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-# 引入爬蟲
 from utils.crawler_revenue import get_monthly_revenue
 
 plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei']
 plt.rcParams['axes.unicode_minus'] = False
 
 
-# --- 背景執行緒 ---
 class RevenueWorker(QThread):
     data_fetched = pyqtSignal(pd.DataFrame)
 
@@ -32,7 +27,7 @@ class RevenueWorker(QThread):
         self.stock_id = stock_id
 
     def run(self):
-        load_dotenv()  # 確保 Proxy 環境變數已載入
+        load_dotenv()
         clean_id = self.stock_id.split('_')[0].split('.')[0]
         try:
             print(f"🚀 [爬蟲啟動] 正在抓取 {clean_id} 的月營收...")
@@ -44,11 +39,13 @@ class RevenueWorker(QThread):
 
 
 class RevenueModule(QWidget):
+    # 訊號通常用於內部通知，這裡暫時保留
     stock_changed = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.stock_changed.connect(self.load_revenue_data)
+        self.current_stock_id = ""
+        self.current_stock_name = ""
         self.current_years = []
         self.year_data_map = {}
         self.year_colors = []
@@ -61,45 +58,76 @@ class RevenueModule(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # 1. Header
+        # 1. Header (標準化標題列)
         header_widget = QWidget()
-        header_widget.setFixedHeight(35)
+        header_widget.setFixedHeight(45)  # 稍微加高以容納大字體
         header_widget.setStyleSheet("background-color: #050505; border-bottom: 1px solid #333;")
 
         header_layout = QHBoxLayout(header_widget)
         header_layout.setContentsMargins(10, 0, 10, 0)
+        header_layout.setSpacing(15)
 
-        title = QLabel("月營收成長趨勢 (即時爬蟲)")
-        title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 14px;")
+        # 🔥 [Item 1] 股票資訊 (代號+名稱)
+        self.lbl_stock_info = QLabel("請選擇股票")
+        self.lbl_stock_info.setStyleSheet(
+            "color: #FFFF00; font-weight: bold; font-size: 18px; font-family: 'Microsoft JhengHei';")
 
-        self.info_label = QLabel(" 等待資料載入...")
-        # 🟢 修正 1：固定寬度防抖動
-        self.info_label.setFixedWidth(600)
-        self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 12px; color: #888;")
-        self.info_label.setTextFormat(Qt.TextFormat.RichText)
+        # 分隔線
+        sep = QLabel("|")
+        sep.setStyleSheet("color: #444; font-size: 16px;")
 
+        # 模組標題
+        title = QLabel("月營收成長趨勢")
+        title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 16px;")
+
+        # 滑鼠互動資訊
+        self.info_label = QLabel("移動滑鼠查看數據...")
+        self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 13px; color: #888;")
+        self.info_label.setFixedWidth(350)  # 給予固定寬度避免抖動
+
+        # 🔥 [Item 5] 資料日期標籤
+        self.lbl_update_date = QLabel("")
+        self.lbl_update_date.setStyleSheet(
+            "color: #FF8800; font-size: 12px; border: 1px solid #555; padding: 2px 4px; border-radius: 3px;")
+        self.lbl_update_date.setVisible(False)
+
+        # 🔥 [Item 6] 切換視圖按鈕
+        self.btn_toggle_chart = QPushButton("切換視圖")
+        self.btn_toggle_chart.setFixedSize(80, 26)
+        self.btn_toggle_chart.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_toggle_chart.setStyleSheet("""
+            QPushButton { background: #333; color: #CCC; border: 1px solid #555; border-radius: 3px; font-size: 12px; }
+            QPushButton:hover { background: #555; color: white; }
+        """)
+        self.btn_toggle_chart.clicked.connect(self.toggle_chart_visibility)
+
+        # 依序加入 Layout
+        header_layout.addWidget(self.lbl_stock_info)
+        header_layout.addWidget(sep)
         header_layout.addWidget(title)
         header_layout.addWidget(self.info_label)
-        header_layout.addStretch()
+        header_layout.addStretch()  # 彈簧
+        header_layout.addWidget(self.lbl_update_date)
+        header_layout.addWidget(self.btn_toggle_chart)
+
         layout.addWidget(header_widget)
 
-        # 2. Canvas
+        # 2. Canvas (圖表)
         self.fig = Figure(facecolor='#000000')
         self.canvas = FigureCanvas(self.fig)
-
-        # 🟢 修正 2：設定 Expanding 策略防壓縮
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.canvas.updateGeometry()
 
         layout.addWidget(self.canvas, stretch=6)
 
-        # 3. Table
+        # 3. Table (表格)
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["月份", "營收(億)", "單月YoY", "累月YoY"])
+        # 表格樣式優化
         self.table.setStyleSheet("""
-            QTableWidget { background-color: #000000; gridline-color: #444; color: #FFF; border: none; font-size: 13px; }
-            QHeaderView::section { background-color: #1A1A1A; color: #FFFFFF; font-weight: bold; height: 32px; border: 1px solid #333; }
+            QTableWidget { background-color: #000000; gridline-color: #444; color: #FFF; border: none; font-size: 15px; font-family: 'Consolas', 'Microsoft JhengHei'; }
+            QHeaderView::section { background-color: #1A1A1A; color: #FFFFFF; font-weight: bold; height: 32px; border: 1px solid #333; font-size: 13px; }
+            QTableWidget::item { padding: 4px; }
         """)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setVisible(False)
@@ -107,11 +135,37 @@ class RevenueModule(QWidget):
 
         self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
 
-    def load_revenue_data(self, stock_id):
-        self.info_label.setText("⏳ 正在連線 MoneyDJ...")
+    def toggle_chart_visibility(self):
+        """ 切換圖表顯示/隱藏，最大化表格空間 """
+        is_visible = self.canvas.isVisible()
+        self.canvas.setVisible(not is_visible)
+
+        if is_visible:
+            self.btn_toggle_chart.setText("顯示圖表")
+            self.btn_toggle_chart.setStyleSheet("background: #004444; color: white; border: 1px solid #00E5FF;")
+        else:
+            self.btn_toggle_chart.setText("隱藏圖表")
+            self.btn_toggle_chart.setStyleSheet("background: #333; color: #CCC; border: 1px solid #555;")
+
+    # 🔥 [關鍵修正] 接收 stock_name 參數
+    def load_revenue_data(self, stock_id, stock_name=""):
+        self.current_stock_id = stock_id
+        self.current_stock_name = stock_name
+
+        # 解析顯示用代號 (去除 _TW)
+        display_id = stock_id.split('_')[0]
+
+        # 更新左上角資訊
+        if stock_name:
+            self.lbl_stock_info.setText(f"{display_id} {stock_name}")
+        else:
+            self.lbl_stock_info.setText(f"{display_id}")
+
+        self.info_label.setText("⏳ 連線 MoneyDJ...")
         self.table.setRowCount(0)
         self.fig.clear()
         self.canvas.draw()
+        self.lbl_update_date.setVisible(False)
 
         if self.worker is not None and self.worker.isRunning():
             self.worker.terminate()
@@ -125,19 +179,27 @@ class RevenueModule(QWidget):
             self.info_label.setText("❌ 查無資料")
             return
 
-        self.info_label.setText("✅ 資料更新完成")
+        self.info_label.setText("✅ 更新完成")
 
-        # 資料處理
-        df['Revenue'] = df['營收'] / 100000
-        df['YoY'] = df['年增率']
-        df['Cum_YoY'] = df['累計年增率']
-        df['Date'] = pd.to_datetime(df['日期'])
-        df['Year'] = df['Date'].dt.year
-        df['Month'] = df['Date'].dt.month
+        try:
+            df['Revenue'] = df['營收'] / 100000
+            df['YoY'] = df['年增率']
+            df['Cum_YoY'] = df['累計年增率']
+            df['Date'] = pd.to_datetime(df['日期'])
+            df['Year'] = df['Date'].dt.year
+            df['Month'] = df['Date'].dt.month
 
-        # 取得最新三個年度
-        recent_years = sorted(df['Year'].unique(), reverse=True)[:3]
-        self.update_ui(df, recent_years)
+            # 更新資料日期標籤
+            if not df.empty:
+                last_date = df['Date'].max()
+                self.lbl_update_date.setText(f"資料日期: {last_date.strftime('%Y-%m')}")
+                self.lbl_update_date.setVisible(True)
+
+            recent_years = sorted(df['Year'].unique(), reverse=True)[:3]
+            self.update_ui(df, recent_years)
+        except Exception as e:
+            print(f"Data process error: {e}")
+            self.info_label.setText("❌ 資料格式錯誤")
 
     def update_ui(self, df, years):
         self.fig.clear()
@@ -146,7 +208,7 @@ class RevenueModule(QWidget):
 
         self.current_years = years
         self.year_data_map = {}
-        colors = ['#FF8C00', '#FFD700', '#FF69B4']  # 橘, 金, 粉
+        colors = ['#FF8C00', '#FFD700', '#FF69B4']
         self.year_colors = colors
 
         all_revs = []
@@ -159,7 +221,6 @@ class RevenueModule(QWidget):
                              linewidth=1.5, markersize=4)
                 all_revs.extend(yd['Revenue'].tolist())
 
-        # Y 軸縮放
         if all_revs:
             ymin, ymax = min(all_revs), max(all_revs)
             margin = (ymax - ymin) * 0.2
@@ -173,9 +234,11 @@ class RevenueModule(QWidget):
         for spine in self.ax.spines.values():
             spine.set_edgecolor('#555')
 
+        # 加入圖例
+        self.ax.legend(facecolor='#111', edgecolor='#333', labelcolor='white', fontsize=8, loc='upper left')
+
         self.canvas.draw()
 
-        # 更新表格
         display_df = df.sort_values('Date', ascending=False).head(36).reset_index(drop=True)
         self.table.setRowCount(len(display_df))
         max_rev = display_df['Revenue'].max() if not display_df.empty else 0
@@ -192,13 +255,12 @@ class RevenueModule(QWidget):
                 QTableWidgetItem(f"{cum_yoy:+.1f}%")
             ]
 
-            # 樣式：營收創新高
             is_high = (rev == max_rev)
             if is_high:
                 for item in items:
                     item.setBackground(QColor(180, 140, 0))
                     item.setForeground(QColor(0, 0, 0))
-                    item.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
+                    item.setFont(QFont("Consolas", 12, QFont.Weight.Bold))
             else:
                 items[1].setForeground(QColor("#FFFF00"))
                 items[2].setForeground(QColor("#FF3333" if yoy >= 0 else "#00FF00"))
@@ -230,7 +292,8 @@ class RevenueModule(QWidget):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     module = RevenueModule()
-    module.load_revenue_data("2330")
-    module.resize(500, 800)
+    # 測試時模擬傳入名稱
+    module.load_revenue_data("2330_TW", "台積電")
+    module.resize(600, 800)
     module.show()
     sys.exit(app.exec())

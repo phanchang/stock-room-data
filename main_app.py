@@ -10,8 +10,12 @@ if str(current_dir) not in sys.path:
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
                              QVBoxLayout, QPushButton, QStackedWidget,
-                             QLabel, QButtonGroup, QGridLayout, QTabWidget)
-from PyQt6.QtCore import Qt
+                             QLabel, QButtonGroup, QGridLayout, QTabWidget,
+                             QMessageBox, QProgressDialog)
+from PyQt6.QtCore import Qt, QTimer
+
+# Import Utils
+from utils.quote_worker import QuoteWorker
 
 # Import 各個功能模組
 from modules.kline_module import KLineModule
@@ -28,7 +32,7 @@ from modules.strategy_module import StrategyModule
 class SideMenu(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedWidth(70)  # 側邊選單寬度
+        self.setFixedWidth(70)
         self.setStyleSheet("background-color: #111; border-right: 1px solid #222;")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 20, 5, 20)
@@ -68,11 +72,25 @@ class StockWarRoomV3(QMainWindow):
         super().__init__()
         self.setWindowTitle("StockWarRoom V3 - 戰情矩陣")
         self.resize(1600, 950)
-        self.setStyleSheet("background-color: #000000;")
+        self.setStyleSheet("""
+            QMainWindow { background-color: #000000; }
+            QMessageBox { background-color: #222; color: white; }
+            QMessageBox QLabel { color: white; }
+            QPushButton { background-color: #444; color: white; border: 1px solid #555; padding: 5px; }
+        """)
 
+        # 1. 🔥 建立唯一的報價引擎 (核心大腦)
+        self.shared_worker = QuoteWorker(self)
+        self.shared_worker.start()
+
+        # 2. 初始化 UI (並將大腦傳遞給器官)
         self.init_ui()
+
+        # 3. 連接信號與槽
         self.connect_signals()
-        self.load_initial_data()
+
+        # 4. 延遲載入初始資料 (避免 UI 尚未繪製完成就大量運算導致卡頓)
+        QTimer.singleShot(500, self.load_initial_data)
 
     def init_ui(self):
         central_widget = QWidget()
@@ -95,14 +113,19 @@ class StockWarRoomV3(QMainWindow):
         warroom_layout.setContentsMargins(4, 4, 4, 4)
         warroom_layout.setSpacing(4)
 
-        self.list_module = StockListModule()
-        self.kline_module = KLineModule()
+        # 🔥🔥🔥 [絕對修正] 傳入 shared_worker 給 UI 元件 🔥🔥🔥
+        # 這是解決 StockList 與 KLine 不更新、不連動的關鍵
+        self.list_module = StockListModule(shared_worker=self.shared_worker)
+        self.kline_module = KLineModule(shared_worker=self.shared_worker)
+
+        # 其他靜態資料模組
         self.inst_module = InstitutionalModule()
         self.margin_module = MarginModule()
         self.revenue_module = RevenueModule()
         self.eps_module = EPSModule()
         self.ratio_module = RatioModule()
 
+        # 建立 Tab
         self.chips_tabs = self._create_tab_widget()
         self.chips_tabs.addTab(self.inst_module, "三大法人")
         self.chips_tabs.addTab(self.margin_module, "資券變化")
@@ -112,6 +135,7 @@ class StockWarRoomV3(QMainWindow):
         self.fund_tabs.addTab(self.eps_module, "EPS")
         self.fund_tabs.addTab(self.ratio_module, "三率")
 
+        # 加入 Layout
         warroom_layout.addWidget(self.list_module, 0, 0)
         warroom_layout.addWidget(self.kline_module, 0, 1)
         warroom_layout.addWidget(self.chips_tabs, 1, 0)
@@ -134,6 +158,28 @@ class StockWarRoomV3(QMainWindow):
 
         main_layout.addWidget(self.pages)
 
+    def closeEvent(self, event):
+        reply = QMessageBox.question(self, '確認退出', '確定要關閉系統嗎？',
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+
+        if reply == QMessageBox.StandardButton.Yes:
+            progress = QProgressDialog("正在安全停止引擎...", None, 0, 0, self)
+            progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+            progress.show()
+            QApplication.processEvents()
+
+            # 🔥 強制停止 Shared Worker
+            if self.shared_worker.isRunning():
+                self.shared_worker.stop()
+                self.shared_worker.wait(1000)
+
+            # 關閉 Matplotlib 資源
+            import matplotlib.pyplot as plt
+            plt.close('all')
+            event.accept()
+        else:
+            event.ignore()
+
     def _create_tab_widget(self):
         tabs = QTabWidget()
         tabs.setStyleSheet("""
@@ -154,51 +200,60 @@ class StockWarRoomV3(QMainWindow):
         # 頁面切換
         self.side_menu.button_group.idClicked.connect(self.pages.setCurrentIndex)
 
-        # 🔥 [修改] 統一使用 on_stock_changed 來處理所有選股連動
-        # 這樣可以在這裡統一查詢中文名稱，再傳給 KLineModule
+        # 選股連動
         self.list_module.stock_selected.connect(self.on_stock_changed)
-
-        # 市場焦點連動
         self.market_page.stock_clicked_signal.connect(self.on_stock_changed)
-
-        # 策略頁面連動
         self.strategy_page.stock_clicked_signal.connect(self.on_strategy_stock_clicked)
         self.strategy_page.request_add_watchlist.connect(self.on_add_watchlist_request)
 
     def get_stock_name(self, full_stock_id):
-        """ 🔥 [新增] 輔助函式：從 StockListModule 的 DataFrame 查中文名稱 """
         try:
             stock_id = full_stock_id.split('_')[0]
-            # 確保 list_module 已經載入過資料
-            if hasattr(self.list_module, 'stock_list_df') and not self.list_module.stock_list_df.empty:
-                df = self.list_module.stock_list_df
-                if stock_id in df.index:
-                    return df.loc[stock_id, 'name']
+            if hasattr(self.list_module, 'stock_db') and self.list_module.stock_db:
+                data = self.list_module.stock_db.get(stock_id)
+                if data: return data.get('name', '')
         except Exception:
             pass
         return ""
 
     def on_stock_changed(self, full_stock_id):
-        """ 🔥 [新增] 統一處理選股邏輯 """
-        # 1. 取得股票名稱
-        stock_name = self.get_stock_name(full_stock_id)
+        """ 🔥 統一處理選股邏輯，並傳遞股票名稱給所有模組 """
 
-        # 2. 通知 KLine (傳入 ID 和 Name)
-        self.kline_module.load_stock_data(full_stock_id, stock_name)
+        # 1. 解析代號與名稱
+        stock_id = full_stock_id  # 例如 "2330_TW"
+        clean_id = stock_id.split('_')[0]
+        stock_name = ""
 
-        # 3. 通知其他模組 (只需 ID)
-        self.inst_module.load_inst_data(full_stock_id)
-        self.margin_module.load_margin_data(full_stock_id)
-        self.revenue_module.load_revenue_data(full_stock_id)
-        self.eps_module.load_eps_data(full_stock_id)
-        self.ratio_module.load_ratio_data(full_stock_id)
+        # 從 StockList 的資料庫中查找名稱
+        if hasattr(self, 'list_module') and hasattr(self.list_module, 'stock_db'):
+            stock_info = self.list_module.stock_db.get(clean_id)
+            if stock_info:
+                stock_name = stock_info.get('name', '')
+
+        print(f"DEBUG: 切換股票 {stock_id} ({stock_name})")
+
+        # 2. 通知 KLine (這會觸發 Worker 去抓最新報價)
+        if hasattr(self, 'kline_module'):
+            self.kline_module.load_stock_data(stock_id, stock_name)
+
+        # 3. 通知各個分析分頁 (依序傳入 ID 與 名稱)
+        if hasattr(self, 'inst_module'):
+            self.inst_module.load_inst_data(stock_id, stock_name)
+
+        if hasattr(self, 'margin_module'):
+            self.margin_module.load_margin_data(stock_id, stock_name)
+
+        if hasattr(self, 'revenue_module'):
+            self.revenue_module.load_revenue_data(stock_id, stock_name)
+
+        if hasattr(self, 'eps_module'):
+            self.eps_module.load_eps_data(stock_id, stock_name)
+
+        if hasattr(self, 'ratio_module'):
+            self.ratio_module.load_ratio_data(stock_id, stock_name)
 
     def on_strategy_stock_clicked(self, stock_id_full):
-        """ 策略選股點擊後的行為 """
-        # 直接呼叫統一介面，保持行為一致
         self.on_stock_changed(stock_id_full)
-
-        # 自動切換回「戰情 (Page 0)」
         self.side_menu.button_group.button(0).setChecked(True)
         self.pages.setCurrentIndex(0)
 
@@ -206,10 +261,10 @@ class StockWarRoomV3(QMainWindow):
         self.list_module.add_stock_to_group(stock_id, group_name)
 
     def load_initial_data(self):
-        # 觸發列表刷新
+        # 1. 觸發列表刷新 (這會讓 Worker 開始工作)
         self.list_module.refresh_table()
 
-        # 預設載入清單中的第一檔
+        # 2. 預設載入清單中的第一檔
         if self.list_module.table.rowCount() > 0:
             item = self.list_module.table.item(0, 0)
             if item:
@@ -217,20 +272,12 @@ class StockWarRoomV3(QMainWindow):
                 market = item.data(Qt.ItemDataRole.UserRole)
                 fid = f"{code}_{market}"
 
-                # 取得名稱 (從列表的第二欄 '名稱' 抓取最準)
+                # 取得名稱
                 name_item = self.list_module.table.item(0, 1)
                 name = name_item.text() if name_item else ""
 
                 print(f"🚀 [系統啟動] 預設載入: {fid} {name}")
-
-                # 🔥 [修改] 呼叫統一介面 (其實可以直接 call on_stock_changed，但為了明確傳入 name，手動 call 也行)
-                self.kline_module.load_stock_data(fid, name)
-
-                self.inst_module.load_inst_data(fid)
-                self.margin_module.load_margin_data(fid)
-                self.revenue_module.load_revenue_data(fid)
-                self.eps_module.load_eps_data(fid)
-                self.ratio_module.load_ratio_data(fid)
+                self.on_stock_changed(fid)
 
 
 if __name__ == "__main__":
