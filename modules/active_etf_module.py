@@ -347,7 +347,7 @@ class ActiveETFModule(QWidget):
         ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=100))
 
         date_str = data_date.strftime('%Y-%m-%d')
-        ax.set_title(f"🔥 持股異動戰報 (資料日期: {date_str})", color='white', fontsize=14, fontweight='bold',
+        ax.set_title(f" 持股異動戰報 (資料日期: {date_str})", color='white', fontsize=14, fontweight='bold',
                      loc='left', pad=10)
         ax.tick_params(colors='#AAA', labelsize=10)
         ax.grid(axis='x', color='#333', linestyle=':')
@@ -426,7 +426,7 @@ class ActiveETFModule(QWidget):
         ax3.set_yticks([])
         ax3.spines['right'].set_visible(False)
 
-        ax1.set_title(f"📈 {stock_id} {stock_name} - 權重、股價與庫存趨勢", color='white', fontsize=12, fontweight='bold',
+        ax1.set_title(f" {stock_id} {stock_name} - 權重、股價與庫存趨勢", color='white', fontsize=12, fontweight='bold',
                       loc='left')
         ax1.tick_params(axis='y', colors='#00E5FF')
         ax1.tick_params(axis='x', colors='#AAA')

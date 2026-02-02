@@ -13,10 +13,9 @@ from PyQt6.QtCore import Qt, pyqtSignal, QAbstractTableModel, QSortFilterProxyMo
 from PyQt6.QtGui import QColor, QAction, QCursor, QFont
 
 # ==========================================
-# 1. 全欄位設定 (V4.2 - 包含所有 Excel 產出欄位)
+# 1. 全欄位設定
 # ==========================================
 FULL_COLUMN_SPECS = {
-    # --- 基礎 ---
     'sid': {'name': '代號', 'show': True, 'tip': '股票代號', 'type': 'str'},
     'name': {'name': '名稱', 'show': True, 'tip': '股票名稱', 'type': 'str'},
     'industry': {'name': '產業', 'show': True, 'tip': '所屬產業類別', 'type': 'str'},
@@ -24,50 +23,37 @@ FULL_COLUMN_SPECS = {
     '漲幅5d': {'name': '5日%', 'show': False, 'tip': '近5日漲跌幅', 'type': 'num'},
     '漲幅20d': {'name': '月漲幅%', 'show': True, 'tip': '近20日漲跌幅', 'type': 'num'},
     '漲幅60d': {'name': '季漲幅%', 'show': False, 'tip': '近60日漲跌幅', 'type': 'num'},
-
-    # --- 技術 ---
     'RS強度': {'name': 'RS強度', 'show': True, 'tip': '相對強度 (1-99)', 'type': 'num'},
     'bb_width': {'name': '布林寬%', 'show': True, 'tip': '布林通道寬度 (愈小愈壓縮)', 'type': 'num'},
     '量比': {'name': '量比', 'show': True, 'tip': '今日量 / 5日均量', 'type': 'num'},
-
-    # --- 籌碼 (投信) ---
     't_net_today': {'name': '投今日', 'show': False, 'tip': '投信今日買賣超', 'type': 'num'},
     't_sum_5d': {'name': '投5日', 'show': True, 'tip': '投信5日累計買賣超', 'type': 'num'},
     't_sum_10d': {'name': '投10日', 'show': False, 'tip': '投信10日累計買賣超', 'type': 'num'},
     't_sum_20d': {'name': '投20日', 'show': False, 'tip': '投信20日累計買賣超', 'type': 'num'},
     't_streak': {'name': '投連買', 'show': True, 'tip': '投信連續買超天數', 'type': 'num'},
-
-    # --- 籌碼 (外資) ---
     'f_net_today': {'name': '外今日', 'show': False, 'tip': '外資今日買賣超', 'type': 'num'},
     'f_sum_5d': {'name': '外5日', 'show': True, 'tip': '外資5日累計買賣超', 'type': 'num'},
     'f_sum_10d': {'name': '外10日', 'show': False, 'tip': '外資10日累計買賣超', 'type': 'num'},
     'f_sum_20d': {'name': '外20日', 'show': False, 'tip': '外資20日累計買賣超', 'type': 'num'},
     'f_streak': {'name': '外連買', 'show': True, 'tip': '外資連續買超天數', 'type': 'num'},
-
-    # --- 籌碼 (融資) ---
     'm_net_today': {'name': '資今日', 'show': False, 'tip': '融資今日增減', 'type': 'num'},
     'm_sum_5d': {'name': '資5日', 'show': True, 'tip': '融資5日累計', 'type': 'num'},
     'm_sum_10d': {'name': '資10日', 'show': False, 'tip': '融資10日累計', 'type': 'num'},
     'm_sum_20d': {'name': '資20日', 'show': False, 'tip': '融資20日累計', 'type': 'num'},
-
-    # --- 基本面 ---
     'rev_yoy': {'name': '月YoY%', 'show': True, 'tip': '最新月營收年增率', 'type': 'num'},
     'rev_cum_yoy': {'name': '累營YoY%', 'show': True, 'tip': '當年累計營收年增率', 'type': 'num'},
     'eps_q': {'name': 'EPS(累)', 'show': True, 'tip': '累計季 EPS', 'type': 'num'},
     'pe': {'name': 'PE', 'show': True, 'tip': '本益比', 'type': 'num'},
     'pbr': {'name': 'PB', 'show': False, 'tip': '股價淨值比', 'type': 'num'},
     'yield': {'name': '殖利率%', 'show': True, 'tip': '現金殖利率', 'type': 'num'},
-
-    # --- 訊號 ---
     'is_tu_yang': {'name': '土洋對作', 'show': False, 'tip': '1=符合土洋對作訊號', 'type': 'num'},
     '強勢特徵': {'name': '強勢特徵', 'show': True, 'tip': '策略觸發訊號標籤', 'type': 'str'}
 }
 
 # ==========================================
-# 2. 全數值過濾設定 (V4.2 - 對應所有欄位)
+# 2. 全數值過濾設定
 # ==========================================
 FULL_FILTER_SPECS = [
-    # 價格/技術
     {'key': '現價', 'label': '股價', 'min': 0, 'max': 5000, 'step': 10, 'suffix': ''},
     {'key': '漲幅5d', 'label': '5日漲幅(%)', 'min': -50, 'max': 100, 'step': 1.0, 'suffix': '%'},
     {'key': '漲幅20d', 'label': '月漲幅(%)', 'min': -50, 'max': 200, 'step': 1.0, 'suffix': '%'},
@@ -75,27 +61,19 @@ FULL_FILTER_SPECS = [
     {'key': 'RS強度', 'label': 'RS強度', 'min': 0, 'max': 99, 'step': 1.0, 'suffix': ''},
     {'key': 'bb_width', 'label': '布林寬(%)', 'min': 0, 'max': 50, 'step': 0.5, 'suffix': '%'},
     {'key': '量比', 'label': '量比(倍)', 'min': 0, 'max': 50, 'step': 0.5, 'suffix': ''},
-
-    # 籌碼 - 投信
     {'key': 't_streak', 'label': '投信連買(日)', 'min': 0, 'max': 30, 'step': 1, 'suffix': ''},
     {'key': 't_net_today', 'label': '投信今日(張)', 'min': -20000, 'max': 20000, 'step': 100, 'suffix': ''},
     {'key': 't_sum_5d', 'label': '投信5日(張)', 'min': -50000, 'max': 50000, 'step': 100, 'suffix': ''},
     {'key': 't_sum_10d', 'label': '投信10日(張)', 'min': -50000, 'max': 50000, 'step': 100, 'suffix': ''},
     {'key': 't_sum_20d', 'label': '投信20日(張)', 'min': -100000, 'max': 100000, 'step': 500, 'suffix': ''},
-
-    # 籌碼 - 外資
     {'key': 'f_streak', 'label': '外資連買(日)', 'min': 0, 'max': 30, 'step': 1, 'suffix': ''},
     {'key': 'f_net_today', 'label': '外資今日(張)', 'min': -50000, 'max': 50000, 'step': 500, 'suffix': ''},
     {'key': 'f_sum_5d', 'label': '外資5日(張)', 'min': -100000, 'max': 100000, 'step': 500, 'suffix': ''},
     {'key': 'f_sum_10d', 'label': '外資10日(張)', 'min': -100000, 'max': 100000, 'step': 500, 'suffix': ''},
     {'key': 'f_sum_20d', 'label': '外資20日(張)', 'min': -200000, 'max': 200000, 'step': 1000, 'suffix': ''},
-
-    # 籌碼 - 融資
     {'key': 'm_net_today', 'label': '融資今日(張)', 'min': -20000, 'max': 20000, 'step': 100, 'suffix': ''},
     {'key': 'm_sum_5d', 'label': '融資5日(張)', 'min': -50000, 'max': 50000, 'step': 100, 'suffix': ''},
     {'key': 'm_sum_10d', 'label': '融資10日(張)', 'min': -50000, 'max': 50000, 'step': 100, 'suffix': ''},
-
-    # 基本面
     {'key': 'rev_yoy', 'label': '月營收年增(%)', 'min': -100, 'max': 1000, 'step': 5.0, 'suffix': '%'},
     {'key': 'rev_cum_yoy', 'label': '累營年增(%)', 'min': -100, 'max': 1000, 'step': 5.0, 'suffix': '%'},
     {'key': 'eps_q', 'label': 'EPS(元)', 'min': -10, 'max': 100, 'step': 0.5, 'suffix': ''},
@@ -107,8 +85,7 @@ FULL_FILTER_SPECS = [
 DEFAULT_ACTIVE_FILTERS = ['bb_width', 'RS強度', '量比', '漲幅20d', 't_streak']
 
 TAG_CATEGORIES = {
-    "🔥 趨勢型態": ["主力掃單(ILSS)", "土洋對作", "超強勢", "突破30週", "創季高", "創月高", "強勢多頭", "波段黑馬",
-                   "假跌破"],
+    "🔥 趨勢型態": ["主力掃單(ILSS)", "土洋對作", "超強勢", "突破30週", "創季高", "創月高", "強勢多頭", "波段黑馬", "假跌破"],
     "📉 整理型態": ["極度壓縮", "波動壓縮", "盤整5日", "盤整10日", "盤整20日", "盤整60日", "Vix反轉"],
     "💰 籌碼支撐": ["投信認養", "散戶退場", "回測季線", "回測年線"]
 }
@@ -181,16 +158,13 @@ class FilterSelectionDialog(QDialog):
 
     def init_ui(self):
         layout = QVBoxLayout(self)
-
         lbl = QLabel("請勾選要顯示在主畫面的濾網：")
         lbl.setStyleSheet("color: #AAA; margin-bottom: 10px;")
         layout.addWidget(lbl)
-
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         content = QWidget()
         grid = QGridLayout(content)
-
         row, col = 0, 0
         for cfg in self.all_filters:
             key = cfg['key']
@@ -200,10 +174,8 @@ class FilterSelectionDialog(QDialog):
             grid.addWidget(chk, row, col)
             col += 1
             if col > 2: col = 0; row += 1
-
         scroll.setWidget(content)
         layout.addWidget(scroll)
-
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
@@ -225,26 +197,20 @@ class ColumnSelectorDialog(QDialog):
 
     def init_ui(self):
         layout = QVBoxLayout(self)
-
         lbl = QLabel("💡 拖曳可調整順序，勾選決定是否顯示")
         lbl.setStyleSheet("color: #00E5FF; font-weight: bold;")
         layout.addWidget(lbl)
-
         self.list_widget = QListWidget()
         self.list_widget.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-
         processed_keys = set()
         for key in self.current_order:
             if key in self.config:
                 self._add_item(key)
                 processed_keys.add(key)
-
         for key in self.config.keys():
             if key not in processed_keys:
                 self._add_item(key)
-
         layout.addWidget(self.list_widget)
-
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
@@ -437,13 +403,12 @@ class StrategyModule(QWidget):
 
         # === 左側面板 ===
         control_widget = QWidget()
-        control_widget.setFixedWidth(420) # 稍微加寬
+        control_widget.setFixedWidth(420)
         control_widget.setStyleSheet("background-color: #050505; border-right: 1px solid #222;")
         ctrl_layout = QVBoxLayout(control_widget)
         ctrl_layout.setSpacing(10)
         ctrl_layout.setContentsMargins(10, 10, 10, 10)
 
-        # 🔥 Header 標準化：[搜尋] [標題] [工具]
         header_widget = QWidget()
         header_widget.setFixedHeight(45)
         header_widget.setStyleSheet("background: #111; border-bottom: 1px solid #333;")
@@ -474,7 +439,6 @@ class StrategyModule(QWidget):
         header_layout.addWidget(self.btn_cols)
         ctrl_layout.addWidget(header_widget)
 
-        # Industry
         lbl_ind = QLabel("📂 類別與自選")
         lbl_ind.setProperty("class", "category-label")
         ctrl_layout.addWidget(lbl_ind)
@@ -483,7 +447,6 @@ class StrategyModule(QWidget):
         self.combo_industry.currentIndexChanged.connect(self.apply_filters_debounce)
         ctrl_layout.addWidget(self.combo_industry)
 
-        # Filter
         filter_header_box = QHBoxLayout()
         lbl_val = QLabel("📊 數值過濾")
         lbl_val.setProperty("class", "category-label")
@@ -517,7 +480,6 @@ class StrategyModule(QWidget):
         ctrl_layout.addWidget(self.filter_area)
         self.rebuild_filter_ui()
 
-        # Tags
         lbl_tag = QLabel("🔥 強勢特徵")
         lbl_tag.setProperty("class", "category-label")
         ctrl_layout.addWidget(lbl_tag)
@@ -566,7 +528,6 @@ class StrategyModule(QWidget):
         self.table_view.horizontalHeader().sectionMoved.connect(self.on_header_moved)
 
         self.table_view.setSortingEnabled(True)
-        # 🔥 字體加大
         self.table_view.setStyleSheet("""
             QTableView { background-color: #000000; color: #E0E0E0; gridline-color: #222; font-size: 16px; font-family: 'Consolas', 'Microsoft JhengHei'; border: none; }
             QHeaderView::section { background-color: #111; color: #AAA; padding: 6px; border-right: 1px solid #222; border-bottom: 2px solid #333; font-weight: bold; font-size: 14px; }
@@ -638,7 +599,8 @@ class StrategyModule(QWidget):
 
     def on_current_row_changed(self, current, previous):
         if current.isValid():
-            self.table_view.scrollTo(current, QAbstractItemView.ScrollHint.PositionAtTop)
+            # 🔥 修正：從 PositionAtTop 改為 EnsureVisible，徹底解決「亂跳」問題
+            self.table_view.scrollTo(current, QAbstractItemView.ScrollHint.EnsureVisible)
 
     def toggle_filters(self):
         self.is_filters_expanded = not self.is_filters_expanded
@@ -851,6 +813,21 @@ class StrategyModule(QWidget):
         row = src_idx.row()
         sid = str(self.display_df.iloc[row]['sid'])
         market = "TW"
+        # 檢查硬碟中是否存在 _TWO 的檔案
+        # 假設資料路徑在專案根目錄的 data/cache/tw/
+        base_cache_path = Path(__file__).resolve().parent.parent / "data" / "cache" / "tw"
+        path_two = base_cache_path / f"{sid}_TWO.parquet"
+
+        if path_two.exists():
+            market = "TWO"
+        else:
+            # 如果沒有 _TWO，再檢查有沒有 _TW，都沒有的話預設 TW
+            path_tw = base_cache_path / f"{sid}_TW.parquet"
+            if path_tw.exists():
+                market = "TW"
+
+        # 發送正確的 ID (例如 5536_TWO) 給戰情室
+        print(f"DEBUG: Strategy Double Click: {sid} -> {market}")
         self.stock_clicked_signal.emit(f"{sid}_{market}")
 
     def open_context_menu(self, pos):

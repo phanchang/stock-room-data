@@ -10,13 +10,14 @@ from utils.quote_worker import QuoteWorker
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QButtonGroup, QSizePolicy,
                              QApplication, QMessageBox, QProgressDialog)
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QCursor
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.gridspec as gridspec
+import matplotlib.ticker as ticker
 
 plt.style.use('dark_background')
 plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei']
@@ -48,16 +49,23 @@ class ChartOverlay(QWidget):
 class KLineModule(QWidget):
     stock_selected = pyqtSignal(str)
 
-    # 🔥 MA 配置字典 (Item 2: 客製化參數準備)
+    # 🔥 MA 配置
     MA_CONFIG = {
-        'D': [5, 20, 60],
-        'W': [13, 34],  # 範例：周線看 13, 34
+        'D': [5, 10, 22, 55, 200],
+        'W': [30],
         'M': [3, 6, 12]
     }
 
+    # 🔥 預設顯示的 MA
+    DEFAULT_VISIBLE_MA = {
+        'D': [55, 200],
+        'W': [30],
+        'M': [3, 6]
+    }
+
     MA_COLORS = {
-        5: '#FFFF00', 10: '#FF00FF', 20: '#FF8800',
-        60: '#00FFFF', 13: '#AAFF00', 34: '#FFAA00',
+        5: '#FFFF00', 10: '#FF00FF', 22: '#00FF00', 55: '#FF8800', 200: '#00FFFF',
+        30: '#FFAA00',
         3: '#FFFF00', 6: '#FF8800', 12: '#00FFFF'
     }
 
@@ -120,7 +128,7 @@ class KLineModule(QWidget):
 
         # 1. 控制列
         control_widget = QWidget()
-        control_widget.setFixedHeight(45)  # 加高
+        control_widget.setFixedHeight(45)
         control_widget.setStyleSheet("background-color: #050505; border-bottom: 1px solid #222;")
 
         control_layout = QHBoxLayout(control_widget)
@@ -142,6 +150,11 @@ class KLineModule(QWidget):
         control_layout.addWidget(self.btn_month)
 
         control_layout.addStretch()
+
+        # 🔥 [新增功能] 資料日期顯示 Label
+        self.lbl_data_date = QLabel("資料日期: --/--")
+        self.lbl_data_date.setStyleSheet("color: #FF8800; font-weight: bold; font-size: 13px; margin-right: 10px;")
+        control_layout.addWidget(self.lbl_data_date)
 
         btn_expand = QPushButton("⛶")
         btn_expand.setFixedSize(35, 30)
@@ -169,6 +182,19 @@ class KLineModule(QWidget):
 
         info_layout.addWidget(self.info_label)
         layout.addWidget(self.info_bg)
+
+        # 🔥 浮動警告標籤 (預設隱藏)
+        self.warning_label = QLabel("⚠️ 資料過期，請執行 [更新下載]", self)
+        self.warning_label.setStyleSheet("""
+            background-color: rgba(255, 0, 0, 180);
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+            padding: 5px 10px;
+            border-radius: 4px;
+        """)
+        self.warning_label.move(60, 55)
+        self.warning_label.hide()
 
         # 3. 畫布
         self.fig = Figure(facecolor='#000000')
@@ -213,9 +239,20 @@ class KLineModule(QWidget):
             self.process_data()
             self.redraw_chart()
             self.overlay.hide()
+
+            # 更新介面標籤
             if self.display_df is not None and not self.display_df.empty:
                 last_row = self.display_df.iloc[-1]
                 self.update_info_label(last_row, last_row.name)
+                self.update_date_indicator()
+
+    def update_date_indicator(self):
+        """更新右上角的資料日期標籤"""
+        if self.display_df is not None and not self.display_df.empty:
+            last_date = self.display_df.index[-1]
+            self.lbl_data_date.setText(f"資料日期: {last_date.strftime('%Y/%m/%d')}")
+        else:
+            self.lbl_data_date.setText("資料日期: --/--")
 
     def init_chart_structure(self):
         gs = gridspec.GridSpec(2, 1, height_ratios=[3, 1], hspace=0.02)
@@ -226,6 +263,8 @@ class KLineModule(QWidget):
             ax.set_facecolor('#000000')
             ax.tick_params(colors='#888')
             ax.yaxis.tick_right()
+            ax.ticklabel_format(style='plain', axis='y')
+
         self.fig.subplots_adjust(left=0.01, right=0.92, top=0.98, bottom=0.15)
 
     def load_stock_data(self, stock_id: str, stock_name: str = ""):
@@ -245,6 +284,12 @@ class KLineModule(QWidget):
         self.quote_worker.set_monitoring_stocks([stock_id], source='kline')
 
         path = Path(f"data/cache/tw/{stock_id}.parquet")
+        if not path.exists() and "_" in stock_id:
+            raw_id = stock_id.split('_')[0]
+            fallback_path = Path(f"data/cache/tw/{raw_id}.parquet")
+            if fallback_path.exists():
+                path = fallback_path
+
         data_loaded = False
         if path.exists():
             try:
@@ -255,6 +300,13 @@ class KLineModule(QWidget):
 
                 self.process_data()
 
+                if hasattr(self, 'warning_label'):
+                    self.warning_label.hide()
+
+                # 更新日期顯示
+                self.update_date_indicator()
+
+                # 嘗試取得即時快照，但後續 on_realtime_quote 會嚴格把關
                 if hasattr(self.quote_worker, 'get_latest_from_cache'):
                     latest_data = self.quote_worker.get_latest_from_cache(stock_id)
                     if latest_data:
@@ -262,6 +314,7 @@ class KLineModule(QWidget):
                         self.on_realtime_quote({target_key: {'realtime': latest_data}})
 
                 self.redraw_chart()
+                QTimer.singleShot(100, lambda: self.canvas.draw())
                 data_loaded = True
 
             except Exception as e:
@@ -271,6 +324,7 @@ class KLineModule(QWidget):
             if self.ax1: self.ax1.clear()
             if self.ax2: self.ax2.clear()
             self.canvas.draw()
+            self.lbl_data_date.setText("資料日期: 無資料")
 
         if hasattr(self, 'overlay'):
             self.overlay.hide()
@@ -315,8 +369,7 @@ class KLineModule(QWidget):
         self.scroll_pos = 0
 
     def _calc_indicators(self, df):
-        # 🔥 動態計算 MA
-        ma_list = self.MA_CONFIG.get(self.timeframe, [5, 20, 60])
+        ma_list = self.MA_CONFIG.get(self.timeframe, [])
         for ma in ma_list:
             df[f'MA{ma}'] = df['Close'].rolling(ma).mean()
 
@@ -327,92 +380,125 @@ class KLineModule(QWidget):
         df['PctChange'] = (df['Change'] / df['PrevClose']) * 100
 
     def on_realtime_quote(self, data_dict):
+        """
+        處理即時報價：
+        1. 嚴格檢查資料是否屬於當前股票
+        2. 若資料無變化，不重畫
+        3. 若是新的一天，Append Row；若是同一天，Update Row
+        """
         if self.is_closing: return
         if self.display_df is None or self.display_df.empty: return
-        if self.timeframe != 'D': return
+        if self.timeframe != 'D': return  # 即時只支援日線
 
+        # 取得當前股票代碼 (去除 _TW 後綴)
         target_key = self.current_stock_id.split('_')[0]
         if target_key not in data_dict: return
 
         quote = data_dict[target_key]
         real = quote.get('realtime', {})
+        info = quote.get('info', {})
+
+        # 安全轉換工具
+        def safe_float(v):
+            if v == '-' or v == '' or v is None: return 0.0
+            try:
+                return float(v)
+            except:
+                return 0.0
 
         try:
-            latest = float(real.get('latest_trade_price', 0) or 0)
-            close = float(real.get('close', 0) or 0)
-            trade_price = latest if latest > 0 else close
+            # 1. 取得價格與量
+            latest = safe_float(real.get('latest_trade_price'))
+            close_p = safe_float(real.get('close'))
 
-            if trade_price == 0: return
+            # 如果最新成交是0，嘗試用最佳買賣價推算 (盤前試撮或剛開盤)
+            trade_price = latest if latest > 0 else close_p
+            if trade_price == 0:
+                bid = safe_float(real.get('best_bid_price', [0])[0])
+                ask = safe_float(real.get('best_ask_price', [0])[0])
+                if bid > 0:
+                    trade_price = bid
+                elif ask > 0:
+                    trade_price = ask
 
-            open_p = float(real.get('open', 0) or 0)
-            high_p = float(real.get('high', 0) or 0)
-            low_p = float(real.get('low', 0) or 0)
-            vol = float(real.get('accumulate_trade_volume', 0) or 0)
+            if trade_price == 0: return  # 真的沒資料，跳過
 
+            vol = safe_float(real.get('accumulate_trade_volume'))
+            open_p = safe_float(real.get('open'))
+            high_p = safe_float(real.get('high'))
+            low_p = safe_float(real.get('low'))
+
+            # 補正 OHLC
             if open_p == 0: open_p = trade_price
             if high_p == 0: high_p = trade_price
             if low_p == 0: low_p = trade_price
+            high_p = max(high_p, trade_price)
+            low_p = min(low_p, trade_price)
 
-            high_p = max(high_p, trade_price, open_p)
-            low_p = min(low_p, trade_price, open_p)
+            # 2. 日期處理
+            date_str = info.get('date', '')
+            if len(date_str) == 8:
+                quote_date = datetime.strptime(date_str, "%Y%m%d")
+            else:
+                quote_date = datetime.now()
 
-            today_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            quote_date = quote_date.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # 取得 DataFrame 最後一筆資料的日期
             last_idx = self.display_df.index[-1]
             last_date = last_idx.replace(hour=0, minute=0, second=0, microsecond=0)
 
             need_redraw = False
 
-            # 新增今日
-            if today_date > last_date:
+            # 情境 A: 跨日更新 (新增一根 K 棒)
+            if quote_date > last_date:
                 prev_close = self.display_df.iloc[-1]['Close']
                 change = trade_price - prev_close
-                pct_change = (change / prev_close) * 100 if prev_close != 0 else 0
+                pct = (change / prev_close) * 100 if prev_close != 0 else 0
 
-                # 建構新 row，動態處理 MA 欄位
-                new_data = {
+                new_row = pd.Series({
                     'Open': open_p, 'High': high_p, 'Low': low_p, 'Close': trade_price,
-                    'Volume': vol,
-                    'PrevClose': prev_close, 'Change': change, 'PctChange': pct_change
-                }
-                # 補上 MA 為 NaN
-                for ma in self.MA_CONFIG.get(self.timeframe, []):
-                    new_data[f'MA{ma}'] = np.nan
+                    'Volume': vol, 'PrevClose': prev_close, 'Change': change, 'PctChange': pct
+                }, name=quote_date)
 
-                new_row = pd.Series(new_data, name=today_date)
+                # 補上 MA 空值
+                for ma in self.MA_CONFIG.get('D', []): new_row[f'MA{ma}'] = np.nan
+
                 self.display_df = pd.concat([self.display_df, pd.DataFrame([new_row])])
                 need_redraw = True
 
-            # 更新今日
-            elif today_date == last_date:
-                current_vol = self.display_df.at[last_idx, 'Volume']
-                current_close = self.display_df.at[last_idx, 'Close']
+            # 情境 B: 當日更新 (修改最後一根 K 棒)
+            elif quote_date == last_date:
+                curr_close = self.display_df.at[last_idx, 'Close']
+                curr_vol = self.display_df.at[last_idx, 'Volume']
+                curr_high = self.display_df.at[last_idx, 'High']
+                curr_low = self.display_df.at[last_idx, 'Low']
 
-                if abs(current_close - trade_price) > 0.0001 or abs(current_vol - vol) > 0.0001:
-                    self.display_df.at[last_idx, 'Open'] = open_p
-                    self.display_df.at[last_idx, 'High'] = high_p
-                    self.display_df.at[last_idx, 'Low'] = low_p
+                # 只有當價格或量有變動時才更新 (節省資源)
+                if abs(curr_close - trade_price) > 0.001 or abs(curr_vol - vol) > 0.1 or \
+                        high_p > curr_high or low_p < curr_low:
+
+                    self.display_df.at[last_idx, 'Open'] = open_p  # 有時開盤價會修正
+                    self.display_df.at[last_idx, 'High'] = max(curr_high, high_p)
+                    self.display_df.at[last_idx, 'Low'] = min(curr_low, low_p)
                     self.display_df.at[last_idx, 'Close'] = trade_price
                     self.display_df.at[last_idx, 'Volume'] = vol
 
                     pc = self.display_df.at[last_idx, 'PrevClose']
-                    if pc != 0:
+                    if pc > 0:
                         self.display_df.at[last_idx, 'Change'] = trade_price - pc
                         self.display_df.at[last_idx, 'PctChange'] = ((trade_price - pc) / pc) * 100
 
                     need_redraw = True
 
             if need_redraw:
-                self._calc_indicators(self.display_df)
+                self._calc_indicators(self.display_df)  # 重算 MA
                 self.redraw_chart()
-                if getattr(self, 'waiting_for_realtime', False):
-                    if hasattr(self, 'overlay'): self.overlay.hide()
-                    self.waiting_for_realtime = False
-
                 if hasattr(self, 'expanded_dialog') and self.expanded_dialog.isVisible():
                     self.expanded_dialog.on_realtime_quote(data_dict)
 
         except Exception as e:
-            print(f"DEBUG: KLine update error: {e}")
+            print(f"DEBUG: KLine Update Error: {e}")
 
     def redraw_chart(self):
         if self.is_closing or self.display_df is None: return
@@ -432,6 +518,8 @@ class KLineModule(QWidget):
         view_df = self.display_df.iloc[start_idx:end_idx].copy()
         self.current_view_df = view_df
 
+        view_df['Volume'] = pd.to_numeric(view_df['Volume'], errors='coerce').fillna(0)
+
         if not view_df.empty:
             v_high = view_df['High'].max()
             v_low = view_df['Low'].min()
@@ -446,6 +534,8 @@ class KLineModule(QWidget):
             for spine in ax.spines.values():
                 spine.set_edgecolor('#444')
             ax.yaxis.tick_right()
+            ax.ticklabel_format(style='plain', axis='y', useOffset=False)
+
         self.ax1.tick_params(labelbottom=False)
 
         x = np.arange(len(view_df))
@@ -470,19 +560,30 @@ class KLineModule(QWidget):
             self.ax1.vlines(x[flat], lows[flat], highs[flat], color=col_flat, lw=0.8)
             self.ax1.hlines(closes[flat], x[flat] - width / 2, x[flat] + width / 2, colors=col_flat, lw=2)
 
-        # 🔥 動態繪製 MA
+        visible_list = self.DEFAULT_VISIBLE_MA.get(self.timeframe, [])
         ma_list = self.MA_CONFIG.get(self.timeframe, [])
+
         for ma in ma_list:
             col_name = f'MA{ma}'
             if col_name in view_df.columns:
-                color = self.MA_COLORS.get(ma, '#FFFFFF')
-                self.ax1.plot(x, view_df[col_name].values, color=color, lw=1, alpha=0.9, label=f'MA{ma}')
+                if ma in visible_list:
+                    color = self.MA_COLORS.get(ma, '#FFFFFF')
+                    self.ax1.plot(x, view_df[col_name].values, color=color, lw=1, alpha=0.9, label=f'MA{ma}')
 
         self.ax1.set_ylim(ylim_min, ylim_max)
+        self.ax1.set_xlim(-0.5, len(view_df) - 0.5)
 
         self.ax2.bar(x[up], view_df['Volume'][up], color=col_up, alpha=0.9)
         self.ax2.bar(x[down], view_df['Volume'][down], color=col_down, alpha=0.9)
         self.ax2.bar(x[flat], view_df['Volume'][flat], color=col_flat, alpha=0.9)
+
+        if not view_df.empty:
+            vol_max = view_df['Volume'].max()
+            if pd.isna(vol_max) or vol_max <= 0:
+                vol_max = 1
+            self.ax2.set_ylim(0, vol_max * 1.05)
+
+        self.ax2.set_xlim(-0.5, len(view_df) - 0.5)
 
         date_strs = []
         tick_indices = []
@@ -494,11 +595,8 @@ class KLineModule(QWidget):
             tick_indices.append(i)
             if self.timeframe == 'D':
                 val = d.year
-                if last_val != val:
-                    date_strs.append(d.strftime('%Y/%m/%d'))
-                    last_val = val
-                else:
-                    date_strs.append(d.strftime('%m/%d'))
+                date_strs.append(d.strftime('%Y/%m/%d') if last_val != val else d.strftime('%m/%d'))
+                last_val = val
             else:
                 date_strs.append(d.strftime('%Y-%m'))
 
@@ -511,7 +609,7 @@ class KLineModule(QWidget):
         self.cross_v2 = self.ax2.axvline(0, color='white', ls='--', lw=0.8, visible=False)
 
         props = dict(boxstyle='square', facecolor='#FF00FF', alpha=0.9, edgecolor='none')
-        self.y_label_text = self.ax1.text(1.02, 0, "", transform=self.ax1.get_yaxis_transform(),
+        self.y_label_text = self.ax1.text(1.01, 0, "", transform=self.ax1.get_yaxis_transform(),
                                           color='white', fontsize=10, fontweight='bold',
                                           va='center', ha='left', bbox=props, visible=False)
 
@@ -526,12 +624,16 @@ class KLineModule(QWidget):
 
     def on_mouse_press(self, event):
         if event.button == 1:
+            if event.dblclick:
+                self.visible_candles = 80
+                self.scroll_pos = 0
+                self.redraw_chart()
+                return
             self.is_dragging = True
             self.last_mouse_x = event.xdata
 
     def on_mouse_release(self, event):
-        if event.button == 1:
-            self.is_dragging = False
+        self.is_dragging = False
 
     def on_mouse_move(self, event):
         if self.is_closing or self.current_view_df is None or self.current_view_df.empty: return
@@ -608,16 +710,17 @@ class KLineModule(QWidget):
             f"<span style='color:{c_change};'>({sign}{change:.2f} / {sign}{pct:.2f}%)</span>"
         )
 
-        # 🔥 動態生成 MA 資訊字串
         ma_str = f"Vol:<span style='color:#FFFF00;'>{int(row['Volume']):,}</span>&nbsp;&nbsp;"
         ma_list = self.MA_CONFIG.get(self.timeframe, [])
+        visible_list = self.DEFAULT_VISIBLE_MA.get(self.timeframe, [])
+
         for ma in ma_list:
-            col_name = f'MA{ma}'
-            if col_name in row:
-                color = self.MA_COLORS.get(ma, '#FFF')
-                val = row[col_name]
-                if not pd.isna(val):
-                    ma_str += f"<span style='color:{color};'>MA{ma}:{val:.2f}</span>&nbsp;"
+            if ma in visible_list:
+                col_name = f'MA{ma}'
+                if col_name in row:
+                    color = self.MA_COLORS.get(ma, '#FFF')
+                    val = row[col_name]
+                    if not pd.isna(val):
+                        ma_str += f"<span style='color:{color};'>MA{ma}:{val:.2f}</span>&nbsp;"
 
         self.info_label.setText(f"{line1}<br>{ma_str}")
-

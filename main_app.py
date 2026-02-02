@@ -1,18 +1,16 @@
 import sys
 import os
 from pathlib import Path
-import pandas as pd
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
+                             QVBoxLayout, QPushButton, QStackedWidget,
+                             QButtonGroup, QGridLayout, QTabWidget,
+                             QMessageBox, QProgressDialog, QSizePolicy)
+from PyQt6.QtCore import Qt, QTimer
 
 # 設定模組搜尋路徑
 current_dir = Path(__file__).resolve().parent
 if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
-
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
-                             QVBoxLayout, QPushButton, QStackedWidget,
-                             QLabel, QButtonGroup, QGridLayout, QTabWidget,
-                             QMessageBox, QProgressDialog)
-from PyQt6.QtCore import Qt, QTimer
 
 # Import Utils
 from utils.quote_worker import QuoteWorker
@@ -70,26 +68,26 @@ class SideMenu(QWidget):
 class StockWarRoomV3(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("StockWarRoom V3 - 戰情矩陣")
+        self.setWindowTitle("StockWarRoom V3 - 戰情矩陣 (極速版)")
         self.resize(1600, 950)
         self.setStyleSheet("""
             QMainWindow { background-color: #000000; }
             QMessageBox { background-color: #222; color: white; }
-            QMessageBox QLabel { color: white; }
             QPushButton { background-color: #444; color: white; border: 1px solid #555; padding: 5px; }
         """)
 
-        # 1. 🔥 建立唯一的報價引擎 (核心大腦)
+        # 1. 啟動共享的報價 Worker
         self.shared_worker = QuoteWorker(self)
         self.shared_worker.start()
 
-        # 2. 初始化 UI (並將大腦傳遞給器官)
-        self.init_ui()
+        # 狀態變數
+        self.current_stock_id = None
+        self.current_stock_name = ""
 
-        # 3. 連接信號與槽
+        self.init_ui()
         self.connect_signals()
 
-        # 4. 延遲載入初始資料 (避免 UI 尚未繪製完成就大量運算導致卡頓)
+        # 延遲載入初始資料
         QTimer.singleShot(500, self.load_initial_data)
 
     def init_ui(self):
@@ -113,72 +111,51 @@ class StockWarRoomV3(QMainWindow):
         warroom_layout.setContentsMargins(4, 4, 4, 4)
         warroom_layout.setSpacing(4)
 
-        # 🔥🔥🔥 [絕對修正] 傳入 shared_worker 給 UI 元件 🔥🔥🔥
-        # 這是解決 StockList 與 KLine 不更新、不連動的關鍵
+        # 建立模組
         self.list_module = StockListModule(shared_worker=self.shared_worker)
         self.kline_module = KLineModule(shared_worker=self.shared_worker)
 
-        # 其他靜態資料模組
         self.inst_module = InstitutionalModule()
         self.margin_module = MarginModule()
         self.revenue_module = RevenueModule()
         self.eps_module = EPSModule()
         self.ratio_module = RatioModule()
 
-        # 建立 Tab
+        # 建立 Tab (連接切換事件，實現 Lazy Loading)
         self.chips_tabs = self._create_tab_widget()
         self.chips_tabs.addTab(self.inst_module, "三大法人")
         self.chips_tabs.addTab(self.margin_module, "資券變化")
+        self.chips_tabs.currentChanged.connect(self.on_tab_changed)  # Lazy Load Trigger
 
         self.fund_tabs = self._create_tab_widget()
         self.fund_tabs.addTab(self.revenue_module, "月營收")
         self.fund_tabs.addTab(self.eps_module, "EPS")
         self.fund_tabs.addTab(self.ratio_module, "三率")
+        self.fund_tabs.currentChanged.connect(self.on_tab_changed)  # Lazy Load Trigger
 
-        # 加入 Layout
+        # Layout 設定
+        for widget in [self.list_module, self.kline_module, self.chips_tabs, self.fund_tabs]:
+            widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+
         warroom_layout.addWidget(self.list_module, 0, 0)
         warroom_layout.addWidget(self.kline_module, 0, 1)
         warroom_layout.addWidget(self.chips_tabs, 1, 0)
         warroom_layout.addWidget(self.fund_tabs, 1, 1)
 
-        warroom_layout.setColumnStretch(0, 35)
-        warroom_layout.setColumnStretch(1, 65)
-        warroom_layout.setRowStretch(0, 45)
-        warroom_layout.setRowStretch(1, 55)
+        warroom_layout.setColumnStretch(0, 50)
+        warroom_layout.setColumnStretch(1, 50)
+        warroom_layout.setRowStretch(0, 55)  # K線圖高一點
+        warroom_layout.setRowStretch(1, 45)
 
         self.pages.addWidget(self.warroom_page)
 
-        # Page 1: 選股策略
+        # Page 1 & 2
         self.strategy_page = StrategyModule()
         self.pages.addWidget(self.strategy_page)
-
-        # Page 2: 市場焦點
         self.market_page = ActiveETFModule()
         self.pages.addWidget(self.market_page)
 
         main_layout.addWidget(self.pages)
-
-    def closeEvent(self, event):
-        reply = QMessageBox.question(self, '確認退出', '確定要關閉系統嗎？',
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-
-        if reply == QMessageBox.StandardButton.Yes:
-            progress = QProgressDialog("正在安全停止引擎...", None, 0, 0, self)
-            progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-            progress.show()
-            QApplication.processEvents()
-
-            # 🔥 強制停止 Shared Worker
-            if self.shared_worker.isRunning():
-                self.shared_worker.stop()
-                self.shared_worker.wait(1000)
-
-            # 關閉 Matplotlib 資源
-            import matplotlib.pyplot as plt
-            plt.close('all')
-            event.accept()
-        else:
-            event.ignore()
 
     def _create_tab_widget(self):
         tabs = QTabWidget()
@@ -189,68 +166,63 @@ class StockWarRoomV3(QMainWindow):
                 border-top: 2px solid transparent; font-weight: bold;
             }
             QTabBar::tab:selected { 
-                background: #1A1A1A; color: #00E5FF; 
-                border-top: 2px solid #00E5FF;
+                background: #1A1A1A; color: #00E5FF; border-top: 2px solid #00E5FF;
             }
             QTabBar::tab:hover { color: #FFF; }
         """)
         return tabs
 
     def connect_signals(self):
-        # 頁面切換
         self.side_menu.button_group.idClicked.connect(self.pages.setCurrentIndex)
-
-        # 選股連動
         self.list_module.stock_selected.connect(self.on_stock_changed)
         self.market_page.stock_clicked_signal.connect(self.on_stock_changed)
         self.strategy_page.stock_clicked_signal.connect(self.on_strategy_stock_clicked)
         self.strategy_page.request_add_watchlist.connect(self.on_add_watchlist_request)
 
-    def get_stock_name(self, full_stock_id):
-        try:
-            stock_id = full_stock_id.split('_')[0]
-            if hasattr(self.list_module, 'stock_db') and self.list_module.stock_db:
-                data = self.list_module.stock_db.get(stock_id)
-                if data: return data.get('name', '')
-        except Exception:
-            pass
-        return ""
-
     def on_stock_changed(self, full_stock_id):
-        """ 🔥 統一處理選股邏輯，並傳遞股票名稱給所有模組 """
+        """核心優化：切換股票時，只載入最必要的 K 線，其他模組採用 Lazy Load"""
+        self.current_stock_id = full_stock_id
+        clean_id = full_stock_id.split('_')[0]
 
-        # 1. 解析代號與名稱
-        stock_id = full_stock_id  # 例如 "2330_TW"
-        clean_id = stock_id.split('_')[0]
+        # 嘗試從 DB 獲取名稱
         stock_name = ""
+        if hasattr(self.list_module, 'stock_db'):
+            info = self.list_module.stock_db.get(clean_id)
+            if info: stock_name = info.get('name', '')
+        self.current_stock_name = stock_name
 
-        # 從 StockList 的資料庫中查找名稱
-        if hasattr(self, 'list_module') and hasattr(self.list_module, 'stock_db'):
-            stock_info = self.list_module.stock_db.get(clean_id)
-            if stock_info:
-                stock_name = stock_info.get('name', '')
+        print(f"DEBUG: 切換股票 {full_stock_id} ({stock_name}) - 啟動極速載入")
 
-        print(f"DEBUG: 切換股票 {stock_id} ({stock_name})")
-
-        # 2. 通知 KLine (這會觸發 Worker 去抓最新報價)
+        # 1. 優先載入 K 線 (這是最重要的)
         if hasattr(self, 'kline_module'):
-            self.kline_module.load_stock_data(stock_id, stock_name)
+            self.kline_module.load_stock_data(full_stock_id, stock_name)
 
-        # 3. 通知各個分析分頁 (依序傳入 ID 與 名稱)
-        if hasattr(self, 'inst_module'):
-            self.inst_module.load_inst_data(stock_id, stock_name)
+        # 2. 載入「當前可見」的 Tab 數據
+        self.update_visible_tabs()
 
-        if hasattr(self, 'margin_module'):
-            self.margin_module.load_margin_data(stock_id, stock_name)
+    def update_visible_tabs(self):
+        """只更新當前顯示的 Tab，避免一次載入所有數據導致卡頓"""
+        if not self.current_stock_id: return
 
-        if hasattr(self, 'revenue_module'):
-            self.revenue_module.load_revenue_data(stock_id, stock_name)
+        # 處理 Chips Tabs (左下)
+        current_chips = self.chips_tabs.currentWidget()
+        if current_chips == self.inst_module:
+            self.inst_module.load_inst_data(self.current_stock_id, self.current_stock_name)
+        elif current_chips == self.margin_module:
+            self.margin_module.load_margin_data(self.current_stock_id, self.current_stock_name)
 
-        if hasattr(self, 'eps_module'):
-            self.eps_module.load_eps_data(stock_id, stock_name)
+        # 處理 Fund Tabs (右下)
+        current_fund = self.fund_tabs.currentWidget()
+        if current_fund == self.revenue_module:
+            self.revenue_module.load_revenue_data(self.current_stock_id, self.current_stock_name)
+        elif current_fund == self.eps_module:
+            self.eps_module.load_eps_data(self.current_stock_id, self.current_stock_name)
+        elif current_fund == self.ratio_module:
+            self.ratio_module.load_ratio_data(self.current_stock_id, self.current_stock_name)
 
-        if hasattr(self, 'ratio_module'):
-            self.ratio_module.load_ratio_data(stock_id, stock_name)
+    def on_tab_changed(self, index):
+        """當使用者切換 Tab 時，才去載入該 Tab 的數據"""
+        self.update_visible_tabs()
 
     def on_strategy_stock_clicked(self, stock_id_full):
         self.on_stock_changed(stock_id_full)
@@ -261,27 +233,32 @@ class StockWarRoomV3(QMainWindow):
         self.list_module.add_stock_to_group(stock_id, group_name)
 
     def load_initial_data(self):
-        # 1. 觸發列表刷新 (這會讓 Worker 開始工作)
         self.list_module.refresh_table()
-
-        # 2. 預設載入清單中的第一檔
         if self.list_module.table.rowCount() > 0:
             item = self.list_module.table.item(0, 0)
             if item:
                 code = item.text()
                 market = item.data(Qt.ItemDataRole.UserRole)
                 fid = f"{code}_{market}"
-
-                # 取得名稱
-                name_item = self.list_module.table.item(0, 1)
-                name = name_item.text() if name_item else ""
-
-                print(f"🚀 [系統啟動] 預設載入: {fid} {name}")
                 self.on_stock_changed(fid)
+
+    def closeEvent(self, event):
+        reply = QMessageBox.question(self, '確認退出', '確定要關閉系統嗎？',
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            if self.shared_worker.isRunning():
+                self.shared_worker.stop()
+                self.shared_worker.wait(1000)
+            import matplotlib.pyplot as plt
+            plt.close('all')
+            event.accept()
+        else:
+            event.ignore()
 
 
 if __name__ == "__main__":
+    os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
     app = QApplication(sys.argv)
     window = StockWarRoomV3()
-    window.show()
+    window.showMaximized()
     sys.exit(app.exec())
