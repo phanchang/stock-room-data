@@ -1,4 +1,3 @@
-import sys
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -18,7 +17,7 @@ import matplotlib.patches as patches
 
 from utils.indicators import Indicators
 from utils.quote_worker import QuoteWorker
-
+from utils.strategies.technical import TechnicalStrategies
 
 class ExpandedKLineWindow(QDialog):
     MA_CONFIG = {
@@ -195,7 +194,6 @@ class ExpandedKLineWindow(QDialog):
         sub_layout.setSpacing(10)
 
         self.combo = QComboBox()
-        # 移除了 "Zeiierman VP"
         self.combo.addItems(["Volume", "Vix Fix", "KD", "MACD", "RSI"])
         self.combo.setCurrentText(self.current_indicator)
         self.combo.setFixedSize(110, 20)
@@ -406,8 +404,6 @@ class ExpandedKLineWindow(QDialog):
         self.ax1 = self.figure.add_subplot(gs[0])
         self.ax2 = self.figure.add_subplot(gs[1], sharex=self.ax1)
 
-        # 移除 ax_vol 相關設定
-        # 恢復 ax1 背景顏色，無需透明
         self.ax1.set_facecolor('#121212')
 
         for ax in [self.ax1, self.ax2]:
@@ -422,36 +418,97 @@ class ExpandedKLineWindow(QDialog):
 
         self.ax1.tick_params(labelbottom=False)
 
-        # 註：十字線物件不再於此處初始化，改於 draw_candles_and_indicators 內重新建立，
-        # 以避免 ax.clear() 後物件遺失的問題。
-
         self.canvas.draw_idle()
         self.reposition_overlays()
 
     def draw_candles_and_indicators(self):
-        # 清除圖表，這會同時清除圖上的所有物件（包括十字線）
+        """
+        完整繪製主圖、副圖與策略訊號 (已修正變數順序與重複繪圖問題)
+        """
+        # --- [1] 初始化畫布與計算範圍 ---
         self.ax1.clear()
         self.ax2.clear()
 
-        # 重新設定網格與背景 (clear 會重置這些設定)
+        # 設定背景與格線
         self.ax1.set_facecolor('#121212')
         self.ax2.set_facecolor('#121212')
         self.ax1.grid(True, color='#2A2A2A', ls='-', lw=0.8)
         self.ax2.grid(True, color='#2A2A2A', ls='-', lw=0.8)
 
+        # 計算顯示範圍 (Scroll Logic)
         total_len = len(self.current_df)
         max_scroll = max(0, total_len - self.visible_candles)
         self.scroll_pos = max(0, min(self.scroll_pos, max_scroll))
-
         end_idx = total_len - int(self.scroll_pos)
         start_idx = max(0, end_idx - int(self.visible_candles))
 
+        # 🔥 核心數據切片 (確保 view_df 在最前方定義)
         view_df = self.current_df.iloc[start_idx:end_idx].copy()
         if view_df.empty: return
-
         x = np.arange(len(view_df))
 
-        # 繪製 K 線
+        # --- [2] 策略視覺化 (僅限週線模式) ---
+        if self.current_tf == 'W':
+            # A. 取得參數與繪製通道
+            # 注意：這裡使用 get 避免 technical.py 未更新導致的錯誤
+            try:
+                cfg = TechnicalStrategies.STRATEGY_CONFIG
+                adh_bias = cfg.get('adhesive_bias', 0.12)
+            except:
+                adh_bias = 0.12  # 預設值防呆
+
+            if 'MA30' in view_df.columns:
+                ma_vals = view_df['MA30'].values
+                # 繪製 ±N% 虛線通道
+                self.ax1.plot(x, ma_vals * (1 + adh_bias), color='#444', ls='--', lw=0.8, alpha=0.5)
+                self.ax1.plot(x, ma_vals * (1 - adh_bias), color='#444', ls='--', lw=0.8, alpha=0.5)
+
+                # B. 左上方顯示 MA30 數值與斜率箭頭
+                if len(ma_vals) >= 2:
+                    curr_ma = ma_vals[-1]
+                    prev_ma = ma_vals[-2]
+                    arrow = "▲" if curr_ma > prev_ma else "▼" if curr_ma < prev_ma else "─"
+                    a_color = "#FFAA00" if arrow == "▲" else "#00FF00"
+                    # 使用 transAxes 定位在左上角 (0.02, 0.90)
+                    #self.ax1.text(0.02, 0.90, f"MA30: {curr_ma:.2f} {arrow}",
+                    #              transform=self.ax1.transAxes, color=a_color,
+                    #              fontsize=14, fontweight='bold', va='top', zorder=10)
+                    if not hasattr(self, 'ma30_label_obj') or self.ma30_label_obj is None:
+                        # 建立一個空的文字物件，位置固定在左上角
+                        self.ma30_label_obj = self.ax1.text(
+                            0.02, 0.94, "",
+                            transform=self.ax1.transAxes,
+                            color='#FFAA00',
+                            fontsize=10,  # <-- 字體改小，跟其他資訊一樣
+                            fontweight='bold',
+                            va='top',
+                            zorder=10
+                        )
+
+            # C. 標記策略訊號 (Adhesive & Shakeout)
+            try:
+                signal_df = TechnicalStrategies.analyze_30w_breakout_details(self.current_df)
+                view_signals = signal_df.iloc[start_idx:end_idx]
+
+                for i in range(len(view_signals)):
+                    sig = view_signals.iloc[i]['Signal']
+                    l_p = view_df.iloc[i]['Low']
+
+                    # 🟡 黏貼 (黃色三角形)
+                    if sig in [1, 3]:
+                        self.ax1.scatter(x[i], l_p * 0.98, marker='^', color='#FFFF00', s=80, zorder=5)
+                        self.ax1.text(x[i], l_p * 0.96, view_signals.iloc[i]['Adh_Info'],
+                                      color='#FFFF00', fontsize=9, ha='center', va='top')
+                    # 🔴 甩轎 (紅色大星號)
+                    if sig in [2, 3]:
+                        self.ax1.scatter(x[i], l_p * 0.93, marker='*', color='#FF3333', s=120, zorder=5)
+                        self.ax1.text(x[i], l_p * 0.91, view_signals.iloc[i]['Shk_Info'],
+                                      color='#FF3333', fontsize=9, ha='center', va='top', fontweight='bold')
+            except Exception as e:
+                # 避免策略計算失敗導致整個圖表掛掉
+                print(f"Strategy Calc Error: {e}")
+
+        # --- [3] 繪製標準 K 線 (只畫一次！) ---
         up = view_df['Close'] >= view_df['Open']
         down = view_df['Close'] < view_df['Open']
 
@@ -463,27 +520,27 @@ class ExpandedKLineWindow(QDialog):
                      color='#00FF00', edgecolor='#00FF00', linewidth=0.8)
         self.ax1.vlines(x[down], view_df['Low'][down], view_df['High'][down], color='#00FF00', lw=1)
 
-        # 繪製均線
+        # --- [4] 繪製均線 ---
         ma_list = self.MA_CONFIG.get(self.current_tf, [])
         for ma in ma_list:
-            is_visible = True
+            is_vis = True
             if self.current_tf == 'D' and ma in self.ma_checks:
-                is_visible = self.ma_checks[ma].isChecked()
+                is_vis = self.ma_checks[ma].isChecked()
 
-            if is_visible:
-                col_name = f'MA{ma}'
-                if col_name in view_df.columns:
-                    color = self.MA_COLORS.get(ma, '#FFFFFF')
-                    self.ax1.plot(x, view_df[col_name].values, color=color, lw=1.2, alpha=0.9, label=f'MA{ma}')
+            if is_vis:
+                col = f'MA{ma}'
+                if col in view_df.columns:
+                    self.ax1.plot(x, view_df[col].values, color=self.MA_COLORS.get(ma, '#FFF'), lw=1.2, alpha=0.9,
+                                  label=f'MA{ma}')
 
-        v_high = view_df['High'].max()
-        v_low = view_df['Low'].min()
-        if pd.notna(v_high) and pd.notna(v_low):
-            pad = (v_high - v_low) * 0.05
-            self.ax1.set_ylim(v_low - pad, v_high + pad)
+        # --- [5] 設定 Y 軸範圍 ---
+        v_h, v_l = view_df['High'].max(), view_df['Low'].min()
+        if pd.notna(v_h) and pd.notna(v_l):
+            pad = (v_h - v_l) * 0.15
+            self.ax1.set_ylim(v_l - pad, v_h + pad)
         self.ax1.set_xlim(-0.5, len(view_df) - 0.5)
 
-        # 繪製指標
+        # --- [6] 繪製指標 (副圖) ---
         name = self.current_indicator
 
         if name == "Volume":
@@ -542,7 +599,7 @@ class ExpandedKLineWindow(QDialog):
             self.ax2.axhline(30, color='#00FF00', ls='--', lw=0.5)
             self.ax2.set_ylim(0, 100)
 
-        # X軸標籤
+        # --- [7] X軸標籤與十字線 ---
         date_strs = []
         tick_indices = []
         dates = view_df.index
@@ -563,8 +620,7 @@ class ExpandedKLineWindow(QDialog):
         self.ax2.set_xticklabels(date_strs, rotation=0, fontsize=9, color='#AAA')
         self.ax2.set_xlim(-0.5, len(view_df) - 0.5)
 
-        # [關鍵修正] 在每次重繪(clear)後，重新加入十字線與查價 Label
-        # 這樣滑鼠事件才能抓到有效的物件引用
+        # 重新初始化十字線物件 (避免 clear 後失效)
         self.vline1 = self.ax1.axvline(0, color='#666', ls='--', lw=0.8, visible=False)
         self.vline2 = self.ax2.axvline(0, color='#666', ls='--', lw=0.8, visible=False)
         self.hline1 = self.ax1.axhline(0, color='#666', ls='--', lw=0.8, visible=False)
@@ -578,7 +634,6 @@ class ExpandedKLineWindow(QDialog):
             self._update_info_label(total_len - 1)
 
         self.canvas.draw_idle()
-
     def _update_sub_chart_values(self, idx):
         if idx < 0 or idx >= len(self.current_df): return
         name = self.current_indicator
@@ -655,7 +710,6 @@ class ExpandedKLineWindow(QDialog):
 
     def on_mouse_move(self, event):
         if not event.inaxes:
-            # 安全檢查，防止物件為 None
             if self.vline1: self.vline1.set_visible(False)
             if self.vline2: self.vline2.set_visible(False)
             if self.hline1: self.hline1.set_visible(False)
@@ -672,7 +726,6 @@ class ExpandedKLineWindow(QDialog):
                 return
 
         try:
-            # 必須檢查物件是否存在（防止初始階段或錯誤狀態）
             if not (self.vline1 and self.vline2 and self.hline1 and self.y_label_text):
                 return
 
@@ -700,7 +753,28 @@ class ExpandedKLineWindow(QDialog):
                     self.y_label_text.set_visible(False)
 
                 self._update_info_label(real_idx)
+
                 self._update_sub_chart_values(real_idx)
+                if hasattr(self, 'ma30_label_obj') and self.ma30_label_obj:
+                    # 取得該 K 棒的 MA30 數值
+                    if 'MA30' in self.current_df.columns:
+                        val = self.current_df['MA30'].iloc[real_idx]
+
+                        # 取得前一根值來判斷箭頭 (處理邊界)
+                        prev_val = self.current_df['MA30'].iloc[real_idx - 1] if real_idx > 0 else val
+
+                        if pd.notna(val):
+                            arrow = "▲" if val > prev_val else "▼" if val < prev_val else "-"
+                            color = "#FFAA00" if val >= prev_val else "#00FF00"
+
+                            self.ma30_label_obj.set_text(f"MA30: {val:.2f} {arrow}")
+                            self.ma30_label_obj.set_color(color)
+                            self.ma30_label_obj.set_visible(True)
+                        else:
+                            self.ma30_label_obj.set_text("")
+                    else:
+                        self.ma30_label_obj.set_visible(False)
+
                 self.canvas.draw_idle()
         except:
             pass
