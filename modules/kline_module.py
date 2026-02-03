@@ -49,14 +49,12 @@ class ChartOverlay(QWidget):
 class KLineModule(QWidget):
     stock_selected = pyqtSignal(str)
 
-    # 🔥 MA 配置
     MA_CONFIG = {
         'D': [5, 10, 22, 55, 200],
         'W': [30],
         'M': [3, 6, 12]
     }
 
-    # 🔥 預設顯示的 MA
     DEFAULT_VISIBLE_MA = {
         'D': [55, 200],
         'W': [30],
@@ -100,7 +98,8 @@ class KLineModule(QWidget):
         else:
             print("⚠️ [KLine] 未收到 Shared Worker，啟動獨立 Worker")
             self.quote_worker = QuoteWorker(self)
-            self.quote_worker.start()
+            # 🔥 [修正1] 這裡也不要偷跑 start()，等待外部觸發
+            # self.quote_worker.start()
 
         self.quote_worker.quote_updated.connect(self.on_realtime_quote)
 
@@ -126,7 +125,6 @@ class KLineModule(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # 1. 控制列
         control_widget = QWidget()
         control_widget.setFixedHeight(45)
         control_widget.setStyleSheet("background-color: #050505; border-bottom: 1px solid #222;")
@@ -151,7 +149,6 @@ class KLineModule(QWidget):
 
         control_layout.addStretch()
 
-        # 🔥 [新增功能] 資料日期顯示 Label
         self.lbl_data_date = QLabel("資料日期: --/--")
         self.lbl_data_date.setStyleSheet("color: #FF8800; font-weight: bold; font-size: 13px; margin-right: 10px;")
         control_layout.addWidget(self.lbl_data_date)
@@ -167,7 +164,6 @@ class KLineModule(QWidget):
 
         layout.addWidget(control_widget)
 
-        # 2. 資訊列
         self.info_bg = QWidget()
         self.info_bg.setFixedHeight(50)
         self.info_bg.setStyleSheet("background-color: #0A0A0A; border-bottom: 1px solid #333;")
@@ -183,7 +179,6 @@ class KLineModule(QWidget):
         info_layout.addWidget(self.info_label)
         layout.addWidget(self.info_bg)
 
-        # 🔥 浮動警告標籤 (預設隱藏)
         self.warning_label = QLabel("⚠️ 資料過期，請執行 [更新下載]", self)
         self.warning_label.setStyleSheet("""
             background-color: rgba(255, 0, 0, 180);
@@ -196,7 +191,6 @@ class KLineModule(QWidget):
         self.warning_label.move(60, 55)
         self.warning_label.hide()
 
-        # 3. 畫布
         self.fig = Figure(facecolor='#000000')
         self.canvas = FigureCanvas(self.fig)
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -240,14 +234,12 @@ class KLineModule(QWidget):
             self.redraw_chart()
             self.overlay.hide()
 
-            # 更新介面標籤
             if self.display_df is not None and not self.display_df.empty:
                 last_row = self.display_df.iloc[-1]
                 self.update_info_label(last_row, last_row.name)
                 self.update_date_indicator()
 
     def update_date_indicator(self):
-        """更新右上角的資料日期標籤"""
         if self.display_df is not None and not self.display_df.empty:
             last_date = self.display_df.index[-1]
             self.lbl_data_date.setText(f"資料日期: {last_date.strftime('%Y/%m/%d')}")
@@ -281,6 +273,7 @@ class KLineModule(QWidget):
         except:
             pass
 
+        # 設定監控目標，但如果不按即時，Worker 不會動作，所以不會有資料進來
         self.quote_worker.set_monitoring_stocks([stock_id], source='kline')
 
         path = Path(f"data/cache/tw/{stock_id}.parquet")
@@ -293,6 +286,7 @@ class KLineModule(QWidget):
         data_loaded = False
         if path.exists():
             try:
+                # 只讀取 Parquet，這是最乾淨的歷史資料
                 df = pd.read_parquet(path)
                 df.columns = [c.capitalize() for c in df.columns]
                 df.index = pd.to_datetime(df.index)
@@ -303,15 +297,11 @@ class KLineModule(QWidget):
                 if hasattr(self, 'warning_label'):
                     self.warning_label.hide()
 
-                # 更新日期顯示
                 self.update_date_indicator()
 
-                # 嘗試取得即時快照，但後續 on_realtime_quote 會嚴格把關
-                if hasattr(self.quote_worker, 'get_latest_from_cache'):
-                    latest_data = self.quote_worker.get_latest_from_cache(stock_id)
-                    if latest_data:
-                        target_key = stock_id.split('_')[0]
-                        self.on_realtime_quote({target_key: {'realtime': latest_data}})
+                # 🔥 [修正2] 這裡原本有一段嘗試去 quote_worker 拿 cache 的程式碼
+                # 請直接刪除，確保 K 線圖只顯示 Parquet 檔案裡的內容
+                # 如果使用者沒按即時更新，這裡就不會有今天的資料
 
                 self.redraw_chart()
                 QTimer.singleShot(100, lambda: self.canvas.draw())
@@ -380,17 +370,10 @@ class KLineModule(QWidget):
         df['PctChange'] = (df['Change'] / df['PrevClose']) * 100
 
     def on_realtime_quote(self, data_dict):
-        """
-        處理即時報價：
-        1. 嚴格檢查資料是否屬於當前股票
-        2. 若資料無變化，不重畫
-        3. 若是新的一天，Append Row；若是同一天，Update Row
-        """
         if self.is_closing: return
         if self.display_df is None or self.display_df.empty: return
-        if self.timeframe != 'D': return  # 即時只支援日線
+        if self.timeframe != 'D': return
 
-        # 取得當前股票代碼 (去除 _TW 後綴)
         target_key = self.current_stock_id.split('_')[0]
         if target_key not in data_dict: return
 
@@ -398,7 +381,6 @@ class KLineModule(QWidget):
         real = quote.get('realtime', {})
         info = quote.get('info', {})
 
-        # 安全轉換工具
         def safe_float(v):
             if v == '-' or v == '' or v is None: return 0.0
             try:
@@ -407,11 +389,9 @@ class KLineModule(QWidget):
                 return 0.0
 
         try:
-            # 1. 取得價格與量
             latest = safe_float(real.get('latest_trade_price'))
             close_p = safe_float(real.get('close'))
 
-            # 如果最新成交是0，嘗試用最佳買賣價推算 (盤前試撮或剛開盤)
             trade_price = latest if latest > 0 else close_p
             if trade_price == 0:
                 bid = safe_float(real.get('best_bid_price', [0])[0])
@@ -421,21 +401,19 @@ class KLineModule(QWidget):
                 elif ask > 0:
                     trade_price = ask
 
-            if trade_price == 0: return  # 真的沒資料，跳過
+            if trade_price == 0: return
 
             vol = safe_float(real.get('accumulate_trade_volume'))
             open_p = safe_float(real.get('open'))
             high_p = safe_float(real.get('high'))
             low_p = safe_float(real.get('low'))
 
-            # 補正 OHLC
             if open_p == 0: open_p = trade_price
             if high_p == 0: high_p = trade_price
             if low_p == 0: low_p = trade_price
             high_p = max(high_p, trade_price)
             low_p = min(low_p, trade_price)
 
-            # 2. 日期處理
             date_str = info.get('date', '')
             if len(date_str) == 8:
                 quote_date = datetime.strptime(date_str, "%Y%m%d")
@@ -444,13 +422,11 @@ class KLineModule(QWidget):
 
             quote_date = quote_date.replace(hour=0, minute=0, second=0, microsecond=0)
 
-            # 取得 DataFrame 最後一筆資料的日期
             last_idx = self.display_df.index[-1]
             last_date = last_idx.replace(hour=0, minute=0, second=0, microsecond=0)
 
             need_redraw = False
 
-            # 情境 A: 跨日更新 (新增一根 K 棒)
             if quote_date > last_date:
                 prev_close = self.display_df.iloc[-1]['Close']
                 change = trade_price - prev_close
@@ -461,24 +437,21 @@ class KLineModule(QWidget):
                     'Volume': vol, 'PrevClose': prev_close, 'Change': change, 'PctChange': pct
                 }, name=quote_date)
 
-                # 補上 MA 空值
                 for ma in self.MA_CONFIG.get('D', []): new_row[f'MA{ma}'] = np.nan
 
                 self.display_df = pd.concat([self.display_df, pd.DataFrame([new_row])])
                 need_redraw = True
 
-            # 情境 B: 當日更新 (修改最後一根 K 棒)
             elif quote_date == last_date:
                 curr_close = self.display_df.at[last_idx, 'Close']
                 curr_vol = self.display_df.at[last_idx, 'Volume']
                 curr_high = self.display_df.at[last_idx, 'High']
                 curr_low = self.display_df.at[last_idx, 'Low']
 
-                # 只有當價格或量有變動時才更新 (節省資源)
                 if abs(curr_close - trade_price) > 0.001 or abs(curr_vol - vol) > 0.1 or \
                         high_p > curr_high or low_p < curr_low:
 
-                    self.display_df.at[last_idx, 'Open'] = open_p  # 有時開盤價會修正
+                    self.display_df.at[last_idx, 'Open'] = open_p
                     self.display_df.at[last_idx, 'High'] = max(curr_high, high_p)
                     self.display_df.at[last_idx, 'Low'] = min(curr_low, low_p)
                     self.display_df.at[last_idx, 'Close'] = trade_price
@@ -492,7 +465,7 @@ class KLineModule(QWidget):
                     need_redraw = True
 
             if need_redraw:
-                self._calc_indicators(self.display_df)  # 重算 MA
+                self._calc_indicators(self.display_df)
                 self.redraw_chart()
                 if hasattr(self, 'expanded_dialog') and self.expanded_dialog.isVisible():
                     self.expanded_dialog.on_realtime_quote(data_dict)

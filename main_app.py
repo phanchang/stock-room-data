@@ -76,9 +76,10 @@ class StockWarRoomV3(QMainWindow):
             QPushButton { background-color: #444; color: white; border: 1px solid #555; padding: 5px; }
         """)
 
-        # 1. 啟動共享的報價 Worker
+        # 1. 建立共享的 Worker
         self.shared_worker = QuoteWorker(self)
-        self.shared_worker.start()
+        # 🔥 [修正] 註解掉這行，讓 Driver 不會一開程式就跑出來
+        # self.shared_worker.start()
 
         # 狀態變數
         self.current_stock_id = None
@@ -234,13 +235,13 @@ class StockWarRoomV3(QMainWindow):
 
     def load_initial_data(self):
         self.list_module.refresh_table()
-        if self.list_module.table.rowCount() > 0:
-            item = self.list_module.table.item(0, 0)
-            if item:
-                code = item.text()
-                market = item.data(Qt.ItemDataRole.UserRole)
-                fid = f"{code}_{market}"
-                self.on_stock_changed(fid)
+        #if self.list_module.table.rowCount() > 0:
+        #    item = self.list_module.table.item(0, 0)
+        #    if item:
+        #        code = item.text()
+        #        market = item.data(Qt.ItemDataRole.UserRole)
+        #        fid = f"{code}_{market}"
+        #        self.on_stock_changed(fid)
 
     def closeEvent(self, event):
         reply = QMessageBox.question(self, '確認退出', '確定要關閉系統嗎？',

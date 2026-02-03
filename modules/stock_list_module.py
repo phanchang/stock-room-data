@@ -1,13 +1,13 @@
 import sys
 import json
-import datetime  # <--- 新增這個
+import datetime
 import pandas as pd
 from pathlib import Path
-# ... (其他原本的 import 保持不變)
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem,
                              QHeaderView, QAbstractItemView, QLineEdit,
                              QHBoxLayout, QPushButton, QCompleter, QMenu, QComboBox, QMessageBox)
-from PyQt6.QtCore import pyqtSignal, Qt, QStringListModel
+# 🔥 [修正] 這裡補上了 QTimer
+from PyQt6.QtCore import pyqtSignal, Qt, QStringListModel, QTimer
 from PyQt6.QtGui import QColor, QAction, QFont, QBrush
 
 from utils.data_downloader import DataDownloader
@@ -20,13 +20,8 @@ DEFAULT_WATCHLISTS = {
 
 
 class NumericTableWidgetItem(QTableWidgetItem):
-    """
-    自定義 Item，用於正確排序數值 (避免 100 排在 2 前面)
-    """
-
     def __lt__(self, other):
         try:
-            # 去除逗號和百分比符號後轉浮點數比較
             return float(self.text().replace(',', '').replace('%', '')) < float(
                 other.text().replace(',', '').replace('%', ''))
         except ValueError:
@@ -41,20 +36,17 @@ class StockListModule(QWidget):
         self.stock_db = {}
         self.downloader = DataDownloader()
         self.history_cache = {}
-
-        # 🔥 關鍵索引：代號 -> 行數 (O(1) 查找)
         self.row_mapping = {}
+        self.has_auto_selected = False
 
         self.json_path = Path("data/watchlist.json")
         self.watchlists = self.load_watchlists()
-        # 確保有預設群組
         if not self.watchlists:
             self.watchlists = DEFAULT_WATCHLISTS.copy()
         self.current_group = list(self.watchlists.keys())[0]
 
         self.load_stock_list_db()
 
-        # 設定欄位
         self.columns_config = [
             ("id", "代號", 65),
             ("name", "名稱", 80),
@@ -63,22 +55,22 @@ class StockListModule(QWidget):
             ("change_pct", "漲跌%", 75),
             ("tick_vol", "單量", 60),
             ("total_vol", "總量", 70),
-            ("time", "時間", 80),
+            ("time", "時間", 0),
         ]
 
         if shared_worker:
             self.quote_worker = shared_worker
         else:
             self.quote_worker = QuoteWorker(self)
-            self.quote_worker.start()
+            # self.quote_worker.start()  <-- 確保這裡沒有啟動
 
         self.quote_worker.quote_updated.connect(self.update_streaming_data)
 
-        # 🔥 [新增] 連接單次更新完成的訊號
         if hasattr(self.quote_worker, 'oneshot_finished'):
             self.quote_worker.oneshot_finished.connect(self.on_oneshot_finished)
 
         self.init_ui()
+        self.check_if_data_up_to_date()
 
     def init_ui(self):
         layout = QVBoxLayout(self)
@@ -95,7 +87,6 @@ class StockListModule(QWidget):
         self.group_combo.setStyleSheet("QComboBox { background: #222; color: #FFF; border: 1px solid #444; }")
         self.group_combo.currentTextChanged.connect(self.change_group)
 
-        # 🔥 即時監控按鈕 (樣式微調：支援 Disabled 狀態)
         self.btn_monitor = QPushButton("▶ 即時")
         self.btn_monitor.setFixedSize(60, 24)
         self.btn_monitor.setCheckable(True)
@@ -144,28 +135,25 @@ class StockListModule(QWidget):
 
         layout.addWidget(self.table)
 
-        # 初始化表格內容
         self.refresh_table()
 
-        # 🔥 [新增] 檢查資料是否需要鎖定
-        self.check_if_data_up_to_date()
+    def _auto_select_first_row(self):
+        """啟動時自動選取列表中的第一支股票"""
+        if self.table.rowCount() > 0:
+            self.table.selectRow(0)
+            item = self.table.item(0, 0)
+            if item:
+                self._emit_smart_stock_id(item.text())
+            self.has_auto_selected = True
 
     def check_if_data_up_to_date(self):
-        """
-        [防呆機制]
-        如果現在是盤後 (13:35 後)，且 Parquet 檔案已經是今天日期的，
-        則代表已收盤且資料已更新，禁用按鈕，不讓使用者再去按即時更新。
-        """
         now = datetime.datetime.now()
-        # 簡單判定：13:35 後算盤後
         is_after_hours = now.hour >= 14 or (now.hour == 13 and now.minute >= 35)
 
-        # 取第一支自選股來檢查 Cache 日期
         current_list = self.watchlists.get(self.current_group, [])
         if not current_list: return
 
         sample_code = current_list[0]
-        # 嘗試推測路徑 (TW 或 TWO)
         cache_path = Path(f"data/cache/tw/{sample_code}_TW.parquet")
         if not cache_path.exists():
             cache_path = Path(f"data/cache/tw/{sample_code}_TWO.parquet")
@@ -173,7 +161,6 @@ class StockListModule(QWidget):
         is_data_fresh = False
         if cache_path.exists():
             try:
-                # 檢查檔案修改時間是否為今天
                 mtime = datetime.datetime.fromtimestamp(cache_path.stat().st_mtime)
                 if mtime.date() == now.date() and is_after_hours:
                     is_data_fresh = True
@@ -191,23 +178,17 @@ class StockListModule(QWidget):
             self.btn_monitor.setText("▶ 即時")
 
     def toggle_quote_monitor(self, checked):
-        """
-        [智能切換]
-        1. 盤中 (09:00 - 13:30): 開啟 Continuous 模式 (持續輪詢)。
-        2. 盤後: 開啟 One-shot 模式 (只跑一次即斷開)。
-        """
         if not hasattr(self, 'quote_worker'): return
 
         if checked:
-            current_list = self.watchlists.get(self.current_group, [])
-            print(f"DEBUG: 啟動更新，名單 ({len(current_list)}): {current_list}")
+            # 🔥 關鍵修正：確保只有按下去時才啟動 Driver
+            if not self.quote_worker.isRunning():
+                self.quote_worker.start()
 
-            # 設定名單
+            current_list = self.watchlists.get(self.current_group, [])
             self.quote_worker.set_monitoring_stocks(current_list, source='watchlist')
 
-            # 判斷時間與模式
             now = datetime.datetime.now()
-            # 寬鬆判定盤中時間：08:45 ~ 13:35
             is_trading_hours = (
                     (now.hour == 8 and now.minute >= 45) or
                     (now.hour > 8 and now.hour < 13) or
@@ -215,18 +196,14 @@ class StockListModule(QWidget):
             )
 
             if is_trading_hours:
-                # 盤中：持續更新
                 self.btn_monitor.setText("■ 停止")
                 if hasattr(self.quote_worker, 'set_mode'):
                     self.quote_worker.set_mode('continuous')
                 self.quote_worker.toggle_monitoring(True)
             else:
-                # 盤後：只跑一次 (One-shot)
-                print("🌙 [StockList] 目前為盤後時間，執行單次更新。")
                 self.btn_monitor.setText("更新中...")
                 if hasattr(self.quote_worker, 'set_mode'):
                     self.quote_worker.set_mode('oneshot')
-
                 self.quote_worker.toggle_monitoring(True)
 
         else:
@@ -234,19 +211,8 @@ class StockListModule(QWidget):
             self.quote_worker.toggle_monitoring(False)
 
     def on_oneshot_finished(self):
-        """
-        [Callback] 當 Worker 完成單次更新後呼叫
-        """
-        print("✅ [StockList] 單次更新完畢，自動重置按鈕。")
         self.btn_monitor.setChecked(False)
         self.btn_monitor.setText("▶ 即時")
-        """
-        [Callback] 當 Worker 完成單次更新後呼叫
-        """
-        print("✅ [StockList] 單次更新完畢，自動重置按鈕。")
-        self.btn_monitor.setChecked(False)
-        self.btn_monitor.setText("▶ 即時")
-        # 這裡不需要呼叫 quote_worker.stop()，因為 worker 內部在 oneshot 模式下會自動跳出迴圈
 
     def load_watchlists(self):
         if self.json_path.exists():
@@ -281,72 +247,6 @@ class StockListModule(QWidget):
                 }
         except:
             pass
-
-    def init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        top_container = QWidget()
-        top_container.setStyleSheet("background: #111; border-bottom: 1px solid #333;")
-        top_layout = QHBoxLayout(top_container)
-        top_layout.setContentsMargins(5, 5, 5, 5)
-
-        self.group_combo = QComboBox()
-        self.group_combo.addItems(list(self.watchlists.keys()))
-        self.group_combo.setCurrentText(self.current_group)
-        self.group_combo.setStyleSheet("QComboBox { background: #222; color: #FFF; border: 1px solid #444; }")
-        self.group_combo.currentTextChanged.connect(self.change_group)
-
-        # 🔥 即時監控按鈕
-        self.btn_monitor = QPushButton("▶ 即時")
-        self.btn_monitor.setFixedSize(60, 24)
-        self.btn_monitor.setCheckable(True)
-        self.btn_monitor.setStyleSheet("""
-            QPushButton { background: #333; color: #AAA; border: 1px solid #555; font-weight: bold; }
-            QPushButton:checked { background: #00FF00; color: #000; }
-        """)
-        self.btn_monitor.clicked.connect(self.toggle_quote_monitor)
-
-        self.input_stock = QLineEdit()
-        self.input_stock.setPlaceholderText("🔍 輸入代號")
-        self.input_stock.setStyleSheet("background: #222; color: #FFF; border: 1px solid #444;")
-        self.input_stock.returnPressed.connect(self.quick_search)
-
-        self.completer = QCompleter()
-        self.completer.setFilterMode(Qt.MatchFlag.MatchContains)
-        self.input_stock.setCompleter(self.completer)
-        self.update_completer_model()
-
-        self.btn_add = QPushButton("+")
-        self.btn_add.setFixedSize(30, 24)
-        self.btn_add.clicked.connect(self.add_stock_to_list)
-
-        top_layout.addWidget(self.group_combo, 2)
-        top_layout.addWidget(self.btn_monitor, 1)
-        top_layout.addWidget(self.input_stock, 5)
-        top_layout.addWidget(self.btn_add, 1)
-        layout.addWidget(top_container)
-
-        self.table = QTableWidget()
-        self.setup_table_columns()
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setStyleSheet("""
-            QTableWidget { background-color: #000000; font-family: 'Consolas', 'Microsoft JhengHei'; font-size: 14px; }
-            QHeaderView::section { background-color: #1A1A1A; color: #BBB; border: none; font-weight: bold; }
-            QTableWidget::item { border-bottom: 1px solid #222; padding-right: 5px; }
-            QTableWidget::item:selected { background-color: #333; color: #FFF; }
-        """)
-
-        self.table.cellClicked.connect(self.on_row_clicked)
-        self.table.customContextMenuRequested.connect(self.open_context_menu)
-        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-
-        layout.addWidget(self.table)
-
-        # 初始化表格內容
-        self.refresh_table()
 
     def setup_table_columns(self):
         col_names = [cfg[1] for cfg in self.columns_config]
@@ -387,14 +287,6 @@ class StockListModule(QWidget):
             self.refresh_table()
             self.input_stock.clear()
 
-    def add_stock_to_group(self, stock_id_full, group_name):
-        code = stock_id_full.split('_')[0]
-        if group_name in self.watchlists:
-            if code not in self.watchlists[group_name]:
-                self.watchlists[group_name].insert(0, code)
-                self.save_watchlists()
-                if self.current_group == group_name: self.refresh_table()
-
     def open_context_menu(self, pos):
         idx = self.table.indexAt(pos)
         if not idx.isValid(): return
@@ -416,18 +308,6 @@ class StockListModule(QWidget):
         self.current_group = group_name
         self.refresh_table()
 
-    def toggle_quote_monitor(self, checked):
-        if hasattr(self, 'quote_worker'):
-            if checked:
-                self.btn_monitor.setText("■ 停止")
-                current_list = self.watchlists.get(self.current_group, [])
-                print(f"DEBUG: 啟動即時監控，名單: {current_list}")
-                self.quote_worker.set_monitoring_stocks(current_list, source='watchlist')
-                self.quote_worker.toggle_monitoring(True)
-            else:
-                self.btn_monitor.setText("▶ 即時")
-                self.quote_worker.toggle_monitoring(False)
-
     def _emit_smart_stock_id(self, code):
         market = "TW"
         if code in self.stock_db:
@@ -440,9 +320,6 @@ class StockListModule(QWidget):
         if item: self._emit_smart_stock_id(item.text())
 
     def _set_cell(self, row, col, text, color=None, is_num=False):
-        """
-        🔥 修復：增加 is_num 參數，解決 Crash 問題
-        """
         if is_num:
             item = NumericTableWidgetItem(str(text))
         else:
@@ -457,34 +334,25 @@ class StockListModule(QWidget):
         self.table.setItem(row, col, item)
 
     def refresh_table(self):
-        """
-        極速刷新邏輯：
-        1. 重建索引 (row_mapping)
-        2. 預載本地昨收價
-        3. 一次性更新監控名單
-        """
         self.table.setUpdatesEnabled(False)
         self.table.setSortingEnabled(False)
 
         try:
             self.table.setRowCount(0)
             self.history_cache = {}
-            self.row_mapping = {}  # 重置索引
+            self.row_mapping = {}
 
             current_list = self.watchlists.get(self.current_group, [])
             self.table.setRowCount(len(current_list))
 
-            # 若即時監控開啟，同步更新監控名單
+            # 如果按鈕是開啟狀態，才設定監控
             if hasattr(self, 'quote_worker') and self.btn_monitor.isChecked():
                 self.quote_worker.set_monitoring_stocks(current_list, source='watchlist')
 
             for i, code in enumerate(current_list):
-                # 🔥 建立快速查找索引
                 self.row_mapping[code] = i
-
                 info = self.stock_db.get(code, {"name": code, "market": "TW"})
 
-                # 預載 Parquet 昨收
                 path = Path(f"data/cache/tw/{code}_{info['market']}.parquet")
                 last_close = 0
                 if path.exists():
@@ -496,24 +364,22 @@ class StockListModule(QWidget):
                     except:
                         pass
 
-                # Col 0: 代號
                 item_id = QTableWidgetItem(code)
                 item_id.setForeground(QColor("#00E5FF"))
                 item_id.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
+
+                # 🔥 [修正] 補上這行：將市場別存入 Item，防止外部讀取時拿到 None
+                item_id.setData(Qt.ItemDataRole.UserRole, info['market'])
+
                 self.table.setItem(i, 0, item_id)
 
-                # Col 1: 名稱
                 item_name = QTableWidgetItem(info['name'])
                 item_name.setForeground(QColor("white"))
                 self.table.setItem(i, 1, item_name)
 
-                # Col 2: 預填昨收 (如果有)
-                if last_close > 0:
-                    self._set_cell(i, 2, f"{last_close:.2f}", is_num=True)
-                else:
-                    self._set_cell(i, 2, "-", is_num=True)
-
-                # 初始化其他欄位為 "-"
+                # 填入昨收與預設值
+                val = f"{last_close:.2f}" if last_close > 0 else "-"
+                self._set_cell(i, 2, val, is_num=True)
                 for c in range(3, 8):
                     self._set_cell(i, c, "-", is_num=True)
 
@@ -523,12 +389,11 @@ class StockListModule(QWidget):
             self.table.setSortingEnabled(True)
             self.table.setUpdatesEnabled(True)
 
+            # 🔥 延遲觸發選取，等待 MainWindow 初始化完成
+            if not self.has_auto_selected:
+                QTimer.singleShot(500, self._auto_select_first_row)
+
     def update_streaming_data(self, data):
-        """
-        極速更新 UI：
-        1. 使用 row_mapping (O(1)) 取代 findItems (O(N))
-        2. 暫停 UI 更新，批次填入
-        """
         self.table.setUpdatesEnabled(False)
         try:
             def safe_float(v):
@@ -538,7 +403,6 @@ class StockListModule(QWidget):
                     return 0.0
 
             for code, stock_data in data.items():
-                # 🔥 關鍵優化：直接查表
                 row = self.row_mapping.get(code)
                 if row is None: continue
 
@@ -546,13 +410,11 @@ class StockListModule(QWidget):
                 info = stock_data.get('info', {})
 
                 try:
-                    # 價格處理
                     latest = safe_float(real.get('latest_trade_price'))
                     close_p = safe_float(real.get('close'))
                     price = latest if latest > 0 else close_p
                     if price == 0: continue
 
-                    # 漲跌計算
                     api_prev = safe_float(real.get('previous_close'))
                     prev_close = api_prev if api_prev > 0 else self.history_cache.get(code, {}).get('prev', 0)
 
@@ -570,18 +432,16 @@ class StockListModule(QWidget):
                         change_str = f"{change:+.2f}"
                         pct_str = f"{pct:+.2f}%"
 
-                    # 更新表格
                     self._set_cell(row, 2, f"{price:.2f}", color, is_num=True)
                     self._set_cell(row, 3, change_str, color, is_num=True)
                     self._set_cell(row, 4, pct_str, color, is_num=True)
 
-                    vol = real.get('trade_volume', '-')  # 單量
-                    total_vol = real.get('accumulate_trade_volume', '-')  # 總量
+                    vol = real.get('trade_volume', '-')
+                    total_vol = real.get('accumulate_trade_volume', '-')
 
                     self._set_cell(row, 5, str(vol), QColor("#FFFF00"), is_num=True)
                     self._set_cell(row, 6, str(total_vol), None, is_num=True)
 
-                    # 時間
                     t = info.get('time', '-')
                     if ' ' in t: t = t.split(' ')[1]
                     self._set_cell(row, 7, t, QColor("#AAA"))

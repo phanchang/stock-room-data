@@ -10,26 +10,17 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QApplication, QCheckBox, QFrame)
 from PyQt6.QtGui import QColor, QPalette, QFont
 
-# Matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.gridspec as gridspec
 import matplotlib.ticker as ticker
+import matplotlib.patches as patches
 
-# Internal Tools
 from utils.indicators import Indicators
 from utils.quote_worker import QuoteWorker
 
 
 class ExpandedKLineWindow(QDialog):
-    """
-    Advanced War Room (Expanded KLine) - V7.0 (Precision Layout)
-    修正:
-    1. MA Overlay: 強制定位於主圖(ax1)網格內部左上角。
-    2. Sub Overlay: 強制定位於副圖(ax2)網格內部左上角。
-    3. 使用 get_position() 精準換算 Qt 像素座標。
-    """
-
     MA_CONFIG = {
         'D': [5, 10, 22, 55, 200],
         'W': [30],
@@ -54,7 +45,6 @@ class ExpandedKLineWindow(QDialog):
         self.setWindowFlags(
             self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint)
 
-        # 全局樣式
         self.setStyleSheet("""
             QDialog { background-color: #121212; color: #E0E0E0; }
             QLabel { font-family: 'Microsoft JhengHei', 'Consolas', sans-serif; }
@@ -75,7 +65,8 @@ class ExpandedKLineWindow(QDialog):
             self.df_source.index = pd.to_datetime(self.df_source.index)
         self.current_df = self.df_source
 
-        self.current_indicator = "Vix Fix"
+        # 預設指標 Volume
+        self.current_indicator = "Volume"
         self.current_tf = "D"
 
         self.visible_candles = 250
@@ -85,20 +76,19 @@ class ExpandedKLineWindow(QDialog):
 
         self.ma_checks = {}
 
-        # 1. UI 初始化
+        # 十字線物件引用
+        self.vline1 = None
+        self.vline2 = None
+        self.hline1 = None
+        self.y_label_text = None
+
         self.init_ui()
-
-        # 2. 建立懸浮控制項
         self.init_overlays()
-
-        # 3. 繪圖結構
         self.plot_chart_structure()
 
-        # 4. 啟動 Worker
         self.quote_worker = QuoteWorker(self)
         self.quote_worker.set_monitoring_stocks([self.stock_id])
         self.quote_worker.quote_updated.connect(self.on_realtime_quote)
-        self.quote_worker.start()
 
         self.update_data_frequency("D")
 
@@ -122,7 +112,6 @@ class ExpandedKLineWindow(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # --- Top Toolbar ---
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(15, 8, 15, 8)
         toolbar.setSpacing(15)
@@ -145,7 +134,6 @@ class ExpandedKLineWindow(QDialog):
 
         layout.addLayout(toolbar)
 
-        # --- Info Bar ---
         self.info_bg = QWidget()
         self.info_bg.setFixedHeight(28)
         self.info_bg.setStyleSheet(
@@ -159,7 +147,6 @@ class ExpandedKLineWindow(QDialog):
         info_layout.addWidget(self.info_label)
         layout.addWidget(self.info_bg)
 
-        # --- Chart Canvas ---
         self.figure = Figure(facecolor='#121212')
         self.canvas = FigureCanvas(self.figure)
         layout.addWidget(self.canvas)
@@ -170,11 +157,7 @@ class ExpandedKLineWindow(QDialog):
         self.canvas.mpl_connect('button_release_event', self.on_mouse_release)
 
     def init_overlays(self):
-        """建立懸浮在圖表上的控制項"""
-
-        # --- 1. MA Overlay (主圖左上角) ---
         self.ma_overlay = QFrame(self)
-        # 背景設為半透明黑 (rgba 0,0,0, 0.6)，避免文字與 K 線混雜
         self.ma_overlay.setStyleSheet("""
             QFrame { 
                 background-color: rgba(0, 0, 0, 180); 
@@ -200,9 +183,7 @@ class ExpandedKLineWindow(QDialog):
             self.ma_checks[ma] = chk
             ma_layout.addWidget(chk)
 
-        # --- 2. Sub Overlay (副圖左上角) ---
         self.sub_overlay = QFrame(self)
-        # 同樣半透明背景
         self.sub_overlay.setStyleSheet("""
             QFrame { 
                 background-color: rgba(0, 0, 0, 180); 
@@ -213,15 +194,14 @@ class ExpandedKLineWindow(QDialog):
         sub_layout.setContentsMargins(5, 2, 10, 2)
         sub_layout.setSpacing(10)
 
-        # 切換選單
         self.combo = QComboBox()
+        # 移除了 "Zeiierman VP"
         self.combo.addItems(["Volume", "Vix Fix", "KD", "MACD", "RSI"])
         self.combo.setCurrentText(self.current_indicator)
-        self.combo.setFixedSize(85, 20)
+        self.combo.setFixedSize(110, 20)
         self.combo.currentTextChanged.connect(self.on_indicator_changed)
         sub_layout.addWidget(self.combo)
 
-        # 數值 Label
         self.sub_val_label = QLabel("")
         self.sub_val_label.setStyleSheet(
             "font-family: 'Consolas', monospace; font-size: 12px; font-weight: bold; background: transparent;")
@@ -235,57 +215,36 @@ class ExpandedKLineWindow(QDialog):
         self.sub_overlay.show()
 
     def reposition_overlays(self):
-        """
-        精準定位懸浮控制項 - 修正版
-        加入 Canvas 在視窗中的偏移量 (x, y)，解決蓋住標題與錯位問題。
-        """
         if not hasattr(self, 'ax1') or not hasattr(self, 'ax2'): return
-
         try:
-            # 1. 取得 Canvas 在父視窗中的區域 (包含 x, y 偏移量)
             canvas_rect = self.canvas.geometry()
-
-            # Canvas 的左上角在視窗中的座標
             canvas_left = canvas_rect.x()
             canvas_top = canvas_rect.y()
             canvas_w = canvas_rect.width()
             canvas_h = canvas_rect.height()
 
-            # --- 1. MA Panel -> 定位在 ax1 (主圖) 的 Top-Left 內部 ---
             bbox1 = self.ax1.get_position()
-
-            # 計算相對於 Canvas 的像素座標
-            # (1 - bbox1.y1) 是因為 Matplotlib 原點在左下，Qt 在左上
             rel_x1 = int(bbox1.x0 * canvas_w)
             rel_y1 = int((1 - bbox1.y1) * canvas_h)
-
-            # 加上 Canvas 本身的偏移量，才是視窗中的正確位置
-            final_x1 = canvas_left + rel_x1 + 4  # +4 微調內縮
-            final_y1 = canvas_top + rel_y1 + 4  # +4 微調內縮
+            final_x1 = canvas_left + rel_x1 + 4
+            final_y1 = canvas_top + rel_y1 + 4
 
             self.ma_overlay.move(final_x1, final_y1)
             self.ma_overlay.adjustSize()
-            self.ma_overlay.raise_()  # 確保浮在最上層
+            self.ma_overlay.raise_()
 
-            # --- 2. Sub Panel -> 定位在 ax2 (副圖) 的 Top-Left 內部 ---
             bbox2 = self.ax2.get_position()
-
             rel_x2 = int(bbox2.x0 * canvas_w)
             rel_y2 = int((1 - bbox2.y1) * canvas_h)
-
             final_x2 = canvas_left + rel_x2
-            final_y2 = canvas_top + rel_y2 + 2  # 微調
+            final_y2 = canvas_top + rel_y2 + 2
 
             self.sub_overlay.move(final_x2, final_y2)
-
-            # 設定寬度與圖表一致，避免太寬遮擋或太窄切字
             chart_width_px = int(bbox2.width * canvas_w)
             self.sub_overlay.setFixedWidth(chart_width_px)
-
             self.sub_overlay.raise_()
-
-        except Exception as e:
-            print(f"Overlay error: {e}")
+        except:
+            pass
 
     def _create_tf_btn(self, text, code):
         btn = QPushButton(text)
@@ -331,7 +290,6 @@ class ExpandedKLineWindow(QDialog):
         real = quote.get('realtime', {})
         info = quote.get('info', {})
 
-        # 🔥 [緊急修復] 加入 safe_float
         def safe_float(v):
             if v == '-' or v == '' or v is None: return 0.0
             try:
@@ -340,7 +298,6 @@ class ExpandedKLineWindow(QDialog):
                 return 0.0
 
         try:
-            # 🔥 使用 safe_float
             latest = safe_float(real.get('latest_trade_price'))
             close = safe_float(real.get('close'))
             trade_price = latest if latest > 0 else close
@@ -358,7 +315,6 @@ class ExpandedKLineWindow(QDialog):
             high_p = max(high_p, trade_price, open_p)
             low_p = min(low_p, trade_price, open_p)
 
-            # (以下邏輯保持不變，直接複製原本的日期判斷邏輯即可)
             date_str = info.get('date', '')
             if date_str and len(date_str) == 8:
                 try:
@@ -390,7 +346,6 @@ class ExpandedKLineWindow(QDialog):
                 current_vol = self.current_df.at[last_idx, 'Volume']
                 current_close = self.current_df.at[last_idx, 'Close']
 
-                # 簡單判斷變動
                 if abs(current_close - trade_price) > 0.0001 or abs(current_vol - vol) > 0.0001:
                     self.current_df.at[last_idx, 'Open'] = open_p
                     self.current_df.at[last_idx, 'High'] = max(self.current_df.at[last_idx, 'High'], high_p)
@@ -445,13 +400,15 @@ class ExpandedKLineWindow(QDialog):
     def plot_chart_structure(self):
         self.figure.clear()
 
-        # GridSpec 設定
         gs = gridspec.GridSpec(2, 1, height_ratios=[3, 1])
-        # hspace 設小一點 (0.05)，讓主副圖靠緊，因為控制項已經移到副圖內部了
         gs.update(left=0.04, right=0.96, top=0.98, bottom=0.04, hspace=0.05)
 
         self.ax1 = self.figure.add_subplot(gs[0])
         self.ax2 = self.figure.add_subplot(gs[1], sharex=self.ax1)
+
+        # 移除 ax_vol 相關設定
+        # 恢復 ax1 背景顏色，無需透明
+        self.ax1.set_facecolor('#121212')
 
         for ax in [self.ax1, self.ax2]:
             ax.set_facecolor('#121212')
@@ -465,24 +422,22 @@ class ExpandedKLineWindow(QDialog):
 
         self.ax1.tick_params(labelbottom=False)
 
-        # 十字游標線
-        self.vline1 = self.ax1.axvline(0, color='#666', ls='--', lw=0.8, visible=False)
-        self.vline2 = self.ax2.axvline(0, color='#666', ls='--', lw=0.8, visible=False)
-        self.hline1 = self.ax1.axhline(0, color='#666', ls='--', lw=0.8, visible=False)
-
-        # 價格標籤
-        props = dict(boxstyle='square,pad=0.2', facecolor='#00E5FF', alpha=0.9, edgecolor='none')
-        self.y_label_text = self.ax1.text(1.01, 0, "", transform=self.ax1.get_yaxis_transform(),
-                                          color='black', fontsize=10, fontweight='bold',
-                                          va='center', ha='left', bbox=props, visible=False)
+        # 註：十字線物件不再於此處初始化，改於 draw_candles_and_indicators 內重新建立，
+        # 以避免 ax.clear() 後物件遺失的問題。
 
         self.canvas.draw_idle()
         self.reposition_overlays()
 
     def draw_candles_and_indicators(self):
+        # 清除圖表，這會同時清除圖上的所有物件（包括十字線）
         self.ax1.clear()
         self.ax2.clear()
-        self.plot_chart_structure()  # 重設 grid/ticks
+
+        # 重新設定網格與背景 (clear 會重置這些設定)
+        self.ax1.set_facecolor('#121212')
+        self.ax2.set_facecolor('#121212')
+        self.ax1.grid(True, color='#2A2A2A', ls='-', lw=0.8)
+        self.ax2.grid(True, color='#2A2A2A', ls='-', lw=0.8)
 
         total_len = len(self.current_df)
         max_scroll = max(0, total_len - self.visible_candles)
@@ -496,7 +451,7 @@ class ExpandedKLineWindow(QDialog):
 
         x = np.arange(len(view_df))
 
-        # --- 1. 主圖 K線 ---
+        # 繪製 K 線
         up = view_df['Close'] >= view_df['Open']
         down = view_df['Close'] < view_df['Open']
 
@@ -508,7 +463,7 @@ class ExpandedKLineWindow(QDialog):
                      color='#00FF00', edgecolor='#00FF00', linewidth=0.8)
         self.ax1.vlines(x[down], view_df['Low'][down], view_df['High'][down], color='#00FF00', lw=1)
 
-        # --- 2. 主圖 MA ---
+        # 繪製均線
         ma_list = self.MA_CONFIG.get(self.current_tf, [])
         for ma in ma_list:
             is_visible = True
@@ -528,24 +483,24 @@ class ExpandedKLineWindow(QDialog):
             self.ax1.set_ylim(v_low - pad, v_high + pad)
         self.ax1.set_xlim(-0.5, len(view_df) - 0.5)
 
-        # --- 3. 副圖 指標繪製 ---
+        # 繪製指標
         name = self.current_indicator
 
-        if name == "Vix Fix":
+        if name == "Volume":
+            colors = ['#FF3333' if c >= o else '#00FF00' for c, o in zip(view_df['Close'], view_df['Open'])]
+            self.ax2.bar(x, view_df['Volume'], color=colors, width=0.6, edgecolor='#121212', linewidth=0.5)
+
+        elif name == "Vix Fix":
             full_wvf = Indicators.cm_williams_vix_fix(self.current_df, period=22)
             wvf_view = full_wvf.iloc[start_idx:end_idx]
-
             full_std = full_wvf.rolling(20).std()
             full_ma = full_wvf.rolling(20).mean()
             full_upper = full_ma + (2.0 * full_std)
             full_rh = full_wvf.rolling(50).max() * 0.85
-
             v_upper = full_upper.iloc[start_idx:end_idx]
             v_rh = full_rh.iloc[start_idx:end_idx]
-
             is_green = (wvf_view >= v_upper) | (wvf_view >= v_rh)
             bar_colors = np.where(is_green, '#00FF00', '#444')
-
             self.ax2.bar(x, wvf_view, color=bar_colors, width=0.6, edgecolor='#121212', linewidth=0.5)
             self.ax2.plot(x, v_upper.values, color='#00FFFF', lw=1, alpha=0.6)
             self.ax2.plot(x, v_rh.values, color='#FFA500', lw=1, alpha=0.9)
@@ -554,16 +509,11 @@ class ExpandedKLineWindow(QDialog):
             kd = Indicators.kd(self.current_df)
             k_view = kd['K'].iloc[start_idx:end_idx]
             d_view = kd['D'].iloc[start_idx:end_idx]
-
-            self.ax2.plot(x, k_view.values, color='#FFA500', lw=1.2)  # K: Orange
-            self.ax2.plot(x, d_view.values, color='#00FFFF', lw=1.2)  # D: Cyan
+            self.ax2.plot(x, k_view.values, color='#FFA500', lw=1.2)
+            self.ax2.plot(x, d_view.values, color='#00FFFF', lw=1.2)
             self.ax2.axhline(80, color='#555', ls='--', lw=0.5)
             self.ax2.axhline(20, color='#555', ls='--', lw=0.5)
             self.ax2.set_ylim(0, 100)
-
-        elif name == "Volume":
-            colors = ['#FF3333' if c >= o else '#00FF00' for c, o in zip(view_df['Close'], view_df['Open'])]
-            self.ax2.bar(x, view_df['Volume'], color=colors, width=0.6, edgecolor='#121212', linewidth=0.5)
 
         elif name == "MACD":
             exp12 = self.current_df['Close'].ewm(span=12, adjust=False).mean()
@@ -571,14 +521,11 @@ class ExpandedKLineWindow(QDialog):
             macd = exp12 - exp26
             signal = macd.ewm(span=9, adjust=False).mean()
             hist = macd - signal
-
             macd_v = macd.iloc[start_idx:end_idx]
             sig_v = signal.iloc[start_idx:end_idx]
             hist_v = hist.iloc[start_idx:end_idx]
-
-            self.ax2.plot(x, macd_v.values, color='#00FFFF', lw=1)  # DIF
-            self.ax2.plot(x, sig_v.values, color='#FFA500', lw=1)  # DEA
-
+            self.ax2.plot(x, macd_v.values, color='#00FFFF', lw=1)
+            self.ax2.plot(x, sig_v.values, color='#FFA500', lw=1)
             hist_colors = np.where(hist_v >= 0, '#FF3333', '#00FF00')
             self.ax2.bar(x, hist_v.values, color=hist_colors, width=0.6, alpha=0.8)
             self.ax2.axhline(0, color='#555', lw=0.5)
@@ -589,7 +536,6 @@ class ExpandedKLineWindow(QDialog):
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
-
             rsi_v = rsi.iloc[start_idx:end_idx]
             self.ax2.plot(x, rsi_v.values, color='#00E5FF', lw=1.2)
             self.ax2.axhline(70, color='#FF3333', ls='--', lw=0.5)
@@ -617,36 +563,24 @@ class ExpandedKLineWindow(QDialog):
         self.ax2.set_xticklabels(date_strs, rotation=0, fontsize=9, color='#AAA')
         self.ax2.set_xlim(-0.5, len(view_df) - 0.5)
 
-        # 初始化數值顯示
+        # [關鍵修正] 在每次重繪(clear)後，重新加入十字線與查價 Label
+        # 這樣滑鼠事件才能抓到有效的物件引用
+        self.vline1 = self.ax1.axvline(0, color='#666', ls='--', lw=0.8, visible=False)
+        self.vline2 = self.ax2.axvline(0, color='#666', ls='--', lw=0.8, visible=False)
+        self.hline1 = self.ax1.axhline(0, color='#666', ls='--', lw=0.8, visible=False)
+        props = dict(boxstyle='square,pad=0.2', facecolor='#00E5FF', alpha=0.9, edgecolor='none')
+        self.y_label_text = self.ax1.text(1.01, 0, "", transform=self.ax1.get_yaxis_transform(),
+                                          color='black', fontsize=10, fontweight='bold',
+                                          va='center', ha='left', bbox=props, visible=False)
+
         if len(view_df) > 0:
             self._update_sub_chart_values(total_len - 1)
             self._update_info_label(total_len - 1)
 
         self.canvas.draw_idle()
 
-    def _update_info_label(self, idx):
-        if idx < 0 or idx >= len(self.current_df): return
-        row = self.current_df.iloc[idx]
-        dt = self.current_df.index[idx].strftime('%Y-%m-%d')
-        p = row['PrevClose']
-
-        def get_c(v, b):
-            return "#FF3333" if v > b else "#00FF00" if v < b else "#FFFFFF"
-
-        base_html = (
-            f"<span style='color:#DDD; font-weight:bold;'>{dt}</span> &nbsp; "
-            f"O:<span style='color:{get_c(row['Open'], p)};'>{row['Open']:.2f}</span> "
-            f"H:<span style='color:{get_c(row['High'], p)};'>{row['High']:.2f}</span> "
-            f"L:<span style='color:{get_c(row['Low'], p)};'>{row['Low']:.2f}</span> "
-            f"C:<span style='color:{get_c(row['Close'], p)};'>{row['Close']:.2f}</span> "
-            f"<span style='color:{get_c(row['Close'], p)};'>({row['PctChange']:+.2f}%)</span>"
-        )
-        self.info_label.setText(base_html)
-
     def _update_sub_chart_values(self, idx):
-        """更新副圖標題列的數值顯示"""
         if idx < 0 or idx >= len(self.current_df): return
-
         name = self.current_indicator
         html_text = ""
 
@@ -700,12 +634,32 @@ class ExpandedKLineWindow(QDialog):
 
         self.sub_val_label.setText(f"&nbsp;&nbsp;{html_text}")
 
+    def _update_info_label(self, idx):
+        if idx < 0 or idx >= len(self.current_df): return
+        row = self.current_df.iloc[idx]
+        dt = self.current_df.index[idx].strftime('%Y-%m-%d')
+        p = row['PrevClose']
+
+        def get_c(v, b):
+            return "#FF3333" if v > b else "#00FF00" if v < b else "#FFFFFF"
+
+        base_html = (
+            f"<span style='color:#DDD; font-weight:bold;'>{dt}</span> &nbsp; "
+            f"O:<span style='color:{get_c(row['Open'], p)};'>{row['Open']:.2f}</span> "
+            f"H:<span style='color:{get_c(row['High'], p)};'>{row['High']:.2f}</span> "
+            f"L:<span style='color:{get_c(row['Low'], p)};'>{row['Low']:.2f}</span> "
+            f"C:<span style='color:{get_c(row['Close'], p)};'>{row['Close']:.2f}</span> "
+            f"<span style='color:{get_c(row['Close'], p)};'>({row['PctChange']:+.2f}%)</span>"
+        )
+        self.info_label.setText(base_html)
+
     def on_mouse_move(self, event):
         if not event.inaxes:
-            self.vline1.set_visible(False)
-            self.vline2.set_visible(False)
-            self.hline1.set_visible(False)
-            self.y_label_text.set_visible(False)
+            # 安全檢查，防止物件為 None
+            if self.vline1: self.vline1.set_visible(False)
+            if self.vline2: self.vline2.set_visible(False)
+            if self.hline1: self.hline1.set_visible(False)
+            if self.y_label_text: self.y_label_text.set_visible(False)
             self.canvas.draw_idle()
             return
 
@@ -718,6 +672,10 @@ class ExpandedKLineWindow(QDialog):
                 return
 
         try:
+            # 必須檢查物件是否存在（防止初始階段或錯誤狀態）
+            if not (self.vline1 and self.vline2 and self.hline1 and self.y_label_text):
+                return
+
             x_idx_view = int(round(event.xdata))
             total_len = len(self.current_df)
             end_idx = total_len - int(self.scroll_pos)
