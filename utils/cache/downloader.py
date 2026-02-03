@@ -161,7 +161,10 @@ class StockDownloader:
                     expected_last_date = today - pd.Timedelta(days=2)
                 else:
                     import datetime
-                    now = datetime.datetime.now()
+                    from datetime import timezone, timedelta
+                    # 強制轉為台灣時間 (UTC+8)
+                    now = datetime.datetime.now(timezone(timedelta(hours=8)))
+                    #now = datetime.datetime.now()
                     if now.hour < 14 or (now.hour == 14 and now.minute < 30):
                         expected_last_date = today - pd.Timedelta(days=1)
                     else:
