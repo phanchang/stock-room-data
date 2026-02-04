@@ -25,6 +25,7 @@ from modules.eps_module import EPSModule
 from modules.ratio_module import RatioModule
 from modules.active_etf_module import ActiveETFModule
 from modules.strategy_module import StrategyModule
+from modules.settings_module import SettingsModule  # <--- 新增 Import
 
 
 class SideMenu(QWidget):
@@ -42,6 +43,7 @@ class SideMenu(QWidget):
         self.btn_warroom = self._create_menu_btn("戰情", 0)
         self.btn_strategy = self._create_menu_btn("選股", 1)
         self.btn_market = self._create_menu_btn("市場", 2)
+        self.btn_settings = self._create_menu_btn("設定", 3)  # <--- 新增設定按鈕
 
         self.btn_warroom.setChecked(True)
 
@@ -49,6 +51,7 @@ class SideMenu(QWidget):
         layout.addWidget(self.btn_strategy)
         layout.addWidget(self.btn_market)
         layout.addStretch()
+        layout.addWidget(self.btn_settings)  # <--- 放在最下方
 
     def _create_menu_btn(self, text, id):
         btn = QPushButton(text)
@@ -78,8 +81,6 @@ class StockWarRoomV3(QMainWindow):
 
         # 1. 建立共享的 Worker
         self.shared_worker = QuoteWorker(self)
-        # 🔥 [修正] 註解掉這行，讓 Driver 不會一開程式就跑出來
-        # self.shared_worker.start()
 
         # 狀態變數
         self.current_stock_id = None
@@ -150,11 +151,17 @@ class StockWarRoomV3(QMainWindow):
 
         self.pages.addWidget(self.warroom_page)
 
-        # Page 1 & 2
+        # Page 1: 選股
         self.strategy_page = StrategyModule()
         self.pages.addWidget(self.strategy_page)
+
+        # Page 2: 市場
         self.market_page = ActiveETFModule()
         self.pages.addWidget(self.market_page)
+
+        # Page 3: 設定 (新增)
+        self.settings_page = SettingsModule()
+        self.pages.addWidget(self.settings_page)
 
         main_layout.addWidget(self.pages)
 
@@ -235,13 +242,6 @@ class StockWarRoomV3(QMainWindow):
 
     def load_initial_data(self):
         self.list_module.refresh_table()
-        #if self.list_module.table.rowCount() > 0:
-        #    item = self.list_module.table.item(0, 0)
-        #    if item:
-        #        code = item.text()
-        #        market = item.data(Qt.ItemDataRole.UserRole)
-        #        fid = f"{code}_{market}"
-        #        self.on_stock_changed(fid)
 
     def closeEvent(self, event):
         reply = QMessageBox.question(self, '確認退出', '確定要關閉系統嗎？',

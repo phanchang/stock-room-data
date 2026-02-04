@@ -1,0 +1,13 @@
+{
+  "30w_strategy": {
+    "trigger_min_gain": 0.1,
+    "trigger_vol_multiplier": 1.1,
+    "adhesive_weeks": 2,
+    "adhesive_bias": 0.12,
+    "shakeout_lookback": 12,
+    "shakeout_max_depth": 0.35,
+    "shakeout_underwater_limit": 10,
+    "shakeout_prev_bias_limit": 0.15,
+    "signal_lookback_days": 10
+  }
+}

@@ -1,39 +1,53 @@
 import pandas as pd
 import numpy as np
+import json
+from pathlib import Path
 from utils.indicators import Indicators
 
 
 class TechnicalStrategies:
     """
-    技術指標策略庫 (30週戰法核心邏輯 - 偵錯強規版)
+    技術指標策略庫 - 整合 V3 (支援 JSON 設定與 30W 強規版)
     """
 
-    # ==============================================================================
-    # ⚙️ 策略參數與偵錯設定
-    # ==============================================================================
-    STRATEGY_CONFIG = {
-        # --- 偵錯開關 ---
-        'debug_mode': True,  # 預設開啟偵錯 LOG
-        'debug_date': '2025-05-30',  # 輸入想 DEBUG 的日期 (格式: YYYY-MM-DD)
+    @staticmethod
+    def get_config():
+        """
+        從 data/strategy_config.json 讀取策略參數，若失敗則使用預設值
+        """
+        # 定義設定檔路徑 (相對於此檔案的位置)
+        config_path = Path(__file__).resolve().parent.parent.parent / "data" / "strategy_config.json"
 
-        # --- A. 攻擊訊號 (Trigger) ---
-        'trigger_min_gain': 0.10,  # [漲幅] 本週漲幅 >= 10%
-        'trigger_vol_multiplier': 1.1,  # [量增] 本週成交量 > 上週 * 1.1倍
+        # 預設參數 (防呆用)
+        default_cfg = {
+            "trigger_min_gain": 0.10,
+            "trigger_vol_multiplier": 1.1,
+            "adhesive_weeks": 2,
+            "adhesive_bias": 0.2,
+            "shakeout_lookback": 12,
+            "shakeout_max_depth": 0.35,
+            "shakeout_underwater_limit": 10,
+            "shakeout_prev_bias_limit": 0.20,
+            "signal_lookback_days": 10,
+            "debug_mode": True,
+            "debug_date": "2025-06-06"
+        }
 
-        # --- B. 情境1：黏貼整理 (Adhesive) ---
-        'adhesive_weeks': 2,
-        'adhesive_bias': 0.2,
-
-        # --- C. 情境2：甩轎 (Shakeout) ---
-        'shakeout_lookback': 12,
-        'shakeout_max_depth': 0.35,  # 提高到 35% 容許台燿等級洗盤
-        'shakeout_underwater_limit': 10,  # 提高到 10 週
-        'shakeout_prev_bias_limit': 0.15,  # [關鍵] 限制上週收盤乖離 15% 內，過濾高檔誤報
-    }
+        try:
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return data.get('30w_strategy', default_cfg)
+            return default_cfg
+        except:
+            return default_cfg
 
     @staticmethod
     def analyze_30w_breakout_details(df: pd.DataFrame) -> pd.DataFrame:
-        cfg = TechnicalStrategies.STRATEGY_CONFIG
+        """
+        核心 30 週戰法判定 - 支援日日選股與開盤基位判定
+        """
+        cfg = TechnicalStrategies.get_config()
         results = pd.DataFrame(index=df.index)
         results['Signal'] = 0
         results['Adh_Info'] = ""
@@ -46,104 +60,69 @@ class TechnicalStrategies:
         prev_ma30, prev_vol = ma30.shift(1), vol.shift(1)
 
         for i in range(30, len(df)):
-            dt = df.index[i]
-            dt_str = dt.strftime('%Y-%m-%d')
-            is_debug_day = cfg['debug_mode'] and (dt_str == cfg['debug_date'])
+            dt_str = df.index[i].strftime('%Y-%m-%d')
+            is_debug = cfg.get('debug_mode', False) and (dt_str == cfg.get('debug_date'))
 
             prev_c = close.iloc[i - 1]
             if prev_c == 0 or pd.isna(ma30.iloc[i]): continue
 
-            # --- 數據準備 ---
             pct_change = (close.iloc[i] - prev_c) / prev_c
             curr_ma = ma30.iloc[i]
-            p_ma = prev_ma30.iloc[i]
-            # 判斷基準：上週收盤價距離 MA30 的位置
-            prev_bias = (prev_c - curr_ma) / curr_ma
+            p_ma_val = prev_ma30.iloc[i]
 
-            # ------------------------------------------------------------------
-            # 🛑 偵錯日誌：基礎數據區
-            # ------------------------------------------------------------------
-            if is_debug_day:
-                print(f"\n{'=' * 20} 策略偵錯報告: {dt_str} {'=' * 20}")
-                print(
-                    f"[數據] 收盤: {close.iloc[i]:.2f}, 漲幅: {pct_change * 100:.2f}%, 量比: {vol.iloc[i] / prev_vol.iloc[i]:.2f}x")
-                print(f"[均線] MA30: {curr_ma:.2f}, 上週MA30: {p_ma:.2f}, 上週收盤乖離: {prev_bias * 100:.2f}%")
-                print(f"[條件檢查結果]:")
-
-            # --- 1. 基礎攻擊條件判定 ---
+            # --- 基礎攻擊條件 ---
             fail_reasons = []
-            if pct_change < cfg['trigger_min_gain']: fail_reasons.append(f"漲幅未達標({pct_change * 100:.1f}% < 10%)")
-            if close.iloc[i] <= open_p.iloc[i]: fail_reasons.append("本週為陰 K (收盤 <= 開盤)")
-            if vol.iloc[i] < prev_vol.iloc[i] * cfg['trigger_vol_multiplier']: fail_reasons.append(
-                f"量增不足({vol.iloc[i] / prev_vol.iloc[i]:.2f}x < 1.1x)")
-            if low.iloc[i] <= curr_ma: fail_reasons.append(
-                f"未脫離均線(最低價 {low.iloc[i]:.2f} 觸碰到 MA30 {curr_ma:.2f})")
+            if pct_change < cfg.get('trigger_min_gain', 0.10): fail_reasons.append("漲幅未達標")
+            if close.iloc[i] <= open_p.iloc[i]: fail_reasons.append("非紅K")
+            if vol.iloc[i] < prev_vol.iloc[i] * cfg.get('trigger_vol_multiplier', 1.1): fail_reasons.append(
+                "量能未達標")
+            if low.iloc[i] <= curr_ma: fail_reasons.append("盤中未脫離均線")
 
             if fail_reasons:
-                if is_debug_day: print(f"  ❌ 基礎攻擊條件未過: {', '.join(fail_reasons)}")
+                if is_debug: print(f"--- 偵錯 {dt_str} --- 基礎門檻失敗: {', '.join(fail_reasons)}")
                 continue
-            elif is_debug_day:
-                print("  ✅ 基礎攻擊條件: 通過")
 
             is_adh, is_shk = False, False
+            # 判斷基位：上週收盤距離 MA30 的乖離
+            prev_bias = (prev_c - curr_ma) / curr_ma
 
-            # --- 2. 黏貼整理 (Adhesive) ---
-            if curr_ma > p_ma and prev_bias <= 0.12:
-                start_adh = i - cfg['adhesive_weeks']
+            # --- 1. 黏貼整理 ---
+            if curr_ma > p_ma_val and prev_bias <= 0.12:
+                start_adh = i - cfg.get('adhesive_weeks', 2)
                 if start_adh >= 0:
                     is_adh_tmp, max_d = True, 0.0
                     for k in range(start_adh, i):
                         dev = max(abs(high.iloc[k] - ma30.iloc[k]), abs(low.iloc[k] - ma30.iloc[k])) / ma30.iloc[k]
-                        if dev > cfg['adhesive_bias']:
+                        if dev > cfg.get('adhesive_bias', 0.2):
                             is_adh_tmp = False;
                             break
                         max_d = max(max_d, dev)
                     if is_adh_tmp:
                         is_adh = True
-                        results.at[df.index[i], 'Adh_Info'] = f"{cfg['adhesive_weeks']}w, ±{max_d * 100:.1f}%"
-            elif is_debug_day:
-                print(f"  ℹ️  情境1(黏貼): 未成立 (原因: MA30向下或上週乖離 > 12%)")
+                        results.at[df.index[i], 'Adh_Info'] = f"{cfg.get('adhesive_weeks', 2)}w, ±{max_d * 100:.1f}%"
 
-            # --- 3. 甩轎 (Shakeout) ---
-            shk_fail = []
-            if prev_bias > cfg['shakeout_prev_bias_limit']:
-                shk_fail.append(f"起點乖離過大({prev_bias * 100:.1f}% > 15%，非起漲區)")
+            # --- 2. 甩轎 ---
+            if prev_bias <= cfg.get('shakeout_prev_bias_limit', 0.20):
+                if curr_ma >= p_ma_val * 0.999 and prev_c >= ma30.iloc[i - 1]:
+                    start_shk = max(0, i - cfg.get('shakeout_lookback', 12))
+                    has_dip, valid_depth, uw_weeks = False, True, 0
+                    for k in range(start_shk, i):
+                        if low.iloc[k] < ma30.iloc[k]:
+                            has_dip = True
+                            if low.iloc[k] < ma30.iloc[k] * (1 - cfg.get('shakeout_max_depth', 0.35)):
+                                valid_depth = False;
+                                break
+                        if close.iloc[k] < ma30.iloc[k]:
+                            uw_weeks += 1
 
-            if curr_ma < p_ma * 0.999:  # 容許微幅波動
-                shk_fail.append("MA30 斜率向下")
+                    if is_debug:
+                        print(f"--- 偵錯 {dt_str} --- 曾跌破={has_dip}, 深度合規={valid_depth}, 水下={uw_weeks}w")
 
-            if close.iloc[i - 1] < ma30.iloc[i - 1]:
-                shk_fail.append("發動前週(i-1)收盤仍在水下，未確認站回")
+                    if valid_depth and has_dip and (0 < uw_weeks <= cfg.get('shakeout_underwater_limit', 10)):
+                        is_shk = True
+                        results.at[df.index[i], 'Shk_Info'] = f"Dip {uw_weeks}w"
 
-            if not shk_fail:
-                start_shk = max(0, i - cfg['shakeout_lookback'])
-                has_dip, valid_depth, uw_weeks = False, True, 0
-                for k in range(start_shk, i):
-                    if low.iloc[k] < ma30.iloc[k]:
-                        has_dip = True
-                        if low.iloc[k] < ma30.iloc[k] * (1 - cfg['shakeout_max_depth']):
-                            valid_depth = False;
-                            break
-                    if close.iloc[k] < ma30.iloc[k]:
-                        uw_weeks += 1
-
-                if not has_dip:
-                    shk_fail.append("回溯期內無跌破(Dip)紀錄")
-                elif not valid_depth:
-                    shk_fail.append(f"跌破深度超過限制({cfg['shakeout_max_depth'] * 100}%)")
-                elif not (0 < uw_weeks <= cfg['shakeout_underwater_limit']):
-                    shk_fail.append(f"水下週數({uw_weeks})超出範圍(1~{cfg['shakeout_underwater_limit']}週)")
-                else:
-                    is_shk = True
-                    results.at[df.index[i], 'Shk_Info'] = f"Dip {uw_weeks}w"
-
-            if is_debug_day:
-                if is_shk:
-                    print(f"  ✅ 情境2(甩轎): 通過 ({results.at[df.index[i], 'Shk_Info']})")
-                else:
-                    print(f"  ❌ 情境2(甩轎): 未過 ({', '.join(shk_fail)})")
-
-            # 存入 Signal
+            # 存入 Signal: 1=Adh, 2=Shk, 3=Both
             if is_adh and is_shk:
                 results.at[df.index[i], 'Signal'] = 3
             elif is_adh:
@@ -153,7 +132,10 @@ class TechnicalStrategies:
 
         return results
 
-    # --- 以下保留原本所有方法，不刪減 ---
+    # ==============================================================================
+    # 💎 以下完整保留您原本所有的選股 Fuction，不做任何刪減
+    # ==============================================================================
+
     @staticmethod
     def break_30w_ma(df: pd.DataFrame) -> pd.Series:
         if len(df) < 150: return pd.Series(False, index=df.index)

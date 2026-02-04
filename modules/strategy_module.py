@@ -47,7 +47,8 @@ FULL_COLUMN_SPECS = {
     'pbr': {'name': 'PB', 'show': False, 'tip': '股價淨值比', 'type': 'num'},
     'yield': {'name': '殖利率%', 'show': True, 'tip': '現金殖利率', 'type': 'num'},
     'is_tu_yang': {'name': '土洋對作', 'show': False, 'tip': '1=符合土洋對作訊號', 'type': 'num'},
-    '強勢特徵': {'name': '強勢特徵', 'show': True, 'tip': '策略觸發訊號標籤', 'type': 'str'}
+    '強勢特徵': {'name': '強勢特徵', 'show': True, 'tip': '策略觸發訊號標籤', 'type': 'str'},
+    'str_30w_week_offset': {'name': '訊號週數', 'show': True, 'tip': '0=本週, 1=上週...', 'type': 'num'}
 }
 
 # ==========================================
@@ -80,17 +81,21 @@ FULL_FILTER_SPECS = [
     {'key': 'pe', 'label': '本益比', 'min': 0, 'max': 200, 'step': 1.0, 'suffix': ''},
     {'key': 'pbr', 'label': '股價淨值比', 'min': 0, 'max': 20, 'step': 0.1, 'suffix': ''},
     {'key': 'yield', 'label': '殖利率(%)', 'min': 0, 'max': 20, 'step': 0.5, 'suffix': '%'},
+    {'key': 'str_30w_week_offset', 'label': '訊號週數(前)', 'min': -1, 'max': 52, 'step': 1, 'suffix': '週'}
 ]
 
 DEFAULT_ACTIVE_FILTERS = ['bb_width', 'RS強度', '量比', '漲幅20d', 't_streak']
 
+# 🔥 修正重點：新增 30W 選項
 TAG_CATEGORIES = {
-    "🔥 趨勢型態": ["主力掃單(ILSS)", "土洋對作", "超強勢", "突破30週", "創季高", "創月高", "強勢多頭", "波段黑馬", "假跌破"],
+    "🔥 趨勢型態": ["30W黏貼", "30W甩轎", "主力掃單(ILSS)", "土洋對作", "超強勢", "突破30週", "創季高", "創月高", "強勢多頭", "波段黑馬", "假跌破"],
     "📉 整理型態": ["極度壓縮", "波動壓縮", "盤整5日", "盤整10日", "盤整20日", "盤整60日", "Vix反轉"],
     "💰 籌碼支撐": ["投信認養", "散戶退場", "回測季線", "回測年線"]
 }
 
 TAG_TOOLTIPS = {
+    '30W黏貼': 'MA30 走平且股價在均線附近 ±12% 震盪',
+    '30W甩轎': 'MA30 向上，股價回測跌破均線並在 10 週內站回',
     '主力掃單(ILSS)': '[嚴格] MA200上 + 假跌破掃單 + 爆量站回 + 營收增 + 融資減',
     '假跌破': '舊版策略：昨破月線、今站回 (純技術面)',
     '極度壓縮': '布林寬度 < 5%，極致籌碼沉澱',
@@ -332,6 +337,7 @@ class StrategyTableModel(QAbstractTableModel):
                     if value > 0: return QColor("#FF4444")
                     if value < 0: return QColor("#00CC00")
             if col_key == '強勢特徵' and value:
+                if '30W' in str(value): return QColor("#00E5FF")  # 新標籤亮色
                 if 'ILSS' in str(value): return QColor("#FF00FF")
                 if '土洋' in str(value): return QColor("#FFFF00")
                 return QColor("#E0E0E0")
@@ -426,6 +432,7 @@ class StrategyModule(QWidget):
 
         self.btn_reload = QToolButton()
         self.btn_reload.setText("🔄")
+        self.btn_reload.setToolTip("重新整理 (資料更新後請點此)")
         self.btn_reload.clicked.connect(self.load_data)
 
         self.btn_cols = QToolButton()
@@ -599,7 +606,6 @@ class StrategyModule(QWidget):
 
     def on_current_row_changed(self, current, previous):
         if current.isValid():
-            # 🔥 修正：從 PositionAtTop 改為 EnsureVisible，徹底解決「亂跳」問題
             self.table_view.scrollTo(current, QAbstractItemView.ScrollHint.EnsureVisible)
 
     def toggle_filters(self):
@@ -813,20 +819,16 @@ class StrategyModule(QWidget):
         row = src_idx.row()
         sid = str(self.display_df.iloc[row]['sid'])
         market = "TW"
-        # 檢查硬碟中是否存在 _TWO 的檔案
-        # 假設資料路徑在專案根目錄的 data/cache/tw/
         base_cache_path = Path(__file__).resolve().parent.parent / "data" / "cache" / "tw"
         path_two = base_cache_path / f"{sid}_TWO.parquet"
 
         if path_two.exists():
             market = "TWO"
         else:
-            # 如果沒有 _TWO，再檢查有沒有 _TW，都沒有的話預設 TW
             path_tw = base_cache_path / f"{sid}_TW.parquet"
             if path_tw.exists():
                 market = "TW"
 
-        # 發送正確的 ID (例如 5536_TWO) 給戰情室
         print(f"DEBUG: Strategy Double Click: {sid} -> {market}")
         self.stock_clicked_signal.emit(f"{sid}_{market}")
 

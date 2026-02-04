@@ -4,6 +4,9 @@ on:
     - cron: '30 7 * * 1-5' # 台北 15:30
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   run-daily:
     runs-on: ubuntu-latest
@@ -18,47 +21,44 @@ jobs:
         run: |
           pip install pandas yfinance lxml python-dotenv numpy pyarrow requests beautifulsoup4
 
-      - name: Prepare Data Directories (Safe Clean)
+      - name: Prepare & Run Strategy
         run: |
-          echo "🧹 正在整理資料夾結構..."
-          # 🟢 優化：建立所有可能用到的目錄，防止 Python 找不到路徑
           mkdir -p data/cache/tw
           mkdir -p data/indicators
-          mkdir -p data/temp
-          mkdir -p data/meta 
-          
-          # 只刪除內容，保留目錄結構
-          rm -f data/cache/tw/* || echo "Cache already empty"
-          rm -f data/indicators/* || echo "Indicators already empty"
-
-      - name: Generate Stock List (Missing File Protection)
-        run: |
-          echo "📋 檢查並產生股票清單..."
-          # 🟢 再次確保目錄存在 (雙重保險)
-          mkdir -p data
-          python scripts/update_stock_list.py
-
-      - name: Fetch Price & Run Strategy
-        run: |
-          # 執行 K 線下載與策略計算
-          # 🟢 再次確保 cache 目錄存在
-          mkdir -p data/cache/tw
+          # 執行下載與運算
           python scripts/init_cache_tw.py --auto --force
           python scripts/daily_strategy_runner.py
 
-      - name: Commit and Push Results
+      - name: Zip Results (The Smart Way)
+        run: |
+          echo "📦 正在打包運算結果..."
+          # 1. 產生狀態檔 (給 App 檢查用)
+          echo "{\"update_time\": \"$(date +'%Y-%m-%d %H:%M')\", \"source\": \"github_actions\"}" > data/data_status.json
+          
+          # 2. 壓縮 (只打包 cache 和 indicators，排除 git 檔)
+          # -r: 遞迴, -j: 不保留最外層目錄結構(視需求), 這裡建議保留 data/cache 結構方便解壓
+          # 注意：我們先進到 data 目錄再壓縮，這樣解壓時路徑比較乾淨
+          cd data
+          zip -r daily_data.zip cache/tw indicators stock_list.csv data_status.json
+          
+          # 3. 移動 zip 到根目錄準備 commit (或者留在 data 裡也可以，這邊預設放在 data/)
+          echo "打包完成: data/daily_data.zip"
+
+      - name: Commit Zip Only
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          if [ -f "data/stock_list.csv" ]; then git add -f data/stock_list.csv; fi
-          if [ -d "data/indicators" ]; then git add -f data/indicators/; fi
-          if [ -d "data/cache/tw" ]; then git add -f data/cache/tw/; fi
+          # ⚠️ 關鍵：先移除舊的散亂檔案 (如果之前有 commit 過的話)
+          # 這邊用 git rm -r --cached 讓 git 不再追蹤那些資料夾，但實體檔案還在
+          git rm -r --cached data/cache/tw || true
+          git rm -r --cached data/indicators || true
           
-          git commit -m "Auto: Price & Strategy Update ($(date +'%Y-%m-%d'))" || echo "No changes to commit"
+          # 只加入 ZIP 和 JSON
+          git add -f data/daily_data.zip
+          git add -f data/data_status.json
           
-          # 🟢 同樣加入強制清理，防止衝突
-          git reset --hard HEAD
+          git commit -m "Auto: Cloud Strategy Update ($(date +'%Y-%m-%d'))" || echo "No changes"
           
           git pull --rebase -X theirs origin main
           git push origin main
