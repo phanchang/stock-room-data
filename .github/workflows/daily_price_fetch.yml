@@ -33,7 +33,7 @@ jobs:
         run: |
           echo "📦 正在打包運算結果..."
           # 1. 產生狀態檔 (給 App 檢查用)
-          echo "{\"update_time\": \"$(date +'%Y-%m-%d %H:%M')\", \"source\": \"github_actions\"}" > data/data_status.json
+          echo "{\"update_time\": \"$(TZ='Asia/Taipei' date +'%Y-%m-%d %H:%M')\", \"source\": \"github_actions\"}" > data/data_status.json
           
           # 2. 壓縮 (只打包 cache 和 indicators，排除 git 檔)
           # -r: 遞迴, -j: 不保留最外層目錄結構(視需求), 這裡建議保留 data/cache 結構方便解壓
