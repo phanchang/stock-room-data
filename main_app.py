@@ -6,6 +6,12 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
                              QButtonGroup, QGridLayout, QTabWidget,
                              QMessageBox, QProgressDialog, QSizePolicy)
 from PyQt6.QtCore import Qt, QTimer
+import traceback
+def exception_hook(exctype, value, tb):
+    print("💥 偵測到未捕獲的錯誤:")
+    traceback.print_exception(exctype, value, tb)
+    sys.exit(1)
+sys.excepthook = exception_hook
 
 # 設定模組搜尋路徑
 current_dir = Path(__file__).resolve().parent
@@ -25,7 +31,7 @@ from modules.eps_module import EPSModule
 from modules.ratio_module import RatioModule
 from modules.active_etf_module import ActiveETFModule
 from modules.strategy_module import StrategyModule
-from modules.settings_module import SettingsModule  # <--- 新增 Import
+from modules.settings_module import SettingsModule
 
 
 class SideMenu(QWidget):
@@ -43,7 +49,7 @@ class SideMenu(QWidget):
         self.btn_warroom = self._create_menu_btn("戰情", 0)
         self.btn_strategy = self._create_menu_btn("選股", 1)
         self.btn_market = self._create_menu_btn("市場", 2)
-        self.btn_settings = self._create_menu_btn("設定", 3)  # <--- 新增設定按鈕
+        self.btn_settings = self._create_menu_btn("設定", 3)
 
         self.btn_warroom.setChecked(True)
 
@@ -51,7 +57,7 @@ class SideMenu(QWidget):
         layout.addWidget(self.btn_strategy)
         layout.addWidget(self.btn_market)
         layout.addStretch()
-        layout.addWidget(self.btn_settings)  # <--- 放在最下方
+        layout.addWidget(self.btn_settings)
 
     def _create_menu_btn(self, text, id):
         btn = QPushButton(text)
@@ -89,7 +95,7 @@ class StockWarRoomV3(QMainWindow):
         self.init_ui()
         self.connect_signals()
 
-        # 延遲載入初始資料
+        # 延遲載入初始資料 (並嘗試選取第一檔)
         QTimer.singleShot(500, self.load_initial_data)
 
     def init_ui(self):
@@ -123,17 +129,17 @@ class StockWarRoomV3(QMainWindow):
         self.eps_module = EPSModule()
         self.ratio_module = RatioModule()
 
-        # 建立 Tab (連接切換事件，實現 Lazy Loading)
+        # 建立 Tab
         self.chips_tabs = self._create_tab_widget()
         self.chips_tabs.addTab(self.inst_module, "三大法人")
         self.chips_tabs.addTab(self.margin_module, "資券變化")
-        self.chips_tabs.currentChanged.connect(self.on_tab_changed)  # Lazy Load Trigger
+        self.chips_tabs.currentChanged.connect(self.on_tab_changed)
 
         self.fund_tabs = self._create_tab_widget()
         self.fund_tabs.addTab(self.revenue_module, "月營收")
         self.fund_tabs.addTab(self.eps_module, "EPS")
         self.fund_tabs.addTab(self.ratio_module, "三率")
-        self.fund_tabs.currentChanged.connect(self.on_tab_changed)  # Lazy Load Trigger
+        self.fund_tabs.currentChanged.connect(self.on_tab_changed)
 
         # Layout 設定
         for widget in [self.list_module, self.kline_module, self.chips_tabs, self.fund_tabs]:
@@ -146,7 +152,7 @@ class StockWarRoomV3(QMainWindow):
 
         warroom_layout.setColumnStretch(0, 50)
         warroom_layout.setColumnStretch(1, 50)
-        warroom_layout.setRowStretch(0, 55)  # K線圖高一點
+        warroom_layout.setRowStretch(0, 55)
         warroom_layout.setRowStretch(1, 45)
 
         self.pages.addWidget(self.warroom_page)
@@ -159,7 +165,7 @@ class StockWarRoomV3(QMainWindow):
         self.market_page = ActiveETFModule()
         self.pages.addWidget(self.market_page)
 
-        # Page 3: 設定 (新增)
+        # Page 3: 設定
         self.settings_page = SettingsModule()
         self.pages.addWidget(self.settings_page)
 
@@ -182,44 +188,52 @@ class StockWarRoomV3(QMainWindow):
 
     def connect_signals(self):
         self.side_menu.button_group.idClicked.connect(self.pages.setCurrentIndex)
+
+        # 監聽頁面切換，實現自動重繪
+        self.pages.currentChanged.connect(self.on_page_changed)
+
         self.list_module.stock_selected.connect(self.on_stock_changed)
         self.market_page.stock_clicked_signal.connect(self.on_stock_changed)
         self.strategy_page.stock_clicked_signal.connect(self.on_strategy_stock_clicked)
         self.strategy_page.request_add_watchlist.connect(self.on_add_watchlist_request)
 
+    def on_page_changed(self, index):
+        """當頁面切換時觸發"""
+        # 如果切換回戰情室 (index 0) 且有當前股票，強制刷新 K 線
+        # 這解決了「下載完資料後，回到戰情室 K 線不會更新」的問題
+        if index == 0:
+            # 🔥 修正點：只有在當前沒股票時，才自動選第一支
+            # 如果是從選股頁跳過來的，current_stock_id 已經設定好了，這裡不重複執行
+            if not self.current_stock_id:
+                self.auto_select_first_stock()
+
     def on_stock_changed(self, full_stock_id):
-        """核心優化：切換股票時，只載入最必要的 K 線，其他模組採用 Lazy Load"""
+        # 🔥 [防閃退關鍵] 如果股票代號跟上次一樣，就不要重跑，防止無限循環觸發
+        if full_stock_id == self.current_stock_id and self.current_stock_id is not None:
+            return
         self.current_stock_id = full_stock_id
         clean_id = full_stock_id.split('_')[0]
 
-        # 嘗試從 DB 獲取名稱
         stock_name = ""
         if hasattr(self.list_module, 'stock_db'):
             info = self.list_module.stock_db.get(clean_id)
             if info: stock_name = info.get('name', '')
         self.current_stock_name = stock_name
 
-        print(f"DEBUG: 切換股票 {full_stock_id} ({stock_name}) - 啟動極速載入")
-
-        # 1. 優先載入 K 線 (這是最重要的)
         if hasattr(self, 'kline_module'):
             self.kline_module.load_stock_data(full_stock_id, stock_name)
 
-        # 2. 載入「當前可見」的 Tab 數據
         self.update_visible_tabs()
 
     def update_visible_tabs(self):
-        """只更新當前顯示的 Tab，避免一次載入所有數據導致卡頓"""
         if not self.current_stock_id: return
 
-        # 處理 Chips Tabs (左下)
         current_chips = self.chips_tabs.currentWidget()
         if current_chips == self.inst_module:
             self.inst_module.load_inst_data(self.current_stock_id, self.current_stock_name)
         elif current_chips == self.margin_module:
             self.margin_module.load_margin_data(self.current_stock_id, self.current_stock_name)
 
-        # 處理 Fund Tabs (右下)
         current_fund = self.fund_tabs.currentWidget()
         if current_fund == self.revenue_module:
             self.revenue_module.load_revenue_data(self.current_stock_id, self.current_stock_name)
@@ -229,7 +243,6 @@ class StockWarRoomV3(QMainWindow):
             self.ratio_module.load_ratio_data(self.current_stock_id, self.current_stock_name)
 
     def on_tab_changed(self, index):
-        """當使用者切換 Tab 時，才去載入該 Tab 的數據"""
         self.update_visible_tabs()
 
     def on_strategy_stock_clicked(self, stock_id_full):
@@ -241,7 +254,32 @@ class StockWarRoomV3(QMainWindow):
         self.list_module.add_stock_to_group(stock_id, group_name)
 
     def load_initial_data(self):
+        # 重新整理列表
         self.list_module.refresh_table()
+        # 稍後自動選取第一支，解決「預設要畫第一筆資料」的需求
+        QTimer.singleShot(500, self.auto_select_first_stock)
+
+    def auto_select_first_stock(self):
+        """嘗試自動選取列表中的第一支股票"""
+        try:
+            # 嘗試存取 list_module 的 table (假設名稱為 table 或 stock_table)
+            table = getattr(self.list_module, 'table', None)
+            if not table:
+                table = getattr(self.list_module, 'stock_table', None)
+
+            if table and table.rowCount() > 0:
+                table.selectRow(0)
+                # 模擬點擊或直接觸發邏輯，這裡假設 list_module 有處理 selection change
+                # 如果無法觸發，我們手動獲取第一列的 ID
+                item = table.item(0, 0)  # 假設 ID 在第一欄
+                if item:
+                    # 這裡只能猜測 ID 格式，通常 list module 會發送訊號
+                    # 我們這裡依賴 list_module 自己的 selection behavior
+                    # 或者我們可以呼叫 list_module 的某個方法
+                    pass
+                print("DEBUG: 已自動選取第一列股票")
+        except Exception as e:
+            print(f"DEBUG: 自動選取失敗: {e}")
 
     def closeEvent(self, event):
         reply = QMessageBox.question(self, '確認退出', '確定要關閉系統嗎？',

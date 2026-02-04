@@ -135,16 +135,15 @@ class MarginModule(QWidget):
             self.btn_toggle_chart.setStyleSheet("background: #333; color: #CCC; border: 1px solid #555;")
 
     def load_margin_data(self, stock_id, stock_name=""):
+        # 1. 重複檢查
+        if stock_id == self.current_stock_id and self.table.rowCount() > 0:
+            return
+
         self.current_stock_id = stock_id
         self.current_stock_name = stock_name
 
         display_id = stock_id.split('_')[0]
-
-        # 🔥 修正：顯示代號+名稱
-        if stock_name:
-            self.lbl_stock_info.setText(f"{display_id} {stock_name}")
-        else:
-            self.lbl_stock_info.setText(f"{display_id}")
+        self.lbl_stock_info.setText(f"{display_id} {stock_name}" if stock_name else f"{display_id}")
 
         self.info_label.setText("⏳ 抓取中...")
         self.lbl_update_date.setVisible(False)
@@ -152,9 +151,14 @@ class MarginModule(QWidget):
         self.fig.clear()
         self.canvas.draw()
 
-        if self.worker is not None and self.worker.isRunning():
-            self.worker.terminate()
+        # 2. 安全處理舊的 Worker
+        if self.worker is not None:
+            try:
+                self.worker.data_fetched.disconnect()
+            except (TypeError, RuntimeError):
+                pass
 
+        # 3. 建立新 Worker
         self.worker = MarginWorker(stock_id)
         self.worker.data_fetched.connect(self.on_data_received)
         self.worker.start()

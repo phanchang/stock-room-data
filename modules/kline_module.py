@@ -219,7 +219,7 @@ class KLineModule(QWidget):
             return
         self.expanded_dialog = ExpandedKLineWindow(
             stock_id=self.current_stock_id,
-            df=self.display_df,
+            df=self.raw_df,  # <--- 改為傳入 raw_df
             stock_name=self.current_stock_name,
             parent=self
         )

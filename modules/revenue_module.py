@@ -149,6 +149,9 @@ class RevenueModule(QWidget):
 
     # 🔥 [關鍵修正] 接收 stock_name 參數
     def load_revenue_data(self, stock_id, stock_name=""):
+        # 1. 緩存機制：如果股票跟上次一樣且資料已存在，就不要重抓
+        if stock_id == self.current_stock_id and self.table.rowCount() > 0:
+            return
         self.current_stock_id = stock_id
         self.current_stock_name = stock_name
 
@@ -167,8 +170,17 @@ class RevenueModule(QWidget):
         self.canvas.draw()
         self.lbl_update_date.setVisible(False)
 
-        if self.worker is not None and self.worker.isRunning():
-            self.worker.terminate()
+        if self.worker is not None:
+            # 重要：先斷開訊號連接，防止舊的 Worker 回傳資料觸發 UI 繪圖
+            try:
+                self.worker.data_fetched.disconnect()
+            except:
+                pass
+
+            if self.worker.isRunning():
+                # 不要用 terminate()，讓它跑完或在 Worker 內部下 flag
+                # 這裡我們選擇直接放生它（它跑完會自動結束），但不再接收它的訊號
+                pass
 
         self.worker = RevenueWorker(stock_id)
         self.worker.data_fetched.connect(self.on_data_received)

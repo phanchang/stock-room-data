@@ -8,36 +8,87 @@ from pathlib import Path
 from datetime import datetime
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QGridLayout, QDoubleSpinBox,
-                             QSpinBox, QScrollArea, QMessageBox, QProgressBar, QTextEdit, QFrame)
+                             QSpinBox, QScrollArea, QMessageBox, QProgressBar, QTextEdit, QFrame, QProgressDialog)
 from PyQt6.QtCore import Qt, QTimer, QProcess, pyqtSignal
 
-# --- 美學 CSS (保持原本你喜歡的樣式) ---
+# --- 美學 CSS ---
 STYLES = """
     QWidget { font-family: "Segoe UI", "Microsoft JhengHei"; background-color: #121212; color: #E0E0E0; }
     QFrame.Card { background-color: #1E1E1E; border-radius: 12px; border: 1px solid #3E3E42; }
-    QLabel.Title { font-size: 26px; font-weight: bold; color: #00E5FF; margin-bottom: 10px; }
-    QLabel.CardTitle { font-size: 18px; font-weight: bold; color: #FFFFFF; border-bottom: 2px solid #00E5FF; padding-bottom: 5px; }
-    QLabel.Label { font-size: 16px; color: #DDDDDD; font-weight: 500; }
-    QLabel.Value { font-size: 16px; font-weight: bold; color: #FFFFFF; }
-    QLabel.Desc { font-size: 14px; color: #888; font-style: italic; }
 
+    QLabel.Title { font-size: 26px; font-weight: bold; color: #00E5FF; margin-bottom: 10px; }
+    QLabel.CardTitle { font-size: 18px; font-weight: bold; color: #FFFFFF; }
+
+    QLabel.Label { font-size: 16px; color: #FFFFFF; font-weight: bold; }
+    QLabel.Value { font-size: 16px; font-weight: bold; color: #00E5FF; }
+    QLabel.Desc { font-size: 14px; color: #BBBBBB; font-style: normal; }
+
+    /* 策略時間標籤 */
+    QLabel.StrategyTime { font-size: 14px; color: #FFEB3B; font-weight: bold; margin-right: 10px; }
+
+    /* --- 輸入框與微調按鈕優化 --- */
     QDoubleSpinBox, QSpinBox {
-        background-color: #2D2D30; border: 1px solid #555; border-radius: 4px;
-        padding: 6px; font-size: 16px; color: #00E5FF; font-weight: bold;
-        min-width: 100px; max-width: 140px;
+        background-color: #2D2D30; 
+        border: 1px solid #555; 
+        border-radius: 4px;
+        padding: 8px 10px;
+        font-size: 18px;
+        color: #00E5FF; 
+        font-weight: bold;
+        min-width: 100px; 
+        max-width: 140px;
     }
+
+    QDoubleSpinBox::up-button, QSpinBox::up-button,
+    QDoubleSpinBox::down-button, QSpinBox::down-button {
+        width: 35px;
+        border-left: 1px solid #555;
+        background-color: #3A3A3A;
+        border-radius: 0px 4px 4px 0px;
+    }
+
+    QDoubleSpinBox::up-button:hover, QSpinBox::up-button:hover,
+    QDoubleSpinBox::down-button:hover, QSpinBox::down-button:hover {
+        background-color: #555555;
+    }
+
+    QDoubleSpinBox::up-button:pressed, QSpinBox::up-button:pressed,
+    QDoubleSpinBox::down-button:pressed, QSpinBox::down-button:pressed {
+        background-color: #00E5FF;
+    }
+
+    QDoubleSpinBox::up-arrow, QSpinBox::up-arrow,
+    QDoubleSpinBox::down-arrow, QSpinBox::down-arrow {
+        width: 12px; height: 12px;
+    }
+
     QPushButton {
-        background-color: #505050; border: 1px solid #777; border-radius: 6px;
-        padding: 8px 15px; font-size: 15px; color: white;
+        background-color: #3A3A3A; 
+        border: 1px solid #555; 
+        border-radius: 6px;
+        padding: 8px 15px; 
+        font-size: 15px; 
+        color: white;
+        font-weight: bold;
     }
-    QPushButton:hover { background-color: #666; border-color: #FFF; }
-    QPushButton.ActionBtn { background-color: #0078D4; border-color: #0099FF; font-weight: bold; }
+    QPushButton:hover { background-color: #505050; border-color: #FFF; }
+
+    QPushButton.ActionBtn { background-color: #0078D4; border-color: #0099FF; }
     QPushButton.ActionBtn:hover { background-color: #1084E0; }
+
+    QPushButton.CheckBtn { background-color: #009688; border-color: #4DB6AC; }
+    QPushButton.CheckBtn:hover { background-color: #26A69A; }
+
     QPushButton.DangerBtn { background-color: #C62828; border-color: #E57373; }
     QPushButton.DangerBtn:hover { background-color: #D32F2F; }
+
+    QPushButton.ResetBtn { background-color: #444; border-color: #888; color: #DDD; }
+    QPushButton.ResetBtn:hover { background-color: #666; color: #FFF; border-color: #FFF; }
+
     QProgressBar {
         border: 1px solid #555; border-radius: 6px; text-align: center;
         background-color: #252526; color: white; font-weight: bold;
+        min-height: 20px;
     }
     QProgressBar::chunk { background-color: #00E5FF; border-radius: 5px; }
     QTextEdit { background-color: #1E1E1E; border: 1px solid #3E3E42; border-radius: 6px; font-family: Consolas; color: #CCC; }
@@ -46,7 +97,7 @@ STYLES = """
 
 class ScriptRunner(QProcess):
     output_signal = pyqtSignal(str)
-    progress_signal = pyqtSignal(int)
+    progress_signal = pyqtSignal(int)  # 新增進度訊號
 
     def __init__(self, script_path, args=None, use_python=True):
         super().__init__()
@@ -66,6 +117,12 @@ class ScriptRunner(QProcess):
         try:
             data = self.readAllStandardOutput()
             text = bytes(data).decode('utf-8', errors='replace')
+
+            # 解析進度條 (假設腳本輸出 PROGRESS: 50)
+            match = re.search(r"PROGRESS:\s*(\d+)", text)
+            if match:
+                self.progress_signal.emit(int(match.group(1)))
+
             self.output_signal.emit(text)
         except:
             pass
@@ -78,17 +135,26 @@ class SettingsModule(QWidget):
         self.project_root = Path(__file__).resolve().parent.parent
         self.config_path = self.project_root / "data" / "strategy_config.json"
 
+        # 策略結果檔案路徑 (用來檢查最後運算時間)
+        self.strategy_result_path = self.project_root / "data" / "strategy_results" / "factor_snapshot.parquet"
+
         self.init_ui()
         self.load_config()
         self.check_local_status()
+        self.check_strategy_time()  # 檢查策略時間
+
+    def _create_label(self, text, style_class, tooltip=""):
+        lbl = QLabel(text)
+        lbl.setProperty("class", style_class)
+        if tooltip: lbl.setToolTip(tooltip)
+        return lbl
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(30, 30, 30, 30)
         main_layout.setSpacing(20)
 
-        header = QLabel("系統控制台 System Dashboard")
-        header.setProperty("class", "Title")
+        header = self._create_label("系統控制台 System Dashboard", "Title")
         main_layout.addWidget(header)
 
         scroll = QScrollArea()
@@ -100,60 +166,46 @@ class SettingsModule(QWidget):
         content_layout.setSpacing(25)
         content_layout.setContentsMargins(0, 0, 50, 0)
 
-        # === 卡片 1: 雲端同步狀態 ===
+        # === 雲端卡片 ===
         card_data = QFrame()
         card_data.setProperty("class", "Card")
         l_data = QVBoxLayout(card_data)
         l_data.setContentsMargins(25, 25, 25, 25)
 
-        title_data = QLabel("☁️ 雲端運算與同步 (Cloud Sync)")
-        title_data.setProperty("class", "CardTitle")
-        l_data.addWidget(title_data)
+        l_data.addWidget(self._create_label("☁️ 雲端運算與同步 (Cloud Sync)", "CardTitle"))
 
         grid_data = QGridLayout()
         grid_data.setVerticalSpacing(15)
-        grid_data.setHorizontalSpacing(15)
+        self.lbl_local_time = self._create_label("--", "Value")
+        self.lbl_cloud_time = self._create_label("尚未檢查", "Value")
 
-        # 標籤
-        self.lbl_local_time = QLabel("--")
-        self.lbl_local_time.setProperty("class", "Value")
-
-        self.lbl_cloud_time = QLabel("尚未檢查")
-        self.lbl_cloud_time.setProperty("class", "Value")
-
-        # 排版
-        grid_data.addWidget(QLabel("本機資料時間:"), 0, 0)
+        grid_data.addWidget(self._create_label("本機資料時間:", "Label"), 0, 0)
         grid_data.addWidget(self.lbl_local_time, 0, 1)
-        grid_data.addWidget(QLabel("說明: 你電腦上目前的股價版本"), 0, 2)
+        grid_data.addWidget(self._create_label("說明: 目前硬碟中的股價版本", "Desc"), 0, 2)
 
-        grid_data.addWidget(QLabel("雲端最新運算:"), 1, 0)
+        grid_data.addWidget(self._create_label("雲端最新運算:", "Label"), 1, 0)
         grid_data.addWidget(self.lbl_cloud_time, 1, 1)
-        grid_data.addWidget(QLabel("說明: GitHub Actions 每天下午跑完的時間"), 1, 2)
+        grid_data.addWidget(self._create_label("說明: GitHub 每天 15:30 產出的版本", "Desc"), 1, 2)
 
         grid_data.setColumnStretch(2, 1)
-        for i in range(grid_data.rowCount()):
-            item0 = grid_data.itemAtPosition(i, 0)
-            if item0:
-                item0.widget().setProperty("class", "Label")
-                item0.widget().setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            item2 = grid_data.itemAtPosition(i, 2)
-            if item2: item2.widget().setProperty("class", "Desc")
-
         l_data.addLayout(grid_data)
+        l_data.addSpacing(15)
 
-        # 按鈕區
         btn_layout = QHBoxLayout()
         self.btn_check_cloud = QPushButton("🔄 檢查雲端是否有新資料")
+        self.btn_check_cloud.setProperty("class", "CheckBtn")
+        self.btn_check_cloud.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_check_cloud.clicked.connect(self.check_cloud_status)
 
         self.btn_download_zip = QPushButton("☁️ 下載並套用雲端結果 (ZIP)")
         self.btn_download_zip.setProperty("class", "ActionBtn")
-        self.btn_download_zip.setEnabled(False)  # 檢查到新資料才啟用
+        self.btn_download_zip.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_download_zip.setEnabled(False)
         self.btn_download_zip.clicked.connect(self.download_cloud_data)
 
-        # 保留原本的手動更新，以防萬一
-        self.btn_force_local = QPushButton("⚡ 本機重跑 (慢)")
+        self.btn_force_local = QPushButton("⚡ 本機重跑")
         self.btn_force_local.setProperty("class", "DangerBtn")
+        self.btn_force_local.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_force_local.clicked.connect(self.run_full_update_local)
 
         btn_layout.addWidget(self.btn_check_cloud)
@@ -161,90 +213,263 @@ class SettingsModule(QWidget):
         btn_layout.addStretch()
         btn_layout.addWidget(self.btn_force_local)
         l_data.addLayout(btn_layout)
-
         content_layout.addWidget(card_data)
 
-        # === 卡片 2: 策略參數 (保持不變) ===
+        # === 策略參數卡片 ===
         card_param = QFrame()
         card_param.setProperty("class", "Card")
         l_param = QVBoxLayout(card_param)
         l_param.setContentsMargins(25, 25, 25, 25)
 
-        title_param = QLabel("📈 策略參數微調 (僅影響本機重算)")
-        title_param.setProperty("class", "CardTitle")
-        l_param.addWidget(title_param)
+        # 標題列
+        header_layout = QHBoxLayout()
+        header_label = self._create_label("📈 策略參數微調", "CardTitle")
 
-        grid_param = QGridLayout()
-        grid_param.setVerticalSpacing(12)
-        grid_param.setHorizontalSpacing(15)
+        # 新增：策略上次運算時間標籤
+        self.lbl_strategy_time = self._create_label("上次運算: --", "StrategyTime")
+        self.lbl_strategy_time.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
+        self.btn_reset = QPushButton("↺ 恢復預設")
+        self.btn_reset.setProperty("class", "ResetBtn")
+        self.btn_reset.setToolTip("將所有參數重置為系統建議值")
+        self.btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_reset.clicked.connect(self.restore_defaults)
+
+        self.btn_save_recalc = QPushButton("💾 儲存並重算")
+        self.btn_save_recalc.setProperty("class", "ActionBtn")
+        self.btn_save_recalc.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_save_recalc.clicked.connect(self.save_and_recalc)
+
+        header_layout.addWidget(header_label)
+        header_layout.addStretch()
+        header_layout.addWidget(self.lbl_strategy_time)  # 放在按鈕左邊
+        header_layout.addWidget(self.btn_reset)
+        header_layout.addSpacing(10)
+        header_layout.addWidget(self.btn_save_recalc)
+
+        l_param.addLayout(header_layout)
+
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        line.setStyleSheet("background-color: #00E5FF; max-height: 2px;")
+        l_param.addWidget(line)
+        l_param.addSpacing(10)
+
+        grid_p = QGridLayout()
         self.inputs = {}
-        params = [
-            ('trigger_min_gain', '觸發漲幅門檻', 'float', 0.0, 0.5, 0.01, '預設 0.10'),
-            ('trigger_vol_multiplier', '觸發量能倍數', 'float', 1.0, 10.0, 0.1, '預設 1.1'),
-            ('adhesive_weeks', '黏貼週數', 'int', 1, 10, 1, '預設 2 週'),
-            ('adhesive_bias', '黏貼乖離率', 'float', 0.01, 0.5, 0.01, '預設 0.12'),
-            ('shakeout_lookback', '甩轎回溯週數', 'int', 4, 52, 1, '預設 12 週'),
-            ('shakeout_max_depth', '甩轎最大深度', 'float', 0.05, 0.9, 0.05, '預設 0.35'),
-            ('shakeout_underwater_limit', '甩轎水下限期', 'int', 1, 20, 1, '預設 10 週'),
-            ('shakeout_prev_bias_limit', '甩轎前乖離限', 'float', 0.05, 0.5, 0.01, '預設 0.15'),
-            ('signal_lookback_days', '訊號顯示天數', 'int', 1, 60, 1, '顯示近 N 天'),
+        self.params_def = [
+            ('trigger_min_gain', '觸發漲幅門檻', 'float', 0.10, 0.0, 0.5, 0.01, '最低要求的漲幅 (例如 0.10 代表 10%)'),
+            ('trigger_vol_multiplier', '觸發量能倍數', 'float', 1.1, 1.0, 10.0, 0.1,
+             '當日成交量需大於 N 倍均量 (例如 1.1 倍)'),
+            ('adhesive_weeks', '黏貼週數', 'int', 2, 1, 10, 1, '均線糾結至少維持幾週'),
+            ('adhesive_bias', '黏貼乖離率', 'float', 0.12, 0.01, 0.5, 0.01, '均線間的距離容許值 (0.12 = 12%)'),
+            ('shakeout_lookback', '甩轎回溯週數', 'int', 12, 4, 52, 1, '檢查過去 N 週內是否有大跌甩轎'),
+            ('shakeout_max_depth', '甩轎最大深度', 'float', 0.35, 0.05, 0.9, 0.05, '甩轎最深跌幅限制 (0.35 = 35%)'),
+            ('shakeout_underwater_limit', '甩轎水下限期', 'int', 10, 1, 20, 1, '股價潛伏在水下的最大週數'),
+            ('shakeout_prev_bias_limit', '甩轎前乖離限', 'float', 0.15, 0.05, 0.5, 0.01,
+             '起漲前的均線乖離率限制 (0.15 = 15%)'),
+            ('signal_lookback_days', '訊號顯示天數', 'int', 10, 1, 60, 1, '只顯示最近 N 天出現訊號的股票'),
         ]
 
-        for i, (key, label, ptype, vmin, vmax, step, tip) in enumerate(params):
-            lbl = QLabel(label)
-            lbl.setProperty("class", "Label")
-            lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        for i, (key, label, ptype, default, vmin, vmax, vstep, tip) in enumerate(self.params_def):
+            lbl_item = self._create_label(label, "Label", tooltip=tip)
+            grid_p.addWidget(lbl_item, i, 0)
 
             if ptype == 'float':
                 inp = QDoubleSpinBox()
                 inp.setDecimals(2)
             else:
                 inp = QSpinBox()
+
             inp.setRange(vmin, vmax)
-            inp.setSingleStep(step)
+            inp.setSingleStep(vstep)
+            inp.setValue(default)
+            inp.setToolTip(tip)
 
-            desc = QLabel(tip)
-            desc.setProperty("class", "Desc")
-
-            grid_param.addWidget(lbl, i, 0)
-            grid_param.addWidget(inp, i, 1)
-            grid_param.addWidget(desc, i, 2)
+            grid_p.addWidget(inp, i, 1)
             self.inputs[key] = inp
 
-        grid_param.setColumnStretch(2, 1)
-        l_param.addLayout(grid_param)
+            desc_item = self._create_label(tip, "Desc")
+            grid_p.addWidget(desc_item, i, 2)
 
-        self.btn_save_recalc = QPushButton("💾 儲存並用現有資料重算")
-        self.btn_save_recalc.setProperty("class", "ActionBtn")
-        self.btn_save_recalc.clicked.connect(self.save_and_recalc)
-        l_param.addWidget(self.btn_save_recalc)
-
+        grid_p.setColumnStretch(2, 1)
+        l_param.addLayout(grid_p)
         content_layout.addWidget(card_param)
 
         # Log & Progress
-        self.log_output = QTextEdit()
-        self.log_output.setReadOnly(True)
+        self.log_output = QTextEdit();
+        self.log_output.setReadOnly(True);
         self.log_output.setFixedHeight(120)
         content_layout.addWidget(self.log_output)
 
+        # 進度條
         self.progress = QProgressBar()
         self.progress.setValue(0)
+        self.progress.setTextVisible(True)
         content_layout.addWidget(self.progress)
 
-        content_layout.addStretch()
         scroll.setWidget(content)
         main_layout.addWidget(scroll)
 
+    def restore_defaults(self):
+        reply = QMessageBox.question(self, "恢復預設",
+                                     "確定要將所有參數恢復為系統建議值嗎？\n(需要按下 [儲存並重算] 才會生效)",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            for key, label, ptype, default, vmin, vmax, vstep, tip in self.params_def:
+                if key in self.inputs:
+                    self.inputs[key].setValue(default)
+            self.log("↺ 已恢復參數預設值 (請記得按儲存)")
+
+    def check_local_status(self):
+        status_file = self.project_root / "data" / "data_status.json"
+        cache_dir = self.project_root / "data" / "cache" / "tw"
+        has_files = cache_dir.exists() and any(cache_dir.glob("*.parquet"))
+
+        if status_file.exists():
+            try:
+                with open(status_file, 'r') as f:
+                    time_str = json.load(f).get('update_time', '未知')
+                    if has_files:
+                        self.lbl_local_time.setText(f"<span style='color:#00E676'>{time_str}</span>")
+                    else:
+                        self.lbl_local_time.setText(f"<span style='color:#FF5252'>⚠️ 待解壓縮 ({time_str})</span>")
+            except:
+                self.lbl_local_time.setText("格式錯誤")
+        else:
+            self.lbl_local_time.setText("無資料")
+
+    def check_strategy_time(self):
+        """檢查策略快照的最後修改時間"""
+        if self.strategy_result_path.exists():
+            ts = self.strategy_result_path.stat().st_mtime
+            dt_str = datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M')
+            self.lbl_strategy_time.setText(f"上次運算: {dt_str}")
+        else:
+            self.lbl_strategy_time.setText("上次運算: 無資料")
+
+    def check_cloud_status(self):
+        self.log("📡 檢查雲端中...", True)
+        self.btn_check_cloud.setEnabled(False)
+        self.runner = ScriptRunner("git", ["fetch", "origin", "main"], use_python=False)
+        self.runner.finished.connect(self.read_remote_json)
+        self.runner.start_script()
+
+    def read_remote_json(self):
+        self.status_runner = ScriptRunner("git", ["show", "origin/main:data/data_status.json"], use_python=False)
+        self.status_runner.output_signal.connect(self.parse_remote_status)
+        self.status_runner.start_script()
+
+    def parse_remote_status(self, text):
+        self.btn_check_cloud.setEnabled(True)
+        try:
+            match = re.search(r'\{.*\}', text, re.DOTALL)
+            if not match:
+                self.log("❌ 錯誤：找不到遠端 JSON。")
+                return
+
+            remote_time = json.loads(match.group(0)).get('update_time', 'Unknown')
+            self.lbl_cloud_time.setText(f"<span style='color:#00E5FF'>{remote_time}</span>")
+
+            cache_dir = self.project_root / "data" / "cache" / "tw"
+            has_files = cache_dir.exists() and any(cache_dir.glob("*.parquet"))
+
+            local_time = "0000-00-00 00:00"
+            status_file = self.project_root / "data" / "data_status.json"
+            if status_file.exists():
+                try:
+                    with open(status_file, 'r') as f:
+                        local_time = json.load(f).get('update_time', local_time)
+                except:
+                    pass
+
+            self.log(f"🔎 狀態: [檔案: {has_files}] [本機: {local_time}] [雲端: {remote_time}]")
+
+            should_update = False
+            if not has_files:
+                should_update = True
+            elif "待解壓縮" in self.lbl_local_time.text():
+                should_update = True
+            elif "無資料" in self.lbl_local_time.text():
+                should_update = True
+            elif remote_time > local_time:
+                should_update = True
+
+            self.btn_download_zip.setEnabled(should_update)
+            self.btn_download_zip.setText(f"☁️ 下載並套用 ({remote_time})" if should_update else "目前已是最新")
+
+        except Exception as e:
+            self.log(f"❌ 解析錯誤: {e}")
+            self.btn_download_zip.setEnabled(True)
+
+    def download_cloud_data(self):
+        self.progress_dialog = QProgressDialog("正在下載雲端資料庫 (ZIP)，這可能需要幾秒鐘...", None, 0, 0, self)
+        self.progress_dialog.setWindowTitle("下載中")
+        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self.progress_dialog.setCancelButton(None)
+        self.progress_dialog.show()
+
+        self.log("📦 執行 git checkout 下載 zip...", True)
+        self.btn_download_zip.setEnabled(False)
+
+        self.dl_runner = ScriptRunner("git",
+                                      ["checkout", "origin/main", "--", "data/daily_data.zip", "data/data_status.json"],
+                                      use_python=False)
+        self.dl_runner.output_signal.connect(self.log)
+        self.dl_runner.finished.connect(self.unzip_data)
+        self.dl_runner.start_script()
+
+    def unzip_data(self):
+        zip_path = self.project_root / "data" / "daily_data.zip"
+        if hasattr(self, 'progress_dialog'): self.progress_dialog.close()
+
+        if not zip_path.exists():
+            self.log("❌ 下載失敗：找不到 zip 檔")
+            return
+
+        self.log("🔓 解壓縮並套用中...")
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as z:
+                z.extractall(self.project_root / "data")
+            self.log("✅ 套用成功！");
+            self.check_local_status()
+            os.remove(zip_path)
+            QMessageBox.information(self, "成功", "雲端資料已成功套用！\n請切換回 [戰情室] 查看。")
+        except Exception as e:
+            self.log(f"❌ 解壓失敗: {e}")
+
+    def run_full_update_local(self):
+        self.log("🚀 本機更新開始...", True)
+        self.runner = ScriptRunner(self.project_root / "scripts" / "init_cache_tw.py", ["--auto", "--force"])
+        self.runner.finished.connect(self.save_and_recalc)
+        self.runner.start_script()
+
+    def save_and_recalc(self):
+        if not self.save_config(): return
+        self.log("正在計算策略...", True)
+        self.progress.setValue(0)  # 重置進度條
+
+        self.runner = ScriptRunner(self.project_root / "scripts" / "calc_snapshot_factors.py")
+        self.runner.output_signal.connect(self.log)
+        self.runner.progress_signal.connect(self.progress.setValue)  # 連接進度訊號
+
+        # 運算完成後，更新時間標籤
+        self.runner.finished.connect(self.on_recalc_finished)
+        self.runner.start_script()
+
+    def on_recalc_finished(self):
+        self.log("✅ 運算完成！")
+        self.progress.setValue(100)
+        self.check_strategy_time()  # 更新右上角時間
+
+    def log(self, t, clear=False):
+        if clear: self.log_output.clear()
+        self.log_output.append(t.strip())
+        self.log_output.verticalScrollBar().setValue(self.log_output.verticalScrollBar().maximum())
+
     def load_config(self):
-        # (保持原樣...)
-        default_cfg = {
-            "trigger_min_gain": 0.10, "trigger_vol_multiplier": 1.1,
-            "adhesive_weeks": 2, "adhesive_bias": 0.12,
-            "shakeout_lookback": 12, "shakeout_max_depth": 0.35,
-            "shakeout_underwater_limit": 10, "shakeout_prev_bias_limit": 0.15,
-            "signal_lookback_days": 10
-        }
+        default_cfg = {k: d for k, _, _, d, _, _, _, _ in self.params_def}
         try:
             if self.config_path.exists():
                 with open(self.config_path, 'r', encoding='utf-8') as f:
@@ -266,119 +491,3 @@ class SettingsModule(QWidget):
             return True
         except:
             return False
-
-    def check_local_status(self):
-        status_file = self.project_root / "data" / "data_status.json"
-        if status_file.exists():
-            try:
-                with open(status_file, 'r') as f:
-                    data = json.load(f)
-                    self.lbl_local_time.setText(f"<span style='color:#00E676'>{data.get('update_time', '未知')}</span>")
-            except:
-                self.lbl_local_time.setText("格式錯誤")
-        else:
-            self.lbl_local_time.setText("無資料")
-
-    # --- 新的核心功能：檢查雲端 ---
-    def check_cloud_status(self):
-        self.log("📡 正在連線 GitHub 檢查最新版本...", True)
-        self.btn_check_cloud.setEnabled(False)
-        # 使用 git fetch origin main (不合併) 來更新 remote 資訊
-        self.runner = ScriptRunner("git", ["fetch", "origin", "main"], use_python=False)
-        self.runner.output_signal.connect(self.log)
-        self.runner.finished.connect(self.read_remote_json)
-        self.runner.start_script()
-
-    def read_remote_json(self):
-        # 讀取遠端的 data_status.json 內容而不 checkout
-        self.log("正在讀取遠端時間戳記...")
-        self.status_runner = ScriptRunner("git", ["show", "origin/main:data/data_status.json"], use_python=False)
-        self.status_runner.output_signal.connect(self.parse_remote_status)
-        self.status_runner.start_script()
-
-    def parse_remote_status(self, text):
-        self.btn_check_cloud.setEnabled(True)
-        try:
-            # git show 可能會包含一些 header，我們嘗試找 JSON 部分
-            match = re.search(r'\{.*\}', text, re.DOTALL)
-            if match:
-                data = json.loads(match.group(0))
-                remote_time = data.get('update_time', 'Unknown')
-                self.lbl_cloud_time.setText(f"<span style='color:#00E5FF'>{remote_time}</span>")
-
-                self.log(f"✅ 雲端最新資料時間: {remote_time}")
-
-                # 簡單比對 (字串比對即可，因為格式固定)
-                local_txt = self.lbl_local_time.text().replace("<span style='color:#00E676'>", "").replace("</span>",
-                                                                                                           "")
-                if remote_time > local_txt:
-                    self.btn_download_zip.setEnabled(True)
-                    self.btn_download_zip.setText(f"☁️ 下載新資料 ({remote_time})")
-                    self.log("🚀 發現新資料！請按藍色按鈕下載。")
-                else:
-                    self.btn_download_zip.setEnabled(False)
-                    self.log("目前已是最新資料。")
-            else:
-                self.log("無法讀取遠端 JSON，可能檔案不存在或格式錯誤。")
-                self.lbl_cloud_time.setText("讀取失敗")
-        except Exception as e:
-            self.log(f"解析錯誤: {e}")
-
-    # --- 新的核心功能：下載並解壓 ---
-    def download_cloud_data(self):
-        self.btn_download_zip.setEnabled(False)
-        self.log("📦 開始下載 data/daily_data.zip ...", True)
-
-        # 使用 git checkout 下載單一檔案 (比 pull 整個 repo 快且安全)
-        self.dl_runner = ScriptRunner("git",
-                                      ["checkout", "origin/main", "--", "data/daily_data.zip", "data/data_status.json"],
-                                      use_python=False)
-        self.dl_runner.output_signal.connect(self.log)
-        self.dl_runner.finished.connect(self.unzip_data)
-        self.dl_runner.start_script()
-
-    def unzip_data(self):
-        zip_path = self.project_root / "data" / "daily_data.zip"
-        if not zip_path.exists():
-            self.log("❌ 下載失敗：找不到 zip 檔")
-            return
-
-        self.log("解壓縮資料中...")
-        try:
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                # 解壓到 data/ 目錄 (因為壓縮時包含了 cache/tw... 路徑)
-                extract_path = self.project_root / "data"
-                zip_ref.extractall(extract_path)
-
-            self.log("✅ 解壓縮完成！資料已更新。")
-            self.check_local_status()  # 更新介面顯示
-            QMessageBox.information(self, "成功", "雲端資料已成功套用！")
-
-            # 自動刪除 zip 節省空間
-            os.remove(zip_path)
-
-        except Exception as e:
-            self.log(f"❌ 解壓失敗: {str(e)}")
-
-    def run_full_update_local(self):
-        reply = QMessageBox.question(self, "確認", "本機重跑需要很長時間，建議使用雲端下載。確定要跑？")
-        if reply != QMessageBox.StandardButton.Yes: return
-        self.log("🚀 開始本機下載...", True)
-        script = self.project_root / "scripts" / "init_cache_tw.py"
-        self.runner = ScriptRunner(script, ["--auto", "--force"], use_python=True)
-        self.runner.output_signal.connect(self.log)
-        self.runner.finished.connect(lambda: self.save_and_recalc())
-        self.runner.start_script()
-
-    def save_and_recalc(self):
-        if not self.save_config(): return
-        self.log("正在計算策略...", True)
-        script = self.project_root / "scripts" / "calc_snapshot_factors.py"
-        self.runner = ScriptRunner(script, use_python=True)
-        self.runner.output_signal.connect(self.log)
-        self.runner.finished.connect(lambda: self.log("✅ 運算完成！"))
-        self.runner.start_script()
-
-    def log(self, text, clear=False):
-        if clear: self.log_output.clear()
-        self.log_output.append(text.strip())

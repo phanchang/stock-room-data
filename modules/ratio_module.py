@@ -130,27 +130,31 @@ class RatioModule(QWidget):
             self.btn_toggle_chart.setStyleSheet("background: #333; color: #CCC; border: 1px solid #555;")
 
     def load_ratio_data(self, stock_id, stock_name=""):
+        # 1. 補上重複請求檢查 (防止在同一支股票重複觸發爬蟲)
+        if stock_id == self.current_stock_id and self.table.rowCount() > 0:
+            return
+
         self.current_stock_id = stock_id
         self.current_stock_name = stock_name
 
         display_id = stock_id.split('_')[0]
-
-        # 🔥 修正：顯示代號+名稱
-        if stock_name:
-            self.lbl_stock_info.setText(f"{display_id} {stock_name}")
-        else:
-            self.lbl_stock_info.setText(f"{display_id}")
-
+        self.lbl_stock_info.setText(f"{display_id} {stock_name}" if stock_name else f"{display_id}")
         self.info_label.setText(f"⏳ 更新數據中...")
         self.lbl_update_date.setVisible(False)
+
         self.fig.clear()
         self.canvas.draw()
         self.table.setRowCount(0)
 
-        if hasattr(self, 'worker') and self.worker.isRunning():
-            self.worker.terminate()
-            self.worker.wait()
+        # 2. 安全處理舊的 Worker
+        if hasattr(self, 'worker') and self.worker is not None:
+            try:
+                # 斷開訊號連結是防止 Crash 的關鍵
+                self.worker.data_loaded.disconnect()
+            except (TypeError, RuntimeError):
+                pass
 
+        # 3. 啟動新 Worker
         self.worker = RatioWorker(display_id)
         self.worker.data_loaded.connect(self.process_data)
         self.worker.start()

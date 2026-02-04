@@ -137,29 +137,36 @@ class EPSModule(QWidget):
             self.btn_toggle_chart.setStyleSheet("background: #333; color: #CCC; border: 1px solid #555;")
 
     def load_eps_data(self, stock_id, stock_name=""):
+        # 1. 檢查是否為重複請求 (防抖動第一層)
+        if stock_id == self.current_stock_id and self.table.rowCount() > 0:
+            return
+
         self.current_stock_id = stock_id
         self.current_stock_name = stock_name
 
-        # 解析顯示用代號 (去除 _TW)
         display_id = stock_id.split('_')[0]
-
-        # 🔥 修正：若有傳入名稱則顯示「代號 名稱」，否則只顯示「代號」
-        if stock_name:
-            self.lbl_stock_info.setText(f"{display_id} {stock_name}")
-        else:
-            self.lbl_stock_info.setText(f"{display_id}")
-
+        self.lbl_stock_info.setText(f"{display_id} {stock_name}" if stock_name else f"{display_id}")
         self.info_label.setText(f"⏳ 更新數據中...")
         self.lbl_update_date.setVisible(False)
+
+        # 清空 UI (保持原本功能)
         self.fig.clear()
         self.canvas.draw()
         self.table.setRowCount(0)
 
-        if hasattr(self, 'worker') and self.worker.isRunning():
-            self.worker.terminate()
-            self.worker.wait()
+        # 2. 安全處理舊的 Worker：斷開訊號而非終止執行緒
+        if hasattr(self, 'worker') and self.worker is not None:
+            try:
+                # 斷開所有已連接的訊號，防止舊 Worker 回傳資料觸發 UI 更新
+                self.worker.data_loaded.disconnect()
+            except (TypeError, RuntimeError):
+                # 如果原本就沒連接，忽略錯誤
+                pass
 
-        # 注意：Worker 只需要 ID
+            # 不要用 terminate()，讓它在背景自然跑完結束
+            # 如果你擔心記憶體，可以不用管它，QThread 跑完 run() 就會釋放資源
+
+        # 3. 啟動新 Worker
         self.worker = EPSWorker(display_id)
         self.worker.data_loaded.connect(self.process_data)
         self.worker.start()
