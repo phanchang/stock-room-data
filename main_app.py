@@ -198,15 +198,26 @@ class StockWarRoomV3(QMainWindow):
         self.strategy_page.request_add_watchlist.connect(self.on_add_watchlist_request)
 
     def on_page_changed(self, index):
-        """當頁面切換時觸發"""
-        # 如果切換回戰情室 (index 0) 且有當前股票，強制刷新 K 線
-        # 這解決了「下載完資料後，回到戰情室 K 線不會更新」的問題
+        """當頁面切換回戰情室 (Index 0) 時觸發"""
         if index == 0:
-            # 🔥 修正點：只有在當前沒股票時，才自動選第一支
-            # 如果是從選股頁跳過來的，current_stock_id 已經設定好了，這裡不重複執行
-            if not self.current_stock_id:
-                self.auto_select_first_stock()
+            # 1. 刷新左側列表的顯示內容 (例如更新後的時間標籤)
+            self.list_module.refresh_table()
 
+            if self.current_stock_id:
+                # --- 情況 A：已經有選定股票 (例如從「選股」連動過來，或是原本就在看某支) ---
+                # 我們不改變 ID，但強制 K 線圖與分頁重新讀取硬碟裡的最新資料
+                print(f"DEBUG: 保持連動股票 {self.current_stock_id}，並重新載入最新數據")
+
+                # 強制 K 線圖重新讀取檔案 (不更換 ID，只重讀 Data)
+                self.kline_module.load_stock_data(self.current_stock_id, self.current_stock_name)
+
+                # 強制下方的籌碼/基本面分頁也刷新
+                self.update_visible_tabs()
+
+            else:
+                # --- 情況 B：目前沒有選定股票 (例如剛啟動程式) ---
+                print("DEBUG: 目前無選定股票，自動選取第一筆")
+                self.auto_select_first_stock()
     def on_stock_changed(self, full_stock_id):
         # 🔥 [防閃退關鍵] 如果股票代號跟上次一樣，就不要重跑，防止無限循環觸發
         if full_stock_id == self.current_stock_id and self.current_stock_id is not None:
@@ -246,7 +257,19 @@ class StockWarRoomV3(QMainWindow):
         self.update_visible_tabs()
 
     def on_strategy_stock_clicked(self, stock_id_full):
-        self.on_stock_changed(stock_id_full)
+        """當選股分頁雙擊股票時"""
+        # 1. 先設定當前股票 ID (這就是連動的關鍵)
+        self.current_stock_id = stock_id_full
+
+        # 2. 找出名稱
+        clean_id = stock_id_full.split('_')[0]
+        stock_name = ""
+        if hasattr(self.list_module, 'stock_db'):
+            info = self.list_module.stock_db.get(clean_id)
+            if info: stock_name = info.get('name', '')
+        self.current_stock_name = stock_name
+
+        # 3. 切換到戰情室分頁 (這會觸發上面的 on_page_changed)
         self.side_menu.button_group.button(0).setChecked(True)
         self.pages.setCurrentIndex(0)
 
@@ -260,27 +283,21 @@ class StockWarRoomV3(QMainWindow):
         QTimer.singleShot(500, self.auto_select_first_stock)
 
     def auto_select_first_stock(self):
-        """嘗試自動選取列表中的第一支股票"""
+        """
+        實際驅動清單選取第一支股票。
+        原本的 getattr 猜測邏輯已移除，直接呼叫 list_module 的標準介面。
+        """
         try:
-            # 嘗試存取 list_module 的 table (假設名稱為 table 或 stock_table)
-            table = getattr(self.list_module, 'table', None)
-            if not table:
-                table = getattr(self.list_module, 'stock_table', None)
+            # 直接檢查 list_module 是否存在，然後要求它選取第一筆
+            if hasattr(self, 'list_module') and self.list_module:
+                self.list_module.force_trigger_first_selection()
+                print("DEBUG: 已成功透過 force_trigger_first_selection 選取第一列股票")
+            else:
+                print("DEBUG: 找不到 list_module，無法自動選取")
 
-            if table and table.rowCount() > 0:
-                table.selectRow(0)
-                # 模擬點擊或直接觸發邏輯，這裡假設 list_module 有處理 selection change
-                # 如果無法觸發，我們手動獲取第一列的 ID
-                item = table.item(0, 0)  # 假設 ID 在第一欄
-                if item:
-                    # 這裡只能猜測 ID 格式，通常 list module 會發送訊號
-                    # 我們這裡依賴 list_module 自己的 selection behavior
-                    # 或者我們可以呼叫 list_module 的某個方法
-                    pass
-                print("DEBUG: 已自動選取第一列股票")
         except Exception as e:
-            print(f"DEBUG: 自動選取失敗: {e}")
-
+            # 保留你原本的錯誤捕捉邏輯，方便噴錯時 debug
+            print(f"💥 自動選取失敗: {e}")
     def closeEvent(self, event):
         reply = QMessageBox.question(self, '確認退出', '確定要關閉系統嗎？',
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)

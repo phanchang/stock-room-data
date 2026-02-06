@@ -393,6 +393,18 @@ class StockListModule(QWidget):
             if not self.has_auto_selected:
                 QTimer.singleShot(500, self._auto_select_first_row)
 
+    # 在 stock_list_module.py 的 StockListModule 類別中新增此方法
+    def force_trigger_first_selection(self):
+        """強制選取表格中的第一支股票並發出選取訊號"""
+        if self.table.rowCount() > 0:
+            # 選取第一列
+            self.table.selectRow(0)
+            # 取得第一欄的 Item (股票代號)
+            item = self.table.item(0, 0)
+            if item:
+                # 呼叫既有的點擊處理邏輯，這會觸發訊號發送給 main_app
+                self.on_row_clicked(0, 0)
+
     def update_streaming_data(self, data):
         self.table.setUpdatesEnabled(False)
         try:

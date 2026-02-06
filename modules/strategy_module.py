@@ -18,7 +18,7 @@ from PyQt6.QtGui import QColor, QAction, QCursor, QFont
 FULL_COLUMN_SPECS = {
     'sid': {'name': '代號', 'show': True, 'tip': '股票代號', 'type': 'str'},
     'name': {'name': '名稱', 'show': True, 'tip': '股票名稱', 'type': 'str'},
-    'industry': {'name': '產業', 'show': True, 'tip': '所屬產業類別', 'type': 'str'},
+    'rev_ym': {'name': '營收月', 'show': True, 'tip': '資料所屬月份 (如 11301 代表 2024年1月)', 'type': 'str'},    'industry': {'name': '產業', 'show': True, 'tip': '所屬產業類別', 'type': 'str'},
     '現價': {'name': '股價', 'show': True, 'tip': '最新收盤價', 'type': 'num'},
     '漲幅5d': {'name': '5日%', 'show': False, 'tip': '近5日漲跌幅', 'type': 'num'},
     '漲幅20d': {'name': '月漲幅%', 'show': True, 'tip': '近20日漲跌幅', 'type': 'num'},
@@ -84,7 +84,7 @@ FULL_FILTER_SPECS = [
     {'key': 'str_30w_week_offset', 'label': '訊號週數(前)', 'min': -1, 'max': 52, 'step': 1, 'suffix': '週'}
 ]
 
-DEFAULT_ACTIVE_FILTERS = ['bb_width', 'RS強度', '量比', '漲幅20d', 't_streak']
+DEFAULT_ACTIVE_FILTERS = ['bb_width', 'RS強度', '量比', '漲幅20d']
 
 # 🔥 修正重點：新增 30W 選項
 TAG_CATEGORIES = {

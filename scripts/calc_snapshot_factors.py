@@ -229,6 +229,7 @@ def main():
     chinese_map = {
         'sid': '股票代號', 'name': '股票名稱', 'industry': '產業別',
         'rev_yoy': '營收年增率(%)', 'rev_cum_yoy': '累計營收年增率(%)', 'eps_q': '累計EPS',
+        'rev_ym': '營收月份',
         't_sum_5d': '投信買賣超(5日)', 't_streak': '投信連買天數',
         'f_sum_5d': '外資買賣超(5日)', 'f_streak': '外資連買天數',
         'm_sum_5d': '融資增減(5日)', 'm_net_today': '融資增減(今日)',

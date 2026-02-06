@@ -36,3 +36,6 @@ utils/logs/
 temp/
 scripts/test_*.py
 scripts/verify_*.py
+
+data/data_status.json
+data/daily_data.zip

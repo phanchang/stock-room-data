@@ -4,13 +4,16 @@ import os
 import re
 import shutil
 import zipfile
+import time  # <--- 確保這行有加進去
 from pathlib import Path
 from datetime import datetime
+# 請修改檔案頂部的這一行
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QGridLayout, QDoubleSpinBox,
-                             QSpinBox, QScrollArea, QMessageBox, QProgressBar, QTextEdit, QFrame, QProgressDialog)
-from PyQt6.QtCore import Qt, QTimer, QProcess, pyqtSignal
+                             QSpinBox, QScrollArea, QMessageBox, QProgressBar,
+                             QTextEdit, QFrame, QProgressDialog, QApplication) # <--- 確保有 QApplication
 
+from PyQt6.QtCore import Qt, QTimer, QProcess, pyqtSignal # <--- 確保有 QProcess
 # --- 美學 CSS ---
 STYLES = """
     QWidget { font-family: "Segoe UI", "Microsoft JhengHei"; background-color: #121212; color: #E0E0E0; }
@@ -372,6 +375,10 @@ class SettingsModule(QWidget):
             remote_time = json.loads(match.group(0)).get('update_time', 'Unknown')
             self.lbl_cloud_time.setText(f"<span style='color:#00E5FF'>{remote_time}</span>")
 
+            # 定義 Zip 路徑
+            zip_path = self.project_root / "data" / "daily_data.zip"
+            has_zip = zip_path.exists()
+
             cache_dir = self.project_root / "data" / "cache" / "tw"
             has_files = cache_dir.exists() and any(cache_dir.glob("*.parquet"))
 
@@ -384,34 +391,63 @@ class SettingsModule(QWidget):
                 except:
                     pass
 
-            self.log(f"🔎 狀態: [檔案: {has_files}] [本機: {local_time}] [雲端: {remote_time}]")
+            # 在 Log 中多顯示 Zip 狀態，方便除錯
+            self.log(f"🔎 狀態: [檔案: {has_files}] [Zip包: {has_zip}] [本機: {local_time}] [雲端: {remote_time}]")
 
             should_update = False
-            if not has_files:
+            button_text = "目前已是最新"
+
+            # --- 核心邏輯優化 ---
+            # 1. 優先判斷時間：如果雲端比較新，一定要下載
+            if remote_time > local_time:
                 should_update = True
-            elif "待解壓縮" in self.lbl_local_time.text():
+                button_text = f"☁️ 下載並套用 ({remote_time})"
+
+            # 2. 如果時間一樣，但發現有 Zip 檔（代表剛 pull 過），允許直接套用
+            elif has_zip:
                 should_update = True
-            elif "無資料" in self.lbl_local_time.text():
+                button_text = "📦 偵測到新資料包，直接套用"
+
+            # 3. 基礎檢查：如果根本沒檔案，或顯示待解壓縮，就要開啟按鈕
+            elif not has_files or any(x in self.lbl_local_time.text() for x in ["待解壓縮", "無資料"]):
                 should_update = True
-            elif remote_time > local_time:
-                should_update = True
+                # 沒檔案時，看是要從雲端拉還是解壓現有的
+                button_text = "📦 執行解壓縮套用" if has_zip else f"☁️ 下載並套用 ({remote_time})"
 
             self.btn_download_zip.setEnabled(should_update)
-            self.btn_download_zip.setText(f"☁️ 下載並套用 ({remote_time})" if should_update else "目前已是最新")
+            self.btn_download_zip.setText(button_text)
 
         except Exception as e:
             self.log(f"❌ 解析錯誤: {e}")
             self.btn_download_zip.setEnabled(True)
 
+    import time  # 建議在檔案頂部補上 import time，用來優化動畫視覺感
+
     def download_cloud_data(self):
-        self.progress_dialog = QProgressDialog("正在下載雲端資料庫 (ZIP)，這可能需要幾秒鐘...", None, 0, 0, self)
-        self.progress_dialog.setWindowTitle("下載中")
+        zip_path = self.project_root / "data" / "daily_data.zip"
+
+        # 建立進度對話框（統一視覺體驗）
+        self.progress_dialog = QProgressDialog("正在準備數據套用...", None, 0, 0, self)
+        self.progress_dialog.setWindowTitle("系統同步中")
         self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self.progress_dialog.setCancelButton(None)
         self.progress_dialog.show()
+        QApplication.processEvents()  # 強制顯示對話框
 
-        self.log("📦 執行 git checkout 下載 zip...", True)
+        # 邏輯 A：如果本地已經有檔案（剛 pull 過）
+        if zip_path.exists():
+            self.log("📦 偵測到本地已存在數據包，直接開始套用...", True)
+            self.progress_dialog.setLabelText("偵測到本地數據，正在執行解壓縮...")
+            # 稍微停 0.5 秒讓使用者看到 Log，才不會覺得沒反應
+            QApplication.processEvents()
+            time.sleep(0.5)
+            self.unzip_data()
+            return
+
+        # 邏輯 B：執行 Git 下載
+        self.log("📡 執行 git checkout 從遠端獲取 zip...", True)
         self.btn_download_zip.setEnabled(False)
+        self.progress.setRange(0, 0)  # 讓下方的進度條進入忙碌跑動模式
 
         self.dl_runner = ScriptRunner("git",
                                       ["checkout", "origin/main", "--", "data/daily_data.zip", "data/data_status.json"],
@@ -422,22 +458,60 @@ class SettingsModule(QWidget):
 
     def unzip_data(self):
         zip_path = self.project_root / "data" / "daily_data.zip"
-        if hasattr(self, 'progress_dialog'): self.progress_dialog.close()
+        extract_target = self.project_root / "data"
+
+        # 修改：先確保進度對話框的文字正確
+        if hasattr(self, 'progress_dialog') and self.progress_dialog:
+            self.progress_dialog.setLabelText("正在解壓縮數據，請稍候...")
 
         if not zip_path.exists():
-            self.log("❌ 下載失敗：找不到 zip 檔")
+            self.log("❌ 錯誤：找不到數據包 (ZIP)")
+            if self.progress_dialog: self.progress_dialog.close()
+            self.progress.setRange(0, 100)
             return
 
-        self.log("🔓 解壓縮並套用中...")
+        self.log("🔓 正在解壓縮並套用數據內容...")
+        success = False
         try:
+            # 1. 執行解壓縮
             with zipfile.ZipFile(zip_path, 'r') as z:
-                z.extractall(self.project_root / "data")
-            self.log("✅ 套用成功！");
-            self.check_local_status()
-            os.remove(zip_path)
-            QMessageBox.information(self, "成功", "雲端資料已成功套用！\n請切換回 [戰情室] 查看。")
+                file_list = z.infolist()
+                total_files = len(file_list)
+                self.progress.setRange(0, total_files)
+
+                for i, file in enumerate(file_list):
+                    z.extract(file, extract_target)
+                    self.progress.setValue(i + 1)
+                    if i % 5 == 0:
+                        QApplication.processEvents()
+
+            # 2. 解壓成功後，先標記成功
+            success = True
+            self.log("✅ 數據解壓縮完成。")
+
         except Exception as e:
-            self.log(f"❌ 解壓失敗: {e}")
+            self.log(f"❌ 解壓過程出錯: {str(e)}")
+
+        # 關鍵修正：確保 zipfile 已經完全關閉（離開 with 區塊）後，再處理後續與刪除
+        if success:
+            try:
+                self.check_local_status()
+                # 嘗試刪除 ZIP，若被佔用則提示但不報錯
+                if zip_path.exists():
+                    # 稍微等待 handle 釋放
+                    QApplication.processEvents()
+                    os.remove(zip_path)
+                    self.log("🧹 暫存數據包已清理。")
+            except Exception as cleanup_e:
+                self.log(f"⚠️ 數據已套用，但暫存檔清理失敗 (請手動刪除): {str(cleanup_e)}")
+
+            self.progress.setRange(0, 100)
+            self.progress.setValue(100)
+            if self.progress_dialog: self.progress_dialog.close()
+            QMessageBox.information(self, "成功", "數據已套用！\n本機資料時間已更新。")
+        else:
+            if self.progress_dialog: self.progress_dialog.close()
+            self.progress.setRange(0, 100)
 
     def run_full_update_local(self):
         self.log("🚀 本機更新開始...", True)
