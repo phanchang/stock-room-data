@@ -7,6 +7,8 @@ import zipfile
 import time  # <--- 確保這行有加進去
 from pathlib import Path
 from datetime import datetime
+import pandas as pd # 確保頂部有 import pandas
+
 # 請修改檔案頂部的這一行
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QGridLayout, QDoubleSpinBox,
@@ -137,14 +139,40 @@ class SettingsModule(QWidget):
         self.setStyleSheet(STYLES)
         self.project_root = Path(__file__).resolve().parent.parent
         self.config_path = self.project_root / "data" / "strategy_config.json"
-
-        # 策略結果檔案路徑 (用來檢查最後運算時間)
         self.strategy_result_path = self.project_root / "data" / "strategy_results" / "factor_snapshot.parquet"
+
+        self.is_editing = False  # 編輯狀態位元
+        self.original_params = {}  # 紀錄進入編輯前的參數
 
         self.init_ui()
         self.load_config()
         self.check_local_status()
-        self.check_strategy_time()  # 檢查策略時間
+        self.check_strategy_time()
+        self.set_inputs_enabled(False)  # 初始狀態鎖定
+
+    def set_inputs_enabled(self, enabled):
+        """控制所有輸入框的鎖定狀態"""
+        self.is_editing = enabled
+        for inp in self.inputs.values():
+            inp.setEnabled(enabled)
+
+        self.btn_edit.setText("🔒 取消編輯" if enabled else "🔧 進入編輯模式")
+        self.btn_edit.setProperty("class", "ResetBtn" if enabled else "CheckBtn")
+        self.btn_edit.style().unpolish(self.btn_edit)
+        self.btn_edit.style().polish(self.btn_edit)
+
+        if not enabled:
+            self.update_action_button_text()
+
+    def update_action_button_text(self):
+        """根據是否有修改，改變按鈕文字"""
+        has_changed = False
+        for key, inp in self.inputs.items():
+            if abs(inp.value() - self.original_params.get(key, 0)) > 0.0001:
+                has_changed = True
+                break
+
+        self.btn_save_recalc.setText("💾 儲存並重算" if has_changed else "⚡ 僅重算")
 
     def _create_label(self, text, style_class, tooltip=""):
         lbl = QLabel(text)
@@ -169,7 +197,7 @@ class SettingsModule(QWidget):
         content_layout.setSpacing(25)
         content_layout.setContentsMargins(0, 0, 50, 0)
 
-        # === 雲端卡片 ===
+        # === 1. 雲端運算與同步卡片 ===
         card_data = QFrame()
         card_data.setProperty("class", "Card")
         l_data = QVBoxLayout(card_data)
@@ -184,7 +212,7 @@ class SettingsModule(QWidget):
 
         grid_data.addWidget(self._create_label("本機資料時間:", "Label"), 0, 0)
         grid_data.addWidget(self.lbl_local_time, 0, 1)
-        grid_data.addWidget(self._create_label("說明: 目前硬碟中的股價版本", "Desc"), 0, 2)
+        grid_data.addWidget(self._create_label("說明: 目前硬碟中 Parquet 的最後交易日", "Desc"), 0, 2)
 
         grid_data.addWidget(self._create_label("雲端最新運算:", "Label"), 1, 0)
         grid_data.addWidget(self.lbl_cloud_time, 1, 1)
@@ -197,18 +225,16 @@ class SettingsModule(QWidget):
         btn_layout = QHBoxLayout()
         self.btn_check_cloud = QPushButton("🔄 檢查雲端是否有新資料")
         self.btn_check_cloud.setProperty("class", "CheckBtn")
-        self.btn_check_cloud.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_check_cloud.clicked.connect(self.check_cloud_status)
 
         self.btn_download_zip = QPushButton("☁️ 下載並套用雲端結果 (ZIP)")
         self.btn_download_zip.setProperty("class", "ActionBtn")
-        self.btn_download_zip.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_download_zip.setEnabled(False)
         self.btn_download_zip.clicked.connect(self.download_cloud_data)
 
-        self.btn_force_local = QPushButton("⚡ 本機重跑")
+        self.btn_force_local = QPushButton("⚡ 本機重跑 (從證交所抓取)")
         self.btn_force_local.setProperty("class", "DangerBtn")
-        self.btn_force_local.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_force_local.setToolTip("警告：這將花費較長時間從網路重新爬取所有歷史資料")
         self.btn_force_local.clicked.connect(self.run_full_update_local)
 
         btn_layout.addWidget(self.btn_check_cloud)
@@ -218,60 +244,64 @@ class SettingsModule(QWidget):
         l_data.addLayout(btn_layout)
         content_layout.addWidget(card_data)
 
-        # === 策略參數卡片 ===
+        # === 2. 策略參數微調卡片 ===
         card_param = QFrame()
         card_param.setProperty("class", "Card")
         l_param = QVBoxLayout(card_param)
         l_param.setContentsMargins(25, 25, 25, 25)
 
-        # 標題列
+        # 標題列佈局 (元件建立與加入順序修正)
         header_layout = QHBoxLayout()
         header_label = self._create_label("📈 策略參數微調", "CardTitle")
 
-        # 新增：策略上次運算時間標籤
+        # 建立右側控制元件
         self.lbl_strategy_time = self._create_label("上次運算: --", "StrategyTime")
         self.lbl_strategy_time.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
+        self.btn_edit = QPushButton("🔧 進入編輯模式")
+        self.btn_edit.setProperty("class", "CheckBtn")
+        self.btn_edit.clicked.connect(self.toggle_edit_mode)
+
         self.btn_reset = QPushButton("↺ 恢復預設")
         self.btn_reset.setProperty("class", "ResetBtn")
-        self.btn_reset.setToolTip("將所有參數重置為系統建議值")
-        self.btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_reset.clicked.connect(self.restore_defaults)
 
-        self.btn_save_recalc = QPushButton("💾 儲存並重算")
+        self.btn_save_recalc = QPushButton("⚡ 僅重算")
         self.btn_save_recalc.setProperty("class", "ActionBtn")
-        self.btn_save_recalc.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_save_recalc.clicked.connect(self.save_and_recalc)
+        self.btn_save_recalc.clicked.connect(self.handle_action_click)
 
+        # 依照順序加入 Header
         header_layout.addWidget(header_label)
         header_layout.addStretch()
-        header_layout.addWidget(self.lbl_strategy_time)  # 放在按鈕左邊
+        header_layout.addWidget(self.lbl_strategy_time)
+        header_layout.addWidget(self.btn_edit)
+        header_layout.addSpacing(10)
         header_layout.addWidget(self.btn_reset)
         header_layout.addSpacing(10)
         header_layout.addWidget(self.btn_save_recalc)
 
         l_param.addLayout(header_layout)
 
+        # 分割線
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
         line.setFrameShadow(QFrame.Shadow.Sunken)
-        line.setStyleSheet("background-color: #00E5FF; max-height: 2px;")
+        line.setStyleSheet("background-color: #333; max-height: 1px; margin: 10px 0px;")
         l_param.addWidget(line)
-        l_param.addSpacing(10)
 
+        # 參數網格
         grid_p = QGridLayout()
+        grid_p.setVerticalSpacing(12)
         self.inputs = {}
         self.params_def = [
             ('trigger_min_gain', '觸發漲幅門檻', 'float', 0.10, 0.0, 0.5, 0.01, '最低要求的漲幅 (例如 0.10 代表 10%)'),
-            ('trigger_vol_multiplier', '觸發量能倍數', 'float', 1.1, 1.0, 10.0, 0.1,
-             '當日成交量需大於 N 倍均量 (例如 1.1 倍)'),
+            ('trigger_vol_multiplier', '觸發量能倍數', 'float', 1.1, 1.0, 10.0, 0.1, '當日成交量需大於 N 倍均量'),
             ('adhesive_weeks', '黏貼週數', 'int', 2, 1, 10, 1, '均線糾結至少維持幾週'),
-            ('adhesive_bias', '黏貼乖離率', 'float', 0.12, 0.01, 0.5, 0.01, '均線間的距離容許值 (0.12 = 12%)'),
+            ('adhesive_bias', '黏貼乖離率', 'float', 0.12, 0.01, 0.5, 0.01, '均線間的距離容許值'),
             ('shakeout_lookback', '甩轎回溯週數', 'int', 12, 4, 52, 1, '檢查過去 N 週內是否有大跌甩轎'),
-            ('shakeout_max_depth', '甩轎最大深度', 'float', 0.35, 0.05, 0.9, 0.05, '甩轎最深跌幅限制 (0.35 = 35%)'),
+            ('shakeout_max_depth', '甩轎最大深度', 'float', 0.35, 0.05, 0.9, 0.05, '甩轎最深跌幅限制'),
             ('shakeout_underwater_limit', '甩轎水下限期', 'int', 10, 1, 20, 1, '股價潛伏在水下的最大週數'),
-            ('shakeout_prev_bias_limit', '甩轎前乖離限', 'float', 0.15, 0.05, 0.5, 0.01,
-             '起漲前的均線乖離率限制 (0.15 = 15%)'),
+            ('shakeout_prev_bias_limit', '甩轎前乖離限', 'float', 0.15, 0.05, 0.5, 0.01, '起漲前的均線乖離率限制'),
             ('signal_lookback_days', '訊號顯示天數', 'int', 10, 1, 60, 1, '只顯示最近 N 天出現訊號的股票'),
         ]
 
@@ -288,8 +318,6 @@ class SettingsModule(QWidget):
             inp.setRange(vmin, vmax)
             inp.setSingleStep(vstep)
             inp.setValue(default)
-            inp.setToolTip(tip)
-
             grid_p.addWidget(inp, i, 1)
             self.inputs[key] = inp
 
@@ -300,13 +328,12 @@ class SettingsModule(QWidget):
         l_param.addLayout(grid_p)
         content_layout.addWidget(card_param)
 
-        # Log & Progress
-        self.log_output = QTextEdit();
-        self.log_output.setReadOnly(True);
+        # === 3. 日誌與進度條 ===
+        self.log_output = QTextEdit()
+        self.log_output.setReadOnly(True)
         self.log_output.setFixedHeight(120)
         content_layout.addWidget(self.log_output)
 
-        # 進度條
         self.progress = QProgressBar()
         self.progress.setValue(0)
         self.progress.setTextVisible(True)
@@ -314,6 +341,10 @@ class SettingsModule(QWidget):
 
         scroll.setWidget(content)
         main_layout.addWidget(scroll)
+
+        # 綁定數值改變事件以更新按鈕文字
+        for inp in self.inputs.values():
+            inp.valueChanged.connect(self.update_action_button_text)
 
     def restore_defaults(self):
         reply = QMessageBox.question(self, "恢復預設",
@@ -325,23 +356,64 @@ class SettingsModule(QWidget):
                     self.inputs[key].setValue(default)
             self.log("↺ 已恢復參數預設值 (請記得按儲存)")
 
-    def check_local_status(self):
-        status_file = self.project_root / "data" / "data_status.json"
-        cache_dir = self.project_root / "data" / "cache" / "tw"
-        has_files = cache_dir.exists() and any(cache_dir.glob("*.parquet"))
-
-        if status_file.exists():
-            try:
-                with open(status_file, 'r') as f:
-                    time_str = json.load(f).get('update_time', '未知')
-                    if has_files:
-                        self.lbl_local_time.setText(f"<span style='color:#00E676'>{time_str}</span>")
-                    else:
-                        self.lbl_local_time.setText(f"<span style='color:#FF5252'>⚠️ 待解壓縮 ({time_str})</span>")
-            except:
-                self.lbl_local_time.setText("格式錯誤")
+    def toggle_edit_mode(self):
+        if not self.is_editing:
+            # 進入編輯，紀錄當前值
+            self.original_params = {k: inp.value() for k, inp in self.inputs.items()}
+            self.set_inputs_enabled(True)
         else:
-            self.lbl_local_time.setText("無資料")
+            # 取消編輯，恢復原始值
+            for k, val in self.original_params.items():
+                self.inputs[k].setValue(val)
+            self.set_inputs_enabled(False)
+
+    def handle_action_click(self):
+        """處理儲存與重算的邏輯回饋"""
+        # 回饋：按鈕暫時改變顏色/文字
+        original_text = self.btn_save_recalc.text()
+        self.btn_save_recalc.setEnabled(False)
+        self.btn_save_recalc.setText("⏳ 執行中...")
+
+        if self.btn_save_recalc.text() == "💾 儲存並重算":
+            self.save_config()
+            self.log("✅ 參數已儲存並啟動計算")
+        else:
+            self.log("🚀 參數未變動，直接執行重算")
+
+        # 執行原本的 save_and_recalc 邏輯
+        self.save_and_recalc()
+
+        # 關閉編輯模式
+        self.set_inputs_enabled(False)
+        QTimer.singleShot(2000, lambda: self.btn_save_recalc.setEnabled(True))
+
+    def check_local_status(self):
+        """[修正] 改為讀取 Parquet 真實時間"""
+        try:
+            # 優先檢查 2303, 再檢查 1101
+            path = self.project_root / "data" / "cache" / "tw" / "2303_TW.parquet"
+            if not path.exists():
+                path = self.project_root / "data" / "cache" / "tw" / "1101_TW.parquet"
+
+            if path.exists():
+                df = pd.read_parquet(path)
+                if not df.empty:
+                    # 讀取最後一筆 index (Date)
+                    last_date = df.index[-1]
+                    # 判斷格式 (有些是 Timestamp, 有些是 Int)
+                    if isinstance(last_date, (int, float)):
+                        # 處理奈秒時間戳
+                        dt = pd.to_datetime(last_date)
+                    else:
+                        dt = last_date
+
+                    time_str = dt.strftime('%Y-%m-%d')
+                    self.lbl_local_time.setText(f"<span style='color:#00E676'>{time_str}</span>")
+                    return
+            self.lbl_local_time.setText("<span style='color:#FF5252'>無快取資料</span>")
+        except Exception as e:
+            self.lbl_local_time.setText(f"<span style='color:#FF5252'>讀取失敗</span>")
+            self.log(f"讀取 Parquet 錯誤: {e}")
 
     def check_strategy_time(self):
         """檢查策略快照的最後修改時間"""
@@ -424,31 +496,21 @@ class SettingsModule(QWidget):
     import time  # 建議在檔案頂部補上 import time，用來優化動畫視覺感
 
     def download_cloud_data(self):
+        """下載並套用雲端數據：直接複用介面進度條，不彈窗"""
         zip_path = self.project_root / "data" / "daily_data.zip"
 
-        # 建立進度對話框（統一視覺體驗）
-        self.progress_dialog = QProgressDialog("正在準備數據套用...", None, 0, 0, self)
-        self.progress_dialog.setWindowTitle("系統同步中")
-        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        self.progress_dialog.setCancelButton(None)
-        self.progress_dialog.show()
-        QApplication.processEvents()  # 強制顯示對話框
+        self.btn_download_zip.setEnabled(False)
+        self.progress.setValue(0)
+        self.progress.setRange(0, 0)  # 跑馬燈模式
+        self.progress.setFormat("📡 正在從雲端獲取數據包...")
+        self.log("📡 啟動雲端數據下載...", True)
 
-        # 邏輯 A：如果本地已經有檔案（剛 pull 過）
+        # 如果本地已經有 ZIP (可能手動抓的或上次留下的)，直接解壓
         if zip_path.exists():
-            self.log("📦 偵測到本地已存在數據包，直接開始套用...", True)
-            self.progress_dialog.setLabelText("偵測到本地數據，正在執行解壓縮...")
-            # 稍微停 0.5 秒讓使用者看到 Log，才不會覺得沒反應
-            QApplication.processEvents()
-            time.sleep(0.5)
             self.unzip_data()
             return
 
-        # 邏輯 B：執行 Git 下載
-        self.log("📡 執行 git checkout 從遠端獲取 zip...", True)
-        self.btn_download_zip.setEnabled(False)
-        self.progress.setRange(0, 0)  # 讓下方的進度條進入忙碌跑動模式
-
+        # 執行 Git Checkout 獲取大檔案
         self.dl_runner = ScriptRunner("git",
                                       ["checkout", "origin/main", "--", "data/daily_data.zip", "data/data_status.json"],
                                       use_python=False)
@@ -457,61 +519,60 @@ class SettingsModule(QWidget):
         self.dl_runner.start_script()
 
     def unzip_data(self):
+        """解壓縮數據：複用進度條呈現百分比，並清理暫存檔"""
         zip_path = self.project_root / "data" / "daily_data.zip"
         extract_target = self.project_root / "data"
 
-        # 修改：先確保進度對話框的文字正確
-        if hasattr(self, 'progress_dialog') and self.progress_dialog:
-            self.progress_dialog.setLabelText("正在解壓縮數據，請稍候...")
-
         if not zip_path.exists():
-            self.log("❌ 錯誤：找不到數據包 (ZIP)")
-            if self.progress_dialog: self.progress_dialog.close()
             self.progress.setRange(0, 100)
+            self.progress.setFormat("❌ 錯誤：找不到數據包 (ZIP)")
+            self.log("❌ 錯誤：找不到數據包 (ZIP)")
+            self.btn_download_zip.setEnabled(True)
             return
 
         self.log("🔓 正在解壓縮並套用數據內容...")
-        success = False
         try:
-            # 1. 執行解壓縮
             with zipfile.ZipFile(zip_path, 'r') as z:
                 file_list = z.infolist()
                 total_files = len(file_list)
+
+                # 設定進度條範圍為檔案總數
                 self.progress.setRange(0, total_files)
 
                 for i, file in enumerate(file_list):
                     z.extract(file, extract_target)
                     self.progress.setValue(i + 1)
-                    if i % 5 == 0:
-                        QApplication.processEvents()
 
-            # 2. 解壓成功後，先標記成功
-            success = True
-            self.log("✅ 數據解壓縮完成。")
+                    # 每 10 個檔案更新一次文字，避免過度頻繁
+                    if i % 10 == 0 or i == total_files - 1:
+                        percent = int((i + 1) / total_files * 100)
+                        self.progress.setFormat(f"📦 正在套用數據: {percent}%")
+                        QApplication.processEvents()  # 確保 UI 不會卡死
+
+            self.log("✅ 數據套用成功。")
+            self.check_local_status()  # 重新讀取 Parquet 顯示時間
+
+            # 刪除已使用的 ZIP 暫存檔
+            if zip_path.exists():
+                try:
+                    # 稍微等待 handle 釋放
+                    time.sleep(0.2)
+                    os.remove(zip_path)
+                    self.log("🧹 暫存數據包已清理。")
+                except Exception as e:
+                    self.log(f"⚠️ 暫存檔自動刪除失敗(請手動刪除): {e}")
+
+            self.progress.setFormat("✅ 資料同步完成")
+            self.progress.setValue(total_files)
+            QMessageBox.information(self, "成功", "雲端數據已成功同步並套用！")
 
         except Exception as e:
             self.log(f"❌ 解壓過程出錯: {str(e)}")
-
-        # 關鍵修正：確保 zipfile 已經完全關閉（離開 with 區塊）後，再處理後續與刪除
-        if success:
-            try:
-                self.check_local_status()
-                # 嘗試刪除 ZIP，若被佔用則提示但不報錯
-                if zip_path.exists():
-                    # 稍微等待 handle 釋放
-                    QApplication.processEvents()
-                    os.remove(zip_path)
-                    self.log("🧹 暫存數據包已清理。")
-            except Exception as cleanup_e:
-                self.log(f"⚠️ 數據已套用，但暫存檔清理失敗 (請手動刪除): {str(cleanup_e)}")
-
             self.progress.setRange(0, 100)
-            self.progress.setValue(100)
-            if self.progress_dialog: self.progress_dialog.close()
-            QMessageBox.information(self, "成功", "數據已套用！\n本機資料時間已更新。")
-        else:
-            if self.progress_dialog: self.progress_dialog.close()
-            self.progress.setRange(0, 100)
+            self.progress.setFormat("❌ 套用失敗")
+
+        self.btn_download_zip.setEnabled(True)
+        self.btn_download_zip.setText("🔄 重新檢查雲端")
 
     def run_full_update_local(self):
         self.log("🚀 本機更新開始...", True)

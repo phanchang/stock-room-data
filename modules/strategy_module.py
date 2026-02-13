@@ -43,6 +43,7 @@ FULL_COLUMN_SPECS = {
     'rev_yoy': {'name': '月YoY%', 'show': True, 'tip': '最新月營收年增率', 'type': 'num'},
     'rev_cum_yoy': {'name': '累營YoY%', 'show': True, 'tip': '當年累計營收年增率', 'type': 'num'},
     'eps_q': {'name': 'EPS(累)', 'show': True, 'tip': '累計季 EPS', 'type': 'num'},
+    'eps_date': {'name': 'EPS季別', 'show': True, 'tip': 'EPS數據所屬年度與季別', 'type': 'str'}, # 🔥 新增這行
     'pe': {'name': 'PE', 'show': True, 'tip': '本益比', 'type': 'num'},
     'pbr': {'name': 'PB', 'show': False, 'tip': '股價淨值比', 'type': 'num'},
     'yield': {'name': '殖利率%', 'show': True, 'tip': '現金殖利率', 'type': 'num'},
@@ -84,7 +85,7 @@ FULL_FILTER_SPECS = [
     {'key': 'str_30w_week_offset', 'label': '訊號週數(前)', 'min': -1, 'max': 52, 'step': 1, 'suffix': '週'}
 ]
 
-DEFAULT_ACTIVE_FILTERS = ['bb_width', 'RS強度', '量比', '漲幅20d']
+DEFAULT_ACTIVE_FILTERS = ['str_30w_week_offset', '量比', '漲幅20d']
 
 # 🔥 修正重點：新增 30W 選項
 TAG_CATEGORIES = {

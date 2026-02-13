@@ -23,129 +23,133 @@ except ImportError:
 
 
 def calculate_advanced_factors(df, sid=None):
-    if df is None or len(df) < 205: return None
+    # [修正] 只要有數據就繼續，不要因為未滿 205 筆就回傳 None
+    if df is None or len(df) == 0:
+        return None
 
-    cfg = TechnicalStrategies.get_config()
-    last_close_daily = df['close'].iloc[-1]
+    # 初始化所有回傳值，預設為 0 或 False，確保即使數據不足也不會導致欄位缺失
+    factors = {
+        '現價': 0.0, '漲幅5d': 0.0, '漲幅20d': 0.0, '漲幅60d': 0.0,
+        'bb_width': 0.0, '量比': 0.0,
+        'str_consol_5': 0, 'str_consol_10': 0, 'str_consol_20': 0, 'str_consol_60': 0,
+        'str_ilss_sweep': 0, 'str_fake_breakdown': 0,
+        'str_30w_adh': 0, 'str_30w_shk': 0, 'str_30w_info': "",
+        'str_30w_week_offset': -1,
+        'str_break_30w': 0, 'str_uptrend': 0, 'str_high_60': 0, 'str_high_30': 0,
+        'str_ma55_sup': 0, 'str_ma200_sup': 0, 'str_vix_rev': 0
+    }
+
+    # 統一轉換欄位名稱
     df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'},
               inplace=True)
 
-    # 1. 轉周線
-    logic = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
-    df_weekly = df.resample('W-FRI').agg(logic).dropna()
-    if len(df_weekly) < 35: return None
+    # 1. 優先取得現價 (這是解決股價變 0 的關鍵)
+    last_close_daily = df['Close'].iloc[-1]
+    factors['現價'] = last_close_daily
 
-    # 2. 30W 策略
-    s_30w_adh_signal, s_30w_shk_signal, s_30w_info = False, False, ""
-    s_30w_week_offset = -1  # 預設 -1 (無訊號)
+    # 2. 計算基礎指標 (只要有 1 筆以上數據就能算，雖然 5d 需要 6 筆)
+    if len(df) >= 2:
+        factors['量比'] = round(df['Volume'].iloc[-1] / df['Volume'].tail(5).mean(), 2) if df['Volume'].tail(
+            5).mean() > 0 else 0
 
-    try:
-        res_30w = TechnicalStrategies.analyze_30w_breakout_details(df_weekly)
-        lookback_days = int(cfg.get('signal_lookback_days', 10))
-        lookback_weeks = math.ceil(lookback_days / 5) + 1
+    if len(df) >= 6:
+        factors['漲幅5d'] = round(df['Close'].pct_change(5).iloc[-1] * 100, 2)
+    if len(df) >= 21:
+        factors['漲幅20d'] = round(df['Close'].pct_change(20).iloc[-1] * 100, 2)
 
-        # 取最近 N 週
-        recent_res = res_30w.iloc[-lookback_weeks:]
+        # 布林寬度計算
+        ma20 = df['Close'].rolling(20).mean()
+        std20 = df['Close'].rolling(20).std()
+        bb_width_series = (4 * std20) / ma20 * 100
+        factors['bb_width'] = round(bb_width_series.iloc[-1], 2) if not pd.isna(bb_width_series.iloc[-1]) else 0
 
-        # 尋找訊號發生時間 (優先找最近的)
-        # i=0 代表最近一週 (本週)
-        for i in range(len(recent_res)):
-            # 倒著找：從最近的開始 (-1, -2...)
-            idx = -1 - i
-            if abs(idx) > len(recent_res): break
+        # 整理型態判斷
+        factors['str_consol_5'] = int(bb_width_series.rolling(5).max().iloc[-1] < 10) if len(
+            bb_width_series) >= 5 else 0
+        factors['str_consol_10'] = int(bb_width_series.rolling(10).max().iloc[-1] < 12) if len(
+            bb_width_series) >= 10 else 0
+        factors['str_consol_20'] = int(bb_width_series.rolling(20).max().iloc[-1] < 15) if len(
+            bb_width_series) >= 20 else 0
 
-            sig = recent_res['Signal'].iloc[idx]
-            if sig > 0:
-                s_30w_week_offset = i  # 0=本週, 1=上週, 2=前週
+        # 假跌破判斷
+        try:
+            if (df['Close'].iloc[-2] < ma20.iloc[-2] and df['Close'].iloc[-1] > ma20.iloc[-1] and df['Close'].iloc[-1] >
+                    df['Open'].iloc[-1]):
+                factors['str_fake_breakdown'] = 1
+        except:
+            pass
 
-                # 記錄訊號類型
-                if sig in [1, 3]:
-                    s_30w_adh_signal = True
-                    s_30w_info = f"({recent_res['Adh_Info'].iloc[idx]})"
-                if sig in [2, 3]:
-                    s_30w_shk_signal = True
-                    s_30w_info = f"({recent_res['Shk_Info'].iloc[idx]})"
-                break  # 找到最近的一次就停止
+    if len(df) >= 61:
+        factors['漲幅60d'] = round(df['Close'].pct_change(60).iloc[-1] * 100, 2)
+        factors['str_consol_60'] = int(bb_width_series.rolling(60).max().iloc[-1] < 18) if len(
+            bb_width_series) >= 60 else 0
 
-        # --- DEBUG Log (竹陞) ---
-        if sid == '6739':
-            print(f"\n======== DEBUG: 6739 (Week Offset Check) ========")
-            print(f"Offset (幾週前): {s_30w_week_offset}")
-            print(f"Info: {s_30w_info}")
-            print("=================================================\n")
+    # 3. 進階策略計算 (需要較長天數，例如 MA200 或 週線策略)
+    if len(df) >= 200:
+        def check_recent(series):
+            return int(series.tail(3).any())
 
-    except Exception as e:
-        if sid == '6739': print(f"DEBUG Error: {e}")
-        pass
+        # MA200 相關與 ILSS
+        try:
+            ma20 = df['Close'].rolling(20).mean()
+            ma200 = df['Close'].rolling(200).mean()
+            high_60 = df['High'].rolling(60).max()
+            if (last_close_daily > ma200.iloc[-1]) and (ma200.iloc[-1] > ma200.iloc[-5]) and (
+                    df['High'].tail(15) >= high_60.tail(15)).any():
+                low_20d = df['Low'].rolling(20).min().shift(1)
+                for i in range(3):
+                    idx = -1 - i
+                    s_level = min(low_20d.iloc[idx], ma20.iloc[idx]) if idx > -len(df) else 0
+                    if s_level == 0: continue
+                    break_depth = (s_level - df['Low'].iloc[idx]) / s_level
+                    if (df['Low'].iloc[idx] < s_level) and (0.005 < break_depth < 0.08) and (
+                            df['Volume'].iloc[idx] > (1.2 * df['Volume'].iloc[idx - 5:idx].mean())):
+                        if (last_close_daily > s_level) and (last_close_daily > df['Open'].iloc[-1]) and (
+                                last_close_daily > df['High'].iloc[idx]):
+                            factors['str_ilss_sweep'] = 1
+                            break
+        except:
+            pass
 
-    # --- 日線指標 ---
-    roc_5 = df['Close'].pct_change(5).iloc[-1] * 100
-    roc_20 = df['Close'].pct_change(20).iloc[-1] * 100
-    roc_60 = df['Close'].pct_change(60).iloc[-1] * 100
-    vol_ratio = df['Volume'].iloc[-1] / df['Volume'].tail(5).mean() if df['Volume'].tail(5).mean() > 0 else 0
+        # 其他技術特徵
+        factors['str_break_30w'] = check_recent(TechnicalStrategies.break_30w_ma(df))
+        factors['str_uptrend'] = int(TechnicalStrategies.strong_uptrend(df).iloc[-1])
+        factors['str_high_60'] = check_recent(TechnicalStrategies.breakout_n_days_high(df, 60))
+        factors['str_high_30'] = check_recent(TechnicalStrategies.breakout_n_days_high(df, 30))
+        factors['str_ma55_sup'] = check_recent(TechnicalStrategies.near_ma_support(df, 55))
+        factors['str_ma200_sup'] = check_recent(TechnicalStrategies.near_ma_support(df, 200))
+        factors['str_vix_rev'] = check_recent(TechnicalStrategies.vix_reversal(df))
 
-    ma20 = df['Close'].rolling(20).mean()
-    std20 = df['Close'].rolling(20).std()
-    bb_width_series = (4 * std20) / ma20 * 100
-    current_bb_width = bb_width_series.iloc[-1] if not pd.isna(bb_width_series.iloc[-1]) else 0
+        # 4. 30W 週線策略 (擴展回溯範圍)
+        try:
+            logic = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
+            df_weekly = df.resample('W-FRI').agg(logic).dropna()
 
-    s_consol_5 = int(bb_width_series.rolling(5).max().iloc[-1] < 10)
-    s_consol_10 = int(bb_width_series.rolling(10).max().iloc[-1] < 12)
-    s_consol_20 = int(bb_width_series.rolling(20).max().iloc[-1] < 15)
-    s_consol_60 = int(bb_width_series.rolling(60).max().iloc[-1] < 18)
+            # 只要週線大於 1 即可運算，但 30W 策略需要 30+ 筆
+            if len(df_weekly) >= 35:
+                res_30w = TechnicalStrategies.analyze_30w_breakout_details(df_weekly)
 
-    s_fake_breakdown = 0
-    try:
-        if (df['Close'].iloc[-2] < ma20.iloc[-2] and df['Close'].iloc[-1] > ma20.iloc[-1] and df['Close'].iloc[-1] >
-                df['Open'].iloc[-1]):
-            s_fake_breakdown = 1
-    except:
-        pass
+                # 🔥 [關鍵修正]：往回搜尋最多 52 週
+                max_back = min(52, len(res_30w) - 1)
+                found_offset = -1
 
-    s_ilss_sweep = 0
-    try:
-        ma200 = df['Close'].rolling(200).mean()
-        high_60 = df['High'].rolling(60).max()
-        if (last_close_daily > ma200.iloc[-1]) and (ma200.iloc[-1] > ma200.iloc[-5]) and (
-                df['High'].tail(15) >= high_60.tail(15)).any():
-            low_20d = df['Low'].rolling(20).min().shift(1)
-            for i in range(3):
-                idx = -1 - i
-                s_level = min(low_20d.iloc[idx], ma20.iloc[idx]) if idx > -len(df) else 0
-                if s_level == 0: continue
-                break_depth = (s_level - df['Low'].iloc[idx]) / s_level
-                if (df['Low'].iloc[idx] < s_level) and (0.005 < break_depth < 0.08) and (
-                        df['Volume'].iloc[idx] > (1.2 * df['Volume'].iloc[idx - 5:idx].mean())):
-                    if (last_close_daily > s_level) and (last_close_daily > df['Open'].iloc[-1]) and (
-                            last_close_daily > df['High'].iloc[idx]):
-                        s_ilss_sweep = 1
-                        break
-    except:
-        pass
+                # 從最後一筆 (Index -1) 開始往回找
+                for offset in range(max_back + 1):
+                    idx = -1 - offset
+                    sig = res_30w['Signal'].iloc[idx]
+                    if sig > 0:
+                        found_offset = offset
+                        factors['str_30w_week_offset'] = offset
+                        factors['str_30w_adh'] = 1 if sig in [1, 3] else 0
+                        factors['str_30w_shk'] = 1 if sig in [2, 3] else 0
+                        # 紀錄當時的 Info
+                        factors[
+                            'str_30w_info'] = f"({res_30w['Adh_Info'].iloc[idx] if sig in [1, 3] else res_30w['Shk_Info'].iloc[idx]})"
+                        break  # 找到最近的一次訊號後即跳出
+        except Exception as e:
+            pass
 
-    def check_recent(series):
-        return int(series.tail(3).any())
-
-    return {
-        '現價': last_close_daily,
-        '漲幅5d': round(roc_5, 2), '漲幅20d': round(roc_20, 2), '漲幅60d': round(roc_60, 2),
-        'bb_width': round(current_bb_width, 2), '量比': round(vol_ratio, 2),
-        'str_consol_5': s_consol_5, 'str_consol_10': s_consol_10, 'str_consol_20': s_consol_20,
-        'str_consol_60': s_consol_60,
-        'str_ilss_sweep': s_ilss_sweep, 'str_fake_breakdown': s_fake_breakdown,
-        'str_30w_adh': 1 if s_30w_adh_signal else 0,
-        'str_30w_shk': 1 if s_30w_shk_signal else 0,
-        'str_30w_info': s_30w_info,
-        'str_30w_week_offset': s_30w_week_offset,  # 🔥 新增欄位
-        'str_break_30w': check_recent(TechnicalStrategies.break_30w_ma(df)),
-        'str_uptrend': int(TechnicalStrategies.strong_uptrend(df).iloc[-1]),
-        'str_high_60': check_recent(TechnicalStrategies.breakout_n_days_high(df, 60)),
-        'str_high_30': check_recent(TechnicalStrategies.breakout_n_days_high(df, 30)),
-        'str_ma55_sup': check_recent(TechnicalStrategies.near_ma_support(df, 55)),
-        'str_ma200_sup': check_recent(TechnicalStrategies.near_ma_support(df, 200)),
-        'str_vix_rev': check_recent(TechnicalStrategies.vix_reversal(df))
-    }
-
+    return factors
 
 def main():
     print(f"[System] 因子運算啟動 (V5.4 - 週數偏移功能) | {datetime.now():%H:%M:%S}")
@@ -228,7 +232,9 @@ def main():
 
     chinese_map = {
         'sid': '股票代號', 'name': '股票名稱', 'industry': '產業別',
-        'rev_yoy': '營收年增率(%)', 'rev_cum_yoy': '累計營收年增率(%)', 'eps_q': '累計EPS',
+        'rev_yoy': '營收年增率(%)', 'rev_cum_yoy': '累計營收年增率(%)',
+        'eps_q': '累計EPS',
+        'eps_date': 'EPS年度/季',  # 🔥 新增欄位對應
         'rev_ym': '營收月份',
         't_sum_5d': '投信買賣超(5日)', 't_streak': '投信連買天數',
         'f_sum_5d': '外資買賣超(5日)', 'f_streak': '外資連買天數',

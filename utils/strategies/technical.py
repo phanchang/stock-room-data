@@ -85,9 +85,9 @@ class TechnicalStrategies:
             is_adh, is_shk = False, False
             # 判斷基位：上週收盤距離 MA30 的乖離
             prev_bias = (prev_c - curr_ma) / curr_ma
-
+            current_bias_limit = cfg.get('adhesive_bias', 0.12)
             # --- 1. 黏貼整理 ---
-            if curr_ma > p_ma_val and prev_bias <= 0.12:
+            if curr_ma > p_ma_val and prev_bias <= current_bias_limit:
                 start_adh = i - cfg.get('adhesive_weeks', 2)
                 if start_adh >= 0:
                     is_adh_tmp, max_d = True, 0.0

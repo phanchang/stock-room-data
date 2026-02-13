@@ -36,13 +36,15 @@ def get_trading_days(n=25):
 
 
 def parse_val(v):
+    if v is None: return 0.0
     try:
         if isinstance(v, (int, float)): return float(v)
         v = str(v).strip().replace(',', '')
-        return 0.0 if v in ['-', '', 'N/A', 'null'] else float(v)
+        # 處理證交所常見的無數據符號
+        if v in ['-', '', 'N/A', 'null', '0.00']: return 0.0
+        return float(v)
     except:
         return 0.0
-
 
 def get_streak(series):
     vals = series.values
@@ -248,43 +250,72 @@ def fetch_revenue():
 
 
 # ==========================================
-# 4. 估值 (Valuation)
+# 4. 估值 (Valuation) - 修正版
+# ==========================================
+# ==========================================
+# 4. 估值 (Valuation) - 效能與長假優化版
 # ==========================================
 def fetch_valuation():
     print("📡 [4/5] 抓取估值 (PE/PB/Yield)...")
+
+    # 🔥 [關鍵優化]：直接取得最後一個有效的交易日日期物件
+    # 不再用迴圈盲目猜，而是直接問 get_trading_days
+    valid_days = get_trading_days(5)
+    if not valid_days:
+        print("   ❌ 無法取得有效交易日日期")
+        return pd.DataFrame()
+
     vd = []
-    try:  # 上市
-        res = requests.get("https://www.twse.com.tw/rwd/zh/afterTrading/BWIBBU_d?selectType=ALL&response=json",
-                           headers=HEADERS, proxies=PROXIES, verify=False).json()
-        f = res['fields']
-        ipe, iy, ipb = f.index("本益比"), f.index("殖利率(%)"), f.index("股價淨值比")
-        for r in res['data']: vd.append(
-            {'sid': r[0].strip(), 'pe': parse_val(r[ipe]), 'yield': parse_val(r[iy]), 'pbr': parse_val(r[ipb])})
-    except:
-        pass
 
-    for offset in [0, 1]:
-        dt = datetime.now() - timedelta(days=offset)
-        d_roc = f"{dt.year - 1911}/{dt.month:02d}/{dt.day:02d}"
+    # 我們試著從最近的一個交易日開始抓，若失敗再抓前一個
+    for dt in valid_days[:3]:  # 通常前 1-2 個就一定會中
+        d_str = dt.strftime('%Y%m%d')  # 上市用格式: 20260211
+        d_roc = f"{dt.year - 1911}/{dt.month:02d}/{dt.day:02d}"  # 上櫃用格式: 115/02/11
+
+        twse_data_found = False
+        tpex_data_found = False
+
+        # 1. 抓上市 (TWSE)
         try:
-            res = requests.get(
-                f"https://www.tpex.org.tw/web/stock/aftertrading/peratio_analysis/pera_result.php?l=zh-tw&o=json&d={d_roc}",
-                headers=HEADERS, proxies=PROXIES, verify=False).json()
-            raw = res['tables'][0]['data'] if 'tables' in res else res.get('aaData', [])
-            if raw:
-                for r in raw: vd.append(
-                    {'sid': r[0].strip(), 'pe': parse_val(r[2]), 'yield': parse_val(r[5]), 'pbr': parse_val(r[6])})
-                break
+            url = f"https://www.twse.com.tw/rwd/zh/afterTrading/BWIBBU_d?date={d_str}&selectType=ALL&response=json"
+            res = requests.get(url, headers=HEADERS, proxies=PROXIES, timeout=10, verify=False).json()
+            if res.get('stat') == 'OK' and 'data' in res:
+                f = res['fields']
+                iy, ipe, ipb = f.index("殖利率(%)"), f.index("本益比"), f.index("股價淨值比")
+                for r in res['data']:
+                    vd.append({'sid': r[0].strip(), 'pe': parse_val(r[ipe]), 'yield': parse_val(r[iy]),
+                               'pbr': parse_val(r[ipb])})
+                twse_data_found = True
         except:
-            continue
-    return pd.DataFrame(vd).set_index('sid')
+            pass
 
+        # 2. 抓上櫃 (TPEX)
+        try:
+            url = f"https://www.tpex.org.tw/web/stock/aftertrading/peratio_analysis/pera_result.php?l=zh-tw&o=json&d={d_roc}"
+            res = requests.get(url, headers=HEADERS, proxies=PROXIES, timeout=10, verify=False).json()
+            raw = res['tables'][0]['data'] if 'tables' in res and len(res['tables']) > 0 else []
+            if raw:
+                for r in raw:
+                    vd.append(
+                        {'sid': r[0].strip(), 'pe': parse_val(r[2]), 'yield': parse_val(r[5]), 'pbr': parse_val(r[6])})
+                tpex_data_found = True
+        except:
+            pass
+
+        # 如果這一天有抓到任何資料，就代表這就是最後一個交易日，直接結束不再往回找
+        if twse_data_found or tpex_data_found:
+            print(f"   ✅ 成功對齊最後交易日數據 (日期: {d_str})")
+            break
+
+    return pd.DataFrame(vd).set_index('sid') if vd else pd.DataFrame()
 
 # ==========================================
 # 5. EPS (New)
 # ==========================================
+# --- update_chips_revenue.py 修正部分 ---
+
 def fetch_eps_data():
-    print("📡 [5/5] 抓取最新季 EPS...")
+    print("📡 [5/5] 抓取最新季 EPS 與年度季別...")
     eps_list = []
     urls = ["https://openapi.twse.com.tw/v1/opendata/t187ap14_L",
             "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap14_O"]
@@ -296,13 +327,22 @@ def fetch_eps_data():
                 sid = r.get('公司代號') or r.get('SecuritiesCompanyCode')
                 val_str = r.get('基本每股盈餘(元)') or r.get('基本每股盈餘')
 
-                if sid:
-                    eps_list.append({'sid': str(sid).strip(), 'eps_q': parse_val(val_str)})
+                # 抓取年度與季別
+                year = r.get('年度') or r.get('Year')
+                quarter = r.get('季別') or r.get('Season')  # 有些 API 用 Season
+
+                if sid and year and quarter:
+                    # 合併為 114Q4 這種格式
+                    eps_date = f"{str(year).strip()}Q{str(quarter).strip()}"
+                    eps_list.append({
+                        'sid': str(sid).strip(),
+                        'eps_q': parse_val(val_str),
+                        'eps_date': eps_date  # 新增合併欄位
+                    })
         except:
             pass
 
     return pd.DataFrame(eps_list).set_index('sid') if eps_list else pd.DataFrame()
-
 
 # ==========================================
 # 主程式
@@ -312,6 +352,15 @@ def main():
     p.parent.mkdir(parents=True, exist_ok=True)
 
     if PROXIES: print(f"🔒 使用 Proxy 模式")
+
+    # 載入白名單
+    project_root = Path(__file__).resolve().parent.parent
+    white_list_path = project_root / "data" / "stock_list.csv"
+
+    white_df = pd.read_csv(white_list_path, dtype={'stock_id': str})
+    valid_sids = set(white_df['stock_id'].tolist())
+    print(f"📋 載入白名單完成，共 {len(valid_sids)} 檔標的。")
+
 
     rev = fetch_revenue()
     chips = fetch_chips_matrix()
@@ -325,6 +374,13 @@ def main():
 
     if 'sid' not in final.columns:
         final = final.reset_index()
+
+    # 🔥 [關鍵修正]：比對白名單，僅保留存在於 stock_list.csv 的 sid
+    final['sid'] = final['sid'].astype(str).str.strip()
+    before_count = len(final)
+    final = final[final['sid'].isin(valid_sids)]
+    after_count = len(final)
+    print(f"🎯 白名單過濾完成：從 {before_count} 檔過濾至 {after_count} 檔 (已剔除存託憑證等標的)")
 
     final.to_csv(p, index=False, encoding='utf-8-sig')
     print(f"\n✨ V12.6 戰情室數據就緒！\n位置: {p}")

@@ -349,37 +349,54 @@ class StockListModule(QWidget):
             if hasattr(self, 'quote_worker') and self.btn_monitor.isChecked():
                 self.quote_worker.set_monitoring_stocks(current_list, source='watchlist')
 
+            base_cache_path = Path("data/cache/tw")
+
             for i, code in enumerate(current_list):
                 self.row_mapping[code] = i
                 info = self.stock_db.get(code, {"name": code, "market": "TW"})
 
-                path = Path(f"data/cache/tw/{code}_{info['market']}.parquet")
+                # 🔥 [修正] 改用廣泛比對，不依賴 DB 內的 market 欄位文字
                 last_close = 0
-                if path.exists():
-                    try:
-                        df = pd.read_parquet(path)
-                        if not df.empty:
-                            last_close = df.iloc[-1]['close']
-                            self.history_cache[code] = {'prev': last_close}
-                    except:
-                        pass
+                target_file = None
+                # 同時檢查所有可能的後綴
+                for suffix in ["_TW.parquet", "_TWO.parquet", ".parquet"]:
+                    p = base_cache_path / f"{code}{suffix}"
+                    if p.exists():
+                        target_file = p
+                        break
 
+                if target_file:
+                    try:
+                        df = pd.read_parquet(target_file)
+                        if not df.empty:
+                            # 🔥 [修正] 同時相容 'close' 與 'Close' 欄位
+                            cols = df.columns
+                            close_col = 'close' if 'close' in cols else 'Close'
+                            if close_col in cols:
+                                last_close = float(df.iloc[-1][close_col])
+                                self.history_cache[code] = {'prev': last_close}
+                    except Exception as e:
+                        print(f"Error reading {target_file}: {e}")
+
+                # 建立 ID Item
                 item_id = QTableWidgetItem(code)
                 item_id.setForeground(QColor("#00E5FF"))
                 item_id.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
-
-                # 🔥 [修正] 補上這行：將市場別存入 Item，防止外部讀取時拿到 None
                 item_id.setData(Qt.ItemDataRole.UserRole, info['market'])
-
                 self.table.setItem(i, 0, item_id)
 
+                # 建立名稱 Item
                 item_name = QTableWidgetItem(info['name'])
                 item_name.setForeground(QColor("white"))
                 self.table.setItem(i, 1, item_name)
 
-                # 填入昨收與預設值
-                val = f"{last_close:.2f}" if last_close > 0 else "-"
-                self._set_cell(i, 2, val, is_num=True)
+                # 填入成交價 (有抓到快取就填入，沒抓到就顯示 -)
+                if last_close > 0:
+                    self._set_cell(i, 2, f"{last_close:.2f}", QColor("#CCCCCC"), is_num=True)
+                else:
+                    self._set_cell(i, 2, "-", is_num=True)
+
+                # 其他欄位初始清空
                 for c in range(3, 8):
                     self._set_cell(i, c, "-", is_num=True)
 
@@ -389,7 +406,7 @@ class StockListModule(QWidget):
             self.table.setSortingEnabled(True)
             self.table.setUpdatesEnabled(True)
 
-            # 🔥 延遲觸發選取，等待 MainWindow 初始化完成
+            # 延遲觸發選取
             if not self.has_auto_selected:
                 QTimer.singleShot(500, self._auto_select_first_row)
 

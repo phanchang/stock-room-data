@@ -449,13 +449,20 @@ class ExpandedKLineWindow(QDialog):
 
         # --- [2] 策略視覺化 (僅限週線模式) ---
         if self.current_tf == 'W':
-            # A. 取得參數與繪製通道
-            # 注意：這裡使用 get 避免 technical.py 未更新導致的錯誤
+            # 【修正點】：統一呼叫 get_config() 獲取最新參數
             try:
-                cfg = TechnicalStrategies.STRATEGY_CONFIG
+                cfg = TechnicalStrategies.get_config()
                 adh_bias = cfg.get('adhesive_bias', 0.12)
-            except:
-                adh_bias = 0.12  # 預設值防呆
+            except Exception as e:
+                print(f"Read Config Error in Kline: {e}")
+                adh_bias = 0.12
+
+            if 'MA30' in view_df.columns:
+                ma_vals = view_df['MA30'].values
+                # 使用從設定檔讀取的 adh_bias 繪製 ±N% 虛線通道
+                # 這樣畫出來的線才會跟選股邏輯對得上
+                self.ax1.plot(x, ma_vals * (1 + adh_bias), color='#444', ls='--', lw=0.8, alpha=0.5)
+                self.ax1.plot(x, ma_vals * (1 - adh_bias), color='#444', ls='--', lw=0.8, alpha=0.5)
 
             if 'MA30' in view_df.columns:
                 ma_vals = view_df['MA30'].values
