@@ -29,6 +29,7 @@ data/indicators/
 data/temp/
 data/戰情室終極版.csv
 data/chips_revenue_raw.csv
+data/data_status.json
 
 # --- 日誌與暫存 ---
 utils/logs/
