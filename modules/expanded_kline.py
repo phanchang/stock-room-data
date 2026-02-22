@@ -19,6 +19,7 @@ from utils.indicators import Indicators
 from utils.quote_worker import QuoteWorker
 from utils.strategies.technical import TechnicalStrategies
 
+
 class ExpandedKLineWindow(QDialog):
     MA_CONFIG = {
         'D': [5, 10, 22, 55, 200],
@@ -156,6 +157,7 @@ class ExpandedKLineWindow(QDialog):
         self.canvas.mpl_connect('button_release_event', self.on_mouse_release)
 
     def init_overlays(self):
+        # 1. 上方 MA Overlay (日線專用)
         self.ma_overlay = QFrame(self)
         self.ma_overlay.setStyleSheet("""
             QFrame { 
@@ -182,6 +184,7 @@ class ExpandedKLineWindow(QDialog):
             self.ma_checks[ma] = chk
             ma_layout.addWidget(chk)
 
+        # 2. 下方副圖 Overlay (全域共用：指標切換 + SuperTrend)
         self.sub_overlay = QFrame(self)
         self.sub_overlay.setStyleSheet("""
             QFrame { 
@@ -194,19 +197,16 @@ class ExpandedKLineWindow(QDialog):
         sub_layout.setSpacing(10)
 
         self.combo = QComboBox()
-        self.combo.addItems(["Volume", "Vix Fix", "KD", "MACD", "RSI"])
+        self.combo.addItems(["Volume", "SuperTrend", "Vix Fix", "KD", "MACD", "RSI"])
         self.combo.setCurrentText(self.current_indicator)
         self.combo.setFixedSize(110, 20)
         self.combo.currentTextChanged.connect(self.on_indicator_changed)
         sub_layout.addWidget(self.combo)
 
         self.sub_val_label = QLabel("")
-        self.sub_val_label.setStyleSheet(
-            "font-family: 'Consolas', monospace; font-size: 12px; font-weight: bold; background: transparent;")
+        self.sub_val_label.setStyleSheet("font-family: 'Consolas'; font-size: 12px; font-weight: bold;")
         self.sub_val_label.setTextFormat(Qt.TextFormat.RichText)
-        self.sub_val_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         sub_layout.addWidget(self.sub_val_label)
-
         sub_layout.addStretch()
 
         self.ma_overlay.show()
@@ -423,99 +423,27 @@ class ExpandedKLineWindow(QDialog):
 
     def draw_candles_and_indicators(self):
         """
-        完整繪製主圖、副圖與策略訊號 (已修正變數順序與重複繪圖問題)
+        完整繪製主圖、副圖與策略訊號
         """
-        # --- [1] 初始化畫布與計算範圍 ---
         self.ax1.clear()
         self.ax2.clear()
 
-        # 設定背景與格線
         self.ax1.set_facecolor('#121212')
         self.ax2.set_facecolor('#121212')
         self.ax1.grid(True, color='#2A2A2A', ls='-', lw=0.8)
         self.ax2.grid(True, color='#2A2A2A', ls='-', lw=0.8)
 
-        # 計算顯示範圍 (Scroll Logic)
         total_len = len(self.current_df)
         max_scroll = max(0, total_len - self.visible_candles)
         self.scroll_pos = max(0, min(self.scroll_pos, max_scroll))
         end_idx = total_len - int(self.scroll_pos)
         start_idx = max(0, end_idx - int(self.visible_candles))
 
-        # 🔥 核心數據切片 (確保 view_df 在最前方定義)
         view_df = self.current_df.iloc[start_idx:end_idx].copy()
         if view_df.empty: return
         x = np.arange(len(view_df))
 
-        # --- [2] 策略視覺化 (僅限週線模式) ---
-        if self.current_tf == 'W':
-            # 【修正點】：統一呼叫 get_config() 獲取最新參數
-            try:
-                cfg = TechnicalStrategies.get_config()
-                adh_bias = cfg.get('adhesive_bias', 0.12)
-            except Exception as e:
-                print(f"Read Config Error in Kline: {e}")
-                adh_bias = 0.12
-
-            if 'MA30' in view_df.columns:
-                ma_vals = view_df['MA30'].values
-                # 使用從設定檔讀取的 adh_bias 繪製 ±N% 虛線通道
-                # 這樣畫出來的線才會跟選股邏輯對得上
-                self.ax1.plot(x, ma_vals * (1 + adh_bias), color='#444', ls='--', lw=0.8, alpha=0.5)
-                self.ax1.plot(x, ma_vals * (1 - adh_bias), color='#444', ls='--', lw=0.8, alpha=0.5)
-
-            if 'MA30' in view_df.columns:
-                ma_vals = view_df['MA30'].values
-                # 繪製 ±N% 虛線通道
-                self.ax1.plot(x, ma_vals * (1 + adh_bias), color='#444', ls='--', lw=0.8, alpha=0.5)
-                self.ax1.plot(x, ma_vals * (1 - adh_bias), color='#444', ls='--', lw=0.8, alpha=0.5)
-
-                # B. 左上方顯示 MA30 數值與斜率箭頭
-                if len(ma_vals) >= 2:
-                    curr_ma = ma_vals[-1]
-                    prev_ma = ma_vals[-2]
-                    arrow = "▲" if curr_ma > prev_ma else "▼" if curr_ma < prev_ma else "─"
-                    a_color = "#FFAA00" if arrow == "▲" else "#00FF00"
-                    # 使用 transAxes 定位在左上角 (0.02, 0.90)
-                    #self.ax1.text(0.02, 0.90, f"MA30: {curr_ma:.2f} {arrow}",
-                    #              transform=self.ax1.transAxes, color=a_color,
-                    #              fontsize=14, fontweight='bold', va='top', zorder=10)
-                    if not hasattr(self, 'ma30_label_obj') or self.ma30_label_obj is None:
-                        # 建立一個空的文字物件，位置固定在左上角
-                        self.ma30_label_obj = self.ax1.text(
-                            0.02, 0.94, "",
-                            transform=self.ax1.transAxes,
-                            color='#FFAA00',
-                            fontsize=10,  # <-- 字體改小，跟其他資訊一樣
-                            fontweight='bold',
-                            va='top',
-                            zorder=10
-                        )
-
-            # C. 標記策略訊號 (Adhesive & Shakeout)
-            try:
-                signal_df = TechnicalStrategies.analyze_30w_breakout_details(self.current_df)
-                view_signals = signal_df.iloc[start_idx:end_idx]
-
-                for i in range(len(view_signals)):
-                    sig = view_signals.iloc[i]['Signal']
-                    l_p = view_df.iloc[i]['Low']
-
-                    # 🟡 黏貼 (黃色三角形)
-                    if sig in [1, 3]:
-                        self.ax1.scatter(x[i], l_p * 0.98, marker='^', color='#FFFF00', s=80, zorder=5)
-                        self.ax1.text(x[i], l_p * 0.96, view_signals.iloc[i]['Adh_Info'],
-                                      color='#FFFF00', fontsize=9, ha='center', va='top')
-                    # 🔴 甩轎 (紅色大星號)
-                    if sig in [2, 3]:
-                        self.ax1.scatter(x[i], l_p * 0.93, marker='*', color='#FF3333', s=120, zorder=5)
-                        self.ax1.text(x[i], l_p * 0.91, view_signals.iloc[i]['Shk_Info'],
-                                      color='#FF3333', fontsize=9, ha='center', va='top', fontweight='bold')
-            except Exception as e:
-                # 避免策略計算失敗導致整個圖表掛掉
-                print(f"Strategy Calc Error: {e}")
-
-        # --- [3] 繪製標準 K 線 (只畫一次！) ---
+        # --- [2] 繪製 K 線 ---
         up = view_df['Close'] >= view_df['Open']
         down = view_df['Close'] < view_df['Open']
 
@@ -527,7 +455,50 @@ class ExpandedKLineWindow(QDialog):
                      color='#00FF00', edgecolor='#00FF00', linewidth=0.8)
         self.ax1.vlines(x[down], view_df['Low'][down], view_df['High'][down], color='#00FF00', lw=1)
 
-        # --- [4] 繪製均線 ---
+        # --- [3] 策略視覺化 (僅限週線模式 W) ---
+        if self.current_tf == 'W':
+            try:
+                cfg = TechnicalStrategies.get_config()
+                adh_bias = cfg.get('adhesive_bias', 0.12)
+            except:
+                adh_bias = 0.12
+
+            if 'MA30' in view_df.columns:
+                ma_vals = view_df['MA30'].values
+                self.ax1.plot(x, ma_vals * (1 + adh_bias), color='#444', ls='--', lw=0.8, alpha=0.5)
+                self.ax1.plot(x, ma_vals * (1 - adh_bias), color='#444', ls='--', lw=0.8, alpha=0.5)
+
+                if len(ma_vals) >= 2:
+                    curr_ma = ma_vals[-1]
+                    prev_ma = ma_vals[-2]
+                    arrow = "▲" if curr_ma > prev_ma else "▼" if curr_ma < prev_ma else "─"
+                    if not hasattr(self, 'ma30_label_obj') or self.ma30_label_obj is None:
+                        self.ma30_label_obj = self.ax1.text(
+                            0.02, 0.94, "",
+                            transform=self.ax1.transAxes,
+                            color='#FFAA00',
+                            fontsize=10, fontweight='bold', va='top', zorder=10
+                        )
+
+            try:
+                signal_df = TechnicalStrategies.analyze_30w_breakout_details(self.current_df)
+                view_signals = signal_df.iloc[start_idx:end_idx]
+
+                for i in range(len(view_signals)):
+                    sig = view_signals.iloc[i]['Signal']
+                    l_p = view_df.iloc[i]['Low']
+                    if sig in [1, 3]:
+                        self.ax1.scatter(x[i], l_p * 0.98, marker='^', color='#FFFF00', s=80, zorder=5)
+                        self.ax1.text(x[i], l_p * 0.96, view_signals.iloc[i]['Adh_Info'],
+                                      color='#FFFF00', fontsize=9, ha='center', va='top')
+                    if sig in [2, 3]:
+                        self.ax1.scatter(x[i], l_p * 0.93, marker='*', color='#FF3333', s=120, zorder=5)
+                        self.ax1.text(x[i], l_p * 0.91, view_signals.iloc[i]['Shk_Info'],
+                                      color='#FF3333', fontsize=9, ha='center', va='top', fontweight='bold')
+            except Exception as e:
+                pass
+
+        # --- [4] 繪製均線 (MA) ---
         ma_list = self.MA_CONFIG.get(self.current_tf, [])
         for ma in ma_list:
             is_vis = True
@@ -540,19 +511,83 @@ class ExpandedKLineWindow(QDialog):
                     self.ax1.plot(x, view_df[col].values, color=self.MA_COLORS.get(ma, '#FFF'), lw=1.2, alpha=0.9,
                                   label=f'MA{ma}')
 
-        # --- [5] 設定 Y 軸範圍 ---
+                    # --- [5] SuperTrend 繪製 (條件改為選單) ---
+                    if self.current_indicator == "SuperTrend":
+                        try:
+                            st_df = TechnicalStrategies.calculate_supertrend(self.current_df)
+                            st_view = st_df.iloc[start_idx:end_idx]
+                            trend_line = st_view['SuperTrend'].values
+                            directions = st_view['Direction'].values
+
+                            # 台股修正：紅色多頭，綠色空頭
+                            up_trend = np.where(directions == 1, trend_line, np.nan)
+                            down_trend = np.where(directions == -1, trend_line, np.nan)
+
+                            self.ax1.plot(x, up_trend, color='#FF3333', lw=2, alpha=0.8, zorder=4)
+                            self.ax1.plot(x, down_trend, color='#00FF00', lw=2, alpha=0.8, zorder=4)
+
+                            # 繪製轉折訊號 (紅 B 綠 S)
+                            signals = st_view[st_view['Signal'] != 0]
+                            for i in range(len(signals)):
+                                sig_idx = view_df.index.get_loc(signals.index[i])
+                                sig_val = signals.iloc[i]['Signal']
+                                st_val = signals.iloc[i]['SuperTrend']
+                                if sig_val == 1:  # Buy
+                                    self.ax1.scatter(x[sig_idx], st_val * 0.99, s=80, marker='^', color='#FF3333',
+                                                     edgecolors='white', zorder=6)
+                                elif sig_val == -1:  # Sell
+                                    self.ax1.scatter(x[sig_idx], st_val * 1.01, s=80, marker='v', color='#00FF00',
+                                                     edgecolors='white', zorder=6)
+                        except Exception as e:
+                            print(f"ST Plot Error: {e}")
+
+        # --- [6] 設定 Y 軸範圍 ---
         v_h, v_l = view_df['High'].max(), view_df['Low'].min()
         if pd.notna(v_h) and pd.notna(v_l):
             pad = (v_h - v_l) * 0.15
             self.ax1.set_ylim(v_l - pad, v_h + pad)
         self.ax1.set_xlim(-0.5, len(view_df) - 0.5)
 
-        # --- [6] 繪製指標 (副圖) ---
+        # --- [7] 繪製指標 (副圖) ---
         name = self.current_indicator
 
-        if name == "Volume":
+        # --- [5] SuperTrend 繪製 (條件改為選單) ---
+        if self.current_indicator == "SuperTrend":
+            try:
+                st_df = TechnicalStrategies.calculate_supertrend(self.current_df)
+                st_view = st_df.iloc[start_idx:end_idx]
+                trend_line = st_view['SuperTrend'].values
+                directions = st_view['Direction'].values
+
+                # 台股修正：紅色多頭，綠色空頭
+                up_trend = np.where(directions == 1, trend_line, np.nan)
+                down_trend = np.where(directions == -1, trend_line, np.nan)
+
+                self.ax1.plot(x, up_trend, color='#FF3333', lw=2, alpha=0.8, zorder=4)
+                self.ax1.plot(x, down_trend, color='#00FF00', lw=2, alpha=0.8, zorder=4)
+
+                # 繪製轉折訊號 (紅 B 綠 S)
+                signals = st_view[st_view['Signal'] != 0]
+                for i in range(len(signals)):
+                    sig_idx = view_df.index.get_loc(signals.index[i])
+                    sig_val = signals.iloc[i]['Signal']
+                    st_val = signals.iloc[i]['SuperTrend']
+                    if sig_val == 1:  # Buy
+                        self.ax1.scatter(x[sig_idx], st_val * 0.99, s=80, marker='^', color='#FF3333',
+                                         edgecolors='white', zorder=6)
+                    elif sig_val == -1:  # Sell
+                        self.ax1.scatter(x[sig_idx], st_val * 1.01, s=80, marker='v', color='#00FF00',
+                                         edgecolors='white', zorder=6)
+            except Exception as e:
+                print(f"ST Plot Error: {e}")
+
+        # --- [7] 繪製副圖指標 ---
+        name = self.current_indicator
+
+        # 修正：如果選 SuperTrend，副圖預設畫 Volume，確保功能不遺失
+        if name == "Volume" or name == "SuperTrend":
             colors = ['#FF3333' if c >= o else '#00FF00' for c, o in zip(view_df['Close'], view_df['Open'])]
-            self.ax2.bar(x, view_df['Volume'], color=colors, width=0.6, edgecolor='#121212', linewidth=0.5)
+            self.ax2.bar(x, view_df['Volume'], color=colors, width=0.6, edgecolor='#121212')
 
         elif name == "Vix Fix":
             full_wvf = Indicators.cm_williams_vix_fix(self.current_df, period=22)
@@ -564,7 +599,7 @@ class ExpandedKLineWindow(QDialog):
             v_upper = full_upper.iloc[start_idx:end_idx]
             v_rh = full_rh.iloc[start_idx:end_idx]
             is_green = (wvf_view >= v_upper) | (wvf_view >= v_rh)
-            bar_colors = np.where(is_green, '#00FF00', '#444')
+            bar_colors = np.where(is_green, '#FF3333', '#444')
             self.ax2.bar(x, wvf_view, color=bar_colors, width=0.6, edgecolor='#121212', linewidth=0.5)
             self.ax2.plot(x, v_upper.values, color='#00FFFF', lw=1, alpha=0.6)
             self.ax2.plot(x, v_rh.values, color='#FFA500', lw=1, alpha=0.9)
@@ -606,7 +641,7 @@ class ExpandedKLineWindow(QDialog):
             self.ax2.axhline(30, color='#00FF00', ls='--', lw=0.5)
             self.ax2.set_ylim(0, 100)
 
-        # --- [7] X軸標籤與十字線 ---
+        # --- [8] X軸標籤與十字線 ---
         date_strs = []
         tick_indices = []
         dates = view_df.index
@@ -627,7 +662,7 @@ class ExpandedKLineWindow(QDialog):
         self.ax2.set_xticklabels(date_strs, rotation=0, fontsize=9, color='#AAA')
         self.ax2.set_xlim(-0.5, len(view_df) - 0.5)
 
-        # 重新初始化十字線物件 (避免 clear 後失效)
+        # 重新初始化十字線物件
         self.vline1 = self.ax1.axvline(0, color='#666', ls='--', lw=0.8, visible=False)
         self.vline2 = self.ax2.axvline(0, color='#666', ls='--', lw=0.8, visible=False)
         self.hline1 = self.ax1.axhline(0, color='#666', ls='--', lw=0.8, visible=False)
@@ -641,6 +676,7 @@ class ExpandedKLineWindow(QDialog):
             self._update_info_label(total_len - 1)
 
         self.canvas.draw_idle()
+
     def _update_sub_chart_values(self, idx):
         if idx < 0 or idx >= len(self.current_df): return
         name = self.current_indicator
@@ -649,7 +685,16 @@ class ExpandedKLineWindow(QDialog):
         def span(text, color):
             return f"<span style='color:{color}; font-weight:bold;'>{text}</span>"
 
-        if name == "Volume":
+        if name == "SuperTrend":
+            st_df = TechnicalStrategies.calculate_supertrend(self.current_df)
+            val = st_df['SuperTrend'].iloc[idx]
+            dir_val = st_df['Direction'].iloc[idx]
+            color = "#FF3333" if dir_val == 1 else "#00FF00"
+            trend_text = "多頭" if dir_val == 1 else "空頭"
+            html_text = f"ST: {span(f'{val:.2f}', color)} ({trend_text})"
+
+        elif name == "Volume":
+            # ... (原本 Volume 的程式碼) ...
             vol = self.current_df['Volume'].iloc[idx]
             close = self.current_df['Close'].iloc[idx]
             open_p = self.current_df['Open'].iloc[idx]

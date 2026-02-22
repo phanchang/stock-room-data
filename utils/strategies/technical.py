@@ -9,7 +9,84 @@ class TechnicalStrategies:
     """
     技術指標策略庫 - 整合 V3 (支援 JSON 設定與 30W 強規版)
     """
+    @staticmethod
+    def calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> pd.DataFrame:
+        if len(df) < period:
+            return pd.DataFrame(index=df.index, columns=['SuperTrend', 'Direction', 'Signal']).fillna(0)
 
+        high, low, close = df['High'], df['Low'], df['Close']
+
+        # 1. 計算 ATR
+        tr1 = high - low
+        tr2 = (high - close.shift(1)).abs()
+        tr3 = (low - close.shift(1)).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr = tr.rolling(window=period).mean()
+
+        # 2. 基礎軌道
+        hl2 = (high + low) / 2
+        bu_vals = (hl2 + (multiplier * atr)).values
+        bl_vals = (hl2 - (multiplier * atr)).values
+        c_vals = close.values
+
+        # 3. 初始化陣列
+        n = len(df)
+        final_upper = np.zeros(n)
+        final_lower = np.zeros(n)
+        supertrend = np.zeros(n)
+        direction = np.ones(n)  # 預設 1 (多)
+
+        # 找到第一個有 ATR 值的索引 (通常是 period-1)
+        start_idx = period - 1
+
+        # 初始化第一個有效位置
+        final_upper[start_idx] = bu_vals[start_idx]
+        final_lower[start_idx] = bl_vals[start_idx]
+
+        for i in range(start_idx + 1, n):
+            # Final Upper Band
+            if (bu_vals[i] < final_upper[i - 1]) or (c_vals[i - 1] > final_upper[i - 1]):
+                final_upper[i] = bu_vals[i]
+            else:
+                final_upper[i] = final_upper[i - 1]
+
+            # Final Lower Band
+            if (bl_vals[i] > final_lower[i - 1]) or (c_vals[i - 1] < final_lower[i - 1]):
+                final_lower[i] = bl_vals[i]
+            else:
+                final_lower[i] = final_lower[i - 1]
+
+            # 判斷趨勢轉換
+            if direction[i - 1] == 1:
+                if c_vals[i] < final_lower[i]:
+                    direction[i] = -1
+                    supertrend[i] = final_upper[i]
+                else:
+                    direction[i] = 1
+                    supertrend[i] = final_lower[i]
+            else:
+                if c_vals[i] > final_upper[i]:
+                    direction[i] = 1
+                    supertrend[i] = final_lower[i]
+                else:
+                    direction[i] = -1
+                    supertrend[i] = final_upper[i]
+
+        # 4. 整理結果 (補回前段的 NaN)
+        res = pd.DataFrame({
+            'SuperTrend': supertrend,
+            'Direction': direction
+        }, index=df.index)
+
+        # 將 start_idx 之前的 0 轉為 NaN 以免繪圖拉成一條橫線
+        res.iloc[:start_idx, res.columns.get_loc('SuperTrend')] = np.nan
+
+        # 計算 Signal
+        res['Signal'] = res['Direction'].diff().fillna(0).apply(
+            lambda x: 1 if x > 1 else (-1 if x < -1 else 0)
+        )
+
+        return res
     @staticmethod
     def get_config():
         """

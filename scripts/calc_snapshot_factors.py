@@ -27,7 +27,7 @@ def calculate_advanced_factors(df, sid=None):
     if df is None or len(df) == 0:
         return None
 
-    # 初始化所有回傳值，預設為 0 或 False，確保即使數據不足也不會導致欄位缺失
+    # 初始化所有回傳值，預設為 0、-1 或 False，確保即使數據不足也不會導致欄位缺失
     factors = {
         '現價': 0.0, '漲幅5d': 0.0, '漲幅20d': 0.0, '漲幅60d': 0.0,
         'bb_width': 0.0, '量比': 0.0,
@@ -35,6 +35,7 @@ def calculate_advanced_factors(df, sid=None):
         'str_ilss_sweep': 0, 'str_fake_breakdown': 0,
         'str_30w_adh': 0, 'str_30w_shk': 0, 'str_30w_info': "",
         'str_30w_week_offset': -1,
+        'str_st_week_offset': -1,  # 🔥 新增 SuperTrend 買訊回溯欄位(週)
         'str_break_30w': 0, 'str_uptrend': 0, 'str_high_60': 0, 'str_high_30': 0,
         'str_ma55_sup': 0, 'str_ma200_sup': 0, 'str_vix_rev': 0
     }
@@ -43,7 +44,7 @@ def calculate_advanced_factors(df, sid=None):
     df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'},
               inplace=True)
 
-    # 1. 優先取得現價 (這是解決股價變 0 的關鍵)
+    # 1. 優先取得現價
     last_close_daily = df['Close'].iloc[-1]
     factors['現價'] = last_close_daily
 
@@ -54,6 +55,7 @@ def calculate_advanced_factors(df, sid=None):
 
     if len(df) >= 6:
         factors['漲幅5d'] = round(df['Close'].pct_change(5).iloc[-1] * 100, 2)
+
     if len(df) >= 21:
         factors['漲幅20d'] = round(df['Close'].pct_change(20).iloc[-1] * 100, 2)
 
@@ -120,20 +122,36 @@ def calculate_advanced_factors(df, sid=None):
         factors['str_ma200_sup'] = check_recent(TechnicalStrategies.near_ma_support(df, 200))
         factors['str_vix_rev'] = check_recent(TechnicalStrategies.vix_reversal(df))
 
-        # 4. 30W 週線策略 (擴展回溯範圍)
+        # 4. 週線策略 (擴展回溯範圍)
         try:
             logic = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
             df_weekly = df.resample('W-FRI').agg(logic).dropna()
 
-            # 只要週線大於 1 即可運算，但 30W 策略需要 30+ 筆
+            # 🔥 --- 新增 SuperTrend 週線買訊回溯 ---
+            if len(df_weekly) >= 10:
+                try:
+                    st_weekly = TechnicalStrategies.calculate_supertrend(df_weekly)
+                    lookback_weeks = 26  # 往回追溯半年 (26週)
+                    found_st_week = -1
+                    max_idx = min(lookback_weeks, len(st_weekly) - 1)
+
+                    for offset in range(max_idx + 1):
+                        idx = -1 - offset
+                        if st_weekly['Signal'].iloc[idx] == 1:
+                            found_st_week = offset
+                            break
+                    factors['str_st_week_offset'] = found_st_week
+                except Exception as e:
+                    print(f"[Debug] ST週線計算錯誤 ({sid}): {e}")
+
+            # 原本的 30W 策略需要 35+ 筆
             if len(df_weekly) >= 35:
                 res_30w = TechnicalStrategies.analyze_30w_breakout_details(df_weekly)
 
-                # 🔥 [關鍵修正]：往回搜尋最多 52 週
+                # 往回搜尋最多 52 週
                 max_back = min(52, len(res_30w) - 1)
                 found_offset = -1
 
-                # 從最後一筆 (Index -1) 開始往回找
                 for offset in range(max_back + 1):
                     idx = -1 - offset
                     sig = res_30w['Signal'].iloc[idx]
@@ -142,17 +160,17 @@ def calculate_advanced_factors(df, sid=None):
                         factors['str_30w_week_offset'] = offset
                         factors['str_30w_adh'] = 1 if sig in [1, 3] else 0
                         factors['str_30w_shk'] = 1 if sig in [2, 3] else 0
-                        # 紀錄當時的 Info
                         factors[
                             'str_30w_info'] = f"({res_30w['Adh_Info'].iloc[idx] if sig in [1, 3] else res_30w['Shk_Info'].iloc[idx]})"
-                        break  # 找到最近的一次訊號後即跳出
+                        break
         except Exception as e:
             pass
 
     return factors
 
+
 def main():
-    print(f"[System] 因子運算啟動 (V5.4 - 週數偏移功能) | {datetime.now():%H:%M:%S}")
+    print(f"[System] 因子運算啟動 (V5.5 - 整合ST訊號回溯) | {datetime.now():%H:%M:%S}")
 
     cache = CacheManager()
     raw_path = project_root / 'data' / 'temp' / 'chips_revenue_raw.csv'
@@ -180,7 +198,7 @@ def main():
             factors['sid'] = sid
             tech_list.append(factors)
 
-    print(f"[System] 計算完成，共 {len(tech_list)} 檔。")
+    print(f"\n[System] 計算完成，共 {len(tech_list)} 檔。")
     print("PROGRESS: 100")
 
     tech_df = pd.DataFrame(tech_list).set_index('sid')
@@ -192,7 +210,14 @@ def main():
 
     def get_strong_tags(row):
         tags = []
-        # 在標籤中也顯示週數，方便一眼看到
+
+        # 🔥 --- ST 週線買訊標籤 ---
+        st_week = row.get('str_st_week_offset', -1)
+        if st_week == 0:
+            tags.append('ST轉多(本週)')
+        elif 0 < st_week <= 4:
+            tags.append(f'ST轉多({int(st_week)}週前)')
+
         offset = row.get('str_30w_week_offset', -1)
         suffix = ""
         if offset == 0:
@@ -234,7 +259,7 @@ def main():
         'sid': '股票代號', 'name': '股票名稱', 'industry': '產業別',
         'rev_yoy': '營收年增率(%)', 'rev_cum_yoy': '累計營收年增率(%)',
         'eps_q': '累計EPS',
-        'eps_date': 'EPS年度/季',  # 🔥 新增欄位對應
+        'eps_date': 'EPS年度/季',
         'rev_ym': '營收月份',
         't_sum_5d': '投信買賣超(5日)', 't_streak': '投信連買天數',
         'f_sum_5d': '外資買賣超(5日)', 'f_streak': '外資連買天數',
@@ -242,7 +267,8 @@ def main():
         'pe': '本益比', 'yield': '殖利率(%)',
         '現價': '今日收盤價', '漲幅20d': '20日漲幅(%)', '漲幅60d': '3個月漲幅(%)',
         'bb_width': '布林寬度(%)', '量比': '成交量比', 'RS強度': 'RS強度', '強勢特徵': '強勢特徵標籤',
-        'str_30w_week_offset': '訊號週數'  # 🔥 對應中文名
+        'str_30w_week_offset': '30W訊號週數',
+        'str_st_week_offset': 'ST買訊(週)'  # 🔥 對應中文名改回週線變數
     }
 
     output_df = final_df.copy().rename(columns=chinese_map)

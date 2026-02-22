@@ -49,7 +49,8 @@ FULL_COLUMN_SPECS = {
     'yield': {'name': '殖利率%', 'show': True, 'tip': '現金殖利率', 'type': 'num'},
     'is_tu_yang': {'name': '土洋對作', 'show': False, 'tip': '1=符合土洋對作訊號', 'type': 'num'},
     '強勢特徵': {'name': '強勢特徵', 'show': True, 'tip': '策略觸發訊號標籤', 'type': 'str'},
-    'str_30w_week_offset': {'name': '訊號週數', 'show': True, 'tip': '0=本週, 1=上週...', 'type': 'num'}
+    'str_30w_week_offset': {'name': '訊號週數', 'show': True, 'tip': '0=本週, 1=上週...', 'type': 'num'},
+    'str_st_week_offset': {'name': 'ST買訊(週)', 'show': True, 'tip': '距離最近一次週線SuperTrend買訊週數 (0=本週)', 'type': 'num'}
 }
 
 # ==========================================
@@ -82,19 +83,21 @@ FULL_FILTER_SPECS = [
     {'key': 'pe', 'label': '本益比', 'min': 0, 'max': 200, 'step': 1.0, 'suffix': ''},
     {'key': 'pbr', 'label': '股價淨值比', 'min': 0, 'max': 20, 'step': 0.1, 'suffix': ''},
     {'key': 'yield', 'label': '殖利率(%)', 'min': 0, 'max': 20, 'step': 0.5, 'suffix': '%'},
-    {'key': 'str_30w_week_offset', 'label': '訊號週數(前)', 'min': -1, 'max': 52, 'step': 1, 'suffix': '週'}
+    {'key': 'str_30w_week_offset', 'label': '訊號週數(前)', 'min': -1, 'max': 52, 'step': 1, 'suffix': '週'},
+    {'key': 'str_st_week_offset', 'label': 'ST買訊(前)', 'min': -1, 'max': 26, 'step': 1, 'suffix': '週'}
 ]
 
 DEFAULT_ACTIVE_FILTERS = ['str_30w_week_offset', '量比', '漲幅20d']
 
 # 🔥 修正重點：新增 30W 選項
 TAG_CATEGORIES = {
-    "🔥 趨勢型態": ["30W黏貼", "30W甩轎", "主力掃單(ILSS)", "土洋對作", "超強勢", "突破30週", "創季高", "創月高", "強勢多頭", "波段黑馬", "假跌破"],
+    "🔥 趨勢型態": ["ST轉多", "30W黏貼", "30W甩轎", "主力掃單(ILSS)", "土洋對作", "超強勢", "突破30週", "創季高", "創月高", "強勢多頭", "波段黑馬", "假跌破"],
     "📉 整理型態": ["極度壓縮", "波動壓縮", "盤整5日", "盤整10日", "盤整20日", "盤整60日", "Vix反轉"],
     "💰 籌碼支撐": ["投信認養", "散戶退場", "回測季線", "回測年線"]
 }
 
 TAG_TOOLTIPS = {
+    'ST轉多': '近 4 週內週線 SuperTrend 指標由空翻多，觸發波段買進訊號',
     '30W黏貼': 'MA30 走平且股價在均線附近 ±12% 震盪',
     '30W甩轎': 'MA30 向上，股價回測跌破均線並在 10 週內站回',
     '主力掃單(ILSS)': '[嚴格] MA200上 + 假跌破掃單 + 爆量站回 + 營收增 + 融資減',
@@ -312,42 +315,44 @@ class StrategyTableModel(QAbstractTableModel):
     def columnCount(self, parent=None):
         return len(self.visible_cols)
 
+        # 取代 StrategyTableModel 內的 data 函式
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
-        if not index.isValid(): return None
-        col_key = self.visible_cols[index.column()]
-        value = self._df.iloc[index.row()][col_key]
-        if role == Qt.ItemDataRole.UserRole: return value
-        if role == Qt.ItemDataRole.DisplayRole:
-            if isinstance(value, (int, float)):
-                if col_key in ['RS強度', 'pe', 'pbr', '量比', 'eps_q']: return f"{value:.1f}"
-                if 'rev_now' in col_key: return f"{value:,.0f}"
-                if '漲幅' in col_key or 'yield' in col_key or 'width' in col_key or 'yoy' in col_key: return f"{value:.2f}%"
-                if 'sum' in col_key or 'net' in col_key: return f"{value:,.0f}"
-                if 'streak' in col_key: return f"{int(value)}"
-                return f"{value:,.2f}"
-            return str(value)
-        if role == Qt.ItemDataRole.ToolTipRole:
-            if col_key == '強勢特徵' and isinstance(value, str):
-                tags = [t.strip() for t in value.split(',')]
-                tips = [f"• {t}: {TAG_TOOLTIPS.get(t, '')}" for t in tags]
-                return "\n".join(tips)
-            return FULL_COLUMN_SPECS.get(col_key, {}).get('tip', '')
-        if role == Qt.ItemDataRole.ForegroundRole:
-            if isinstance(value, (int, float)):
-                if '漲幅' in col_key or 'sum' in col_key or '買賣超' in col_key or 'yoy' in col_key or 'eps' in col_key or 'streak' in col_key:
-                    if value > 0: return QColor("#FF4444")
-                    if value < 0: return QColor("#00CC00")
-            if col_key == '強勢特徵' and value:
-                if '30W' in str(value): return QColor("#00E5FF")  # 新標籤亮色
-                if 'ILSS' in str(value): return QColor("#FF00FF")
-                if '土洋' in str(value): return QColor("#FFFF00")
+            if not index.isValid(): return None
+            col_key = self.visible_cols[index.column()]
+            value = self._df.iloc[index.row()][col_key]
+            if role == Qt.ItemDataRole.UserRole: return value
+            if role == Qt.ItemDataRole.DisplayRole:
+                if isinstance(value, (int, float)):
+                    if col_key in ['RS強度', 'pe', 'pbr', '量比', 'eps_q']: return f"{value:.1f}"
+                    if 'rev_now' in col_key: return f"{value:,.0f}"
+                    if '漲幅' in col_key or 'yield' in col_key or 'width' in col_key or 'yoy' in col_key: return f"{value:.2f}%"
+                    if 'sum' in col_key or 'net' in col_key: return f"{value:,.0f}"
+                    if 'streak' in col_key or 'offset' in col_key: return f"{int(value)}"
+                    return f"{value:,.2f}"
+                return str(value)
+            if role == Qt.ItemDataRole.ToolTipRole:
+                if col_key == '強勢特徵' and isinstance(value, str):
+                    tags = [t.strip() for t in value.split(',')]
+                    tips = [f"• {t}: {TAG_TOOLTIPS.get(t, '')}" for t in tags]
+                    return "\n".join(tips)
+                return FULL_COLUMN_SPECS.get(col_key, {}).get('tip', '')
+            if role == Qt.ItemDataRole.ForegroundRole:
+                if isinstance(value, (int, float)):
+                    if '漲幅' in col_key or 'sum' in col_key or '買賣超' in col_key or 'yoy' in col_key or 'eps' in col_key or 'streak' in col_key:
+                        if value > 0: return QColor("#FF4444")
+                        if value < 0: return QColor("#00CC00")
+                if col_key == '強勢特徵' and value:
+                    if 'ST剛轉多' in str(value): return QColor("#FF3333")
+                    if '30W' in str(value): return QColor("#00E5FF")  # 亮藍色
+                    if 'ILSS' in str(value): return QColor("#FF00FF")  # 紫紅色
+                    if '土洋' in str(value): return QColor("#FFFF00")  # 亮黃色
+                    return QColor("#E0E0E0")
                 return QColor("#E0E0E0")
-            return QColor("#E0E0E0")
-        if role == Qt.ItemDataRole.TextAlignmentRole:
-            if isinstance(value, (int, float)) or col_key == '現價':
-                return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-            return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        return None
+            if role == Qt.ItemDataRole.TextAlignmentRole:
+                if isinstance(value, (int, float)) or col_key == '現價':
+                    return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            return None
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if orientation == Qt.Orientation.Horizontal:
