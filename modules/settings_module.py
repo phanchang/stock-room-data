@@ -575,29 +575,59 @@ class SettingsModule(QWidget):
         self.btn_download_zip.setText("🔄 重新檢查雲端")
 
     def run_full_update_local(self):
-        self.log("🚀 本機更新開始...", True)
+        """【工作流 B：本機全面更新】第 1 棒 - 更新 K 線"""
+        self.log("🚀 本機更新開始 (1/3): 下載最新 K 線...", True)
+        self.btn_force_local.setEnabled(False)  # 防止重複點擊
+        self.progress.setValue(0)
+        self.progress.setFormat("⏳ 正在更新 K 線資料...")
+
         self.runner = ScriptRunner(self.project_root / "scripts" / "init_cache_tw.py", ["--auto", "--force"])
+        self.runner.output_signal.connect(self.log)
+        # 執行完畢後，不再直接跳去算策略，而是接力給第 2 棒：抓籌碼
+        self.runner.finished.connect(self.run_update_chips_revenue)
+        self.runner.start_script()
+
+    def run_update_chips_revenue(self):
+        """【新增的管線中繼站】第 2 棒 - 更新籌碼營收底稿"""
+        self.log("📊 K線更新完成。開始抓取籌碼與營收 (2/3)...", False)
+        self.progress.setFormat("⏳ 正在產生籌碼營收底稿 (CSV)...")
+
+        self.runner = ScriptRunner(self.project_root / "scripts" / "update_chips_revenue.py")
+        self.runner.output_signal.connect(self.log)
+        # 籌碼底稿產生完畢後，接力給第 3 棒：計算策略因子
         self.runner.finished.connect(self.save_and_recalc)
         self.runner.start_script()
 
     def save_and_recalc(self):
+        """【工作流 C：微調重算】第 3 棒 - 計算技術因子"""
         if not self.save_config(): return
-        self.log("正在計算策略...", True)
-        self.progress.setValue(0)  # 重置進度條
+
+        # 🔥 [防呆機制] 解決過年期間的痛點：缺少籌碼底稿自動補救
+        raw_path = self.project_root / "data" / "temp" / "chips_revenue_raw.csv"
+        if not raw_path.exists():
+            self.log("⚠️ 偵測到缺少籌碼底稿 (chips_revenue_raw.csv)，自動啟動補抓程序...")
+            # 中斷目前的因子計算，交給第二棒去跑，跑完它會自動再呼叫一次本函數
+            self.run_update_chips_revenue()
+            return
+
+        self.log("⚙️ 正在計算技術與籌碼因子 (3/3)...", False)
+        self.progress.setValue(0)
+        self.progress.setFormat("⏳ 正在計算策略...")
 
         self.runner = ScriptRunner(self.project_root / "scripts" / "calc_snapshot_factors.py")
         self.runner.output_signal.connect(self.log)
-        self.runner.progress_signal.connect(self.progress.setValue)  # 連接進度訊號
+        self.runner.progress_signal.connect(self.progress.setValue)
 
-        # 運算完成後，更新時間標籤
         self.runner.finished.connect(self.on_recalc_finished)
         self.runner.start_script()
 
     def on_recalc_finished(self):
+        """運算完成的收尾動作"""
         self.log("✅ 運算完成！")
         self.progress.setValue(100)
-        self.check_strategy_time()  # 更新右上角時間
-
+        self.progress.setFormat("✅ 策略快照已更新")
+        self.check_strategy_time()
+        self.btn_force_local.setEnabled(True)  # 恢復按鈕狀態
     def log(self, t, clear=False):
         if clear: self.log_output.clear()
         self.log_output.append(t.strip())

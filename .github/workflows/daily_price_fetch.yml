@@ -1,7 +1,10 @@
 name: Daily Price & Strategy
 on:
   schedule:
-    - cron: '30 7 * * 1-5' # 台北 15:30
+    # 方案二：一日兩更
+    # UTC 07:30 = 台北 15:30 (先看 K線與法人土洋對作)
+    # UTC 14:30 = 台北 22:30 (補齊融資融券，取得完整全貌)
+    - cron: '30 7,14 * * 1-5'
   workflow_dispatch:
 
 permissions:
@@ -23,11 +26,21 @@ jobs:
 
       - name: Prepare & Run Strategy
         run: |
+          # 建立必要的資料夾結構
           mkdir -p data/cache/tw
           mkdir -p data/indicators
-          # 執行下載與運算
+          mkdir -p data/temp
+          mkdir -p data/strategy_results
+          
+          # 完整的工作流管線 (Pipeline) 三部曲
+          echo "1. 執行下載與運算 K 線..."
           python scripts/init_cache_tw.py --auto --force
-          python scripts/daily_strategy_runner.py
+          
+          echo "2. 抓取籌碼、營收與財報底稿 (解決你過年遇到的空資料問題)..."
+          python scripts/update_chips_revenue.py
+          
+          echo "3. 執行策略運算產出快照..."
+          python scripts/calc_snapshot_factors.py
 
       - name: Zip Results (The Smart Way)
         run: |
@@ -35,13 +48,10 @@ jobs:
           # 1. 產生狀態檔 (給 App 檢查用)
           echo "{\"update_time\": \"$(TZ='Asia/Taipei' date +'%Y-%m-%d %H:%M')\", \"source\": \"github_actions\"}" > data/data_status.json
           
-          # 2. 壓縮 (只打包 cache 和 indicators，排除 git 檔)
-          # -r: 遞迴, -j: 不保留最外層目錄結構(視需求), 這裡建議保留 data/cache 結構方便解壓
-          # 注意：我們先進到 data 目錄再壓縮，這樣解壓時路徑比較乾淨
+          # 2. 壓縮 (加入 temp 底稿與 strategy_results 快照)
           cd data
-          zip -r daily_data.zip cache/tw indicators stock_list.csv data_status.json
+          zip -r daily_data.zip cache/tw indicators temp strategy_results stock_list.csv data_status.json
           
-          # 3. 移動 zip 到根目錄準備 commit (或者留在 data 裡也可以，這邊預設放在 data/)
           echo "打包完成: data/daily_data.zip"
 
       - name: Commit Zip Only
@@ -49,16 +59,17 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # ⚠️ 關鍵：先移除舊的散亂檔案 (如果之前有 commit 過的話)
-          # 這邊用 git rm -r --cached 讓 git 不再追蹤那些資料夾，但實體檔案還在
+          # 清除散亂的快取檔案追蹤
           git rm -r --cached data/cache/tw || true
           git rm -r --cached data/indicators || true
+          git rm -r --cached data/temp || true
+          git rm -r --cached data/strategy_results || true
           
           # 只加入 ZIP 和 JSON
           git add -f data/daily_data.zip
           git add -f data/data_status.json
           
-          git commit -m "Auto: Cloud Strategy Update ($(date +'%Y-%m-%d'))" || echo "No changes"
+          git commit -m "Auto: Cloud Strategy Update ($(date +'%Y-%m-%d %H:%M'))" || echo "No changes"
           
           git pull --rebase -X theirs origin main
           git push origin main
