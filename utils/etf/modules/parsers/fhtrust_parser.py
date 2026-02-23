@@ -27,6 +27,7 @@ class FHTrustParser:
         """
         解析單個 Excel，回傳標準欄位 DataFrame
         標準欄位: stock_code, stock_name, shares, weight, date
+        修正：加入資料去重與轉型防呆
         """
         # 1️⃣ 先讀 Excel（header=None，找真正標題行）
         df_raw = pd.read_excel(file_path, header=None)
@@ -52,13 +53,17 @@ class FHTrustParser:
 
         df.columns = ['stock_code', 'stock_name', 'shares', 'weight']
 
-        # 5️⃣ 數字欄位清理
-        df['shares'] = df['shares'].astype(str).str.replace(',', '').astype(int)
-        df['weight'] = df['weight'].astype(str).str.replace('%', '').astype(float)
+        # 5️⃣ 數字欄位清理 (修正：增加 float 轉換以應對可能的小數點格式)
+        df['shares'] = df['shares'].astype(str).str.replace(',', '', regex=False).astype(float).astype(int)
+        df['weight'] = df['weight'].astype(str).str.replace('%', '', regex=False).astype(float)
 
         # 6️⃣ 加日期欄（從檔名抽取）
-        date_str = file_path.stem  # 例如 '2025_12_22'
+        date_str = file_path.stem  # 例如 '2026_02_11'
         df['date'] = date_str.replace('_', '-')
+
+        # ✨ 7️⃣ 防呆：確保同一份檔案內沒有重複的代碼，並移除可能的空白行
+        df = df.dropna(subset=['stock_code'])
+        df = df.drop_duplicates(subset=['stock_code', 'date'], keep='last')
 
         return df
 

@@ -114,13 +114,7 @@ class EZMoneyScraper:
     def fetch_and_save(self):
         """
         抓取並儲存
-
-        邏輯說明:
-        1. 抓取資料（EZMONEY 只能抓到最新資料，無法指定日期）
-        2. 檢查抓到的資料日期是否已存在
-        3. 如果不存在則儲存
-        4. 如果抓到的是今天的資料，視為成功
-        5. 如果抓到的是舊資料但成功儲存，也視為部分成功
+        修正 Bug: 嚴格比對資料內部的 data_date，防止假日抓到舊資料卻重複儲存
         """
         now = datetime.now()
         today_str = now.strftime('%Y-%m-%d')
@@ -139,7 +133,10 @@ class EZMoneyScraper:
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [統一投信] 無法取得資料日期")
             return False
 
-        # 檢查抓到的資料日期檔案是否已存在
+        # --- Bug 修正：統一日期格式為 YYYY-MM-DD 以利比對 ---
+        data_date = pd.to_datetime(data_date).strftime('%Y-%m-%d')
+
+        # 檢查抓到的資料日期檔案是否已存在 (依據資料內容日期判斷)
         if self.file_exists(data_date):
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [統一投信] 資料已存在: {data_date}")
 
@@ -148,12 +145,13 @@ class EZMoneyScraper:
                 print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [統一投信] 今日資料已是最新 ✅")
                 return True
             else:
-                # 抓到的是舊資料且已存在，持續等待今日資料
-                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [統一投信] 尚未更新到今日資料，等待重試")
+                # 抓到的是舊資料（例如假日時抓到前一天的資料）且已存在
+                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [統一投信] 伺服器尚未更新到今日資料，目前仍為 {data_date}")
                 return False
 
         # 檔案不存在，儲存資料
         try:
+            # save_to_excel 內部應使用 data_date 作為檔名 (如 2026_02_11.xlsx)
             saved_path = self.save_to_excel(nav_info, holdings, data_date)
 
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [統一投信] 成功儲存資料")
@@ -167,8 +165,9 @@ class EZMoneyScraper:
                 print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [統一投信] ✅ 今日資料已取得")
                 return True
             else:
-                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [統一投信] ⚠️ 已儲存 {data_date} 資料，但尚未更新到今日")
-                return False  # 雖然儲存成功，但不是今天的資料，視為需要重試
+                print(
+                    f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [統一投信] ⚠️ 已補儲存 {data_date} 資料，但伺服器尚未更新今日資料")
+                return False
 
         except Exception as e:
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [統一投信] 儲存失敗: {e}")

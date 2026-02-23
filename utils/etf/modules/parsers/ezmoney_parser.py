@@ -26,6 +26,7 @@ class EZMoneyParser:
         """
         解析單個 Excel（只讀「持股明細」分頁）
         回傳標準欄位 DataFrame
+        修正 Bug: 比對 Excel 內部日期與檔名日期，若不符則視為重複資料剔除
         """
         # 1️⃣ 讀取「持股明細」分頁
         try:
@@ -64,6 +65,7 @@ class EZMoneyParser:
             df["shares"]
             .astype(str)
             .str.replace(",", "", regex=False)
+            .astype(float)  # 先轉 float 以處理 1445000.0 這種字串
             .astype(int)
         )
 
@@ -74,11 +76,23 @@ class EZMoneyParser:
             .astype(float)
         )
 
-        # 5️⃣ 日期格式統一
+        # 5️⃣ 日期格式統一與校驗 Bug 修正
         df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
 
-        return df
+        # ✨ Bug 修正核心：檢查內部日期與檔案名稱日期是否一致
+        # 檔名可能是 2026_02_12.xlsx，轉換為 2026-02-12
+        file_date_str = file_path.stem.replace('_', '-')
+        internal_date_str = df["date"].iloc[0]
 
+        if internal_date_str != file_date_str:
+            # 如果日期不符（例如 2/12 檔案內寫的是 2/11 資料），回傳空表不予解析
+            print(f"⚠️  排除重複資料: {file_path.name} (內部日期 {internal_date_str} 與檔名不符)")
+            return pd.DataFrame(columns=['stock_code', 'stock_name', 'shares', 'weight', 'date'])
+
+        # 6️⃣ 確保資料不重複 (雙重保險)
+        df = df.drop_duplicates(subset=['stock_code', 'date'], keep='last')
+
+        return df
     def parse_all_files(self):
         """解析所有檔案並輸出 CSV"""
         # 1️⃣ 防呆：RAW_DIR 必須存在
@@ -107,6 +121,8 @@ class EZMoneyParser:
 
         # 4️⃣ 合併 DataFrame
         result = pd.concat(all_rows, ignore_index=True)
+        # ✨ 新增防呆：確保同日期、同代碼的股票只會出現一筆（保留最後一筆）
+        result = result.drop_duplicates(subset=['date', 'stock_code'], keep='last')
 
         # 5️⃣ 排序（日期 + 權重）
         result = result.sort_values(
