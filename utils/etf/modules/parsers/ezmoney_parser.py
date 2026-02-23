@@ -76,23 +76,23 @@ class EZMoneyParser:
             .astype(float)
         )
 
-        # 5️⃣ 日期格式統一與校驗 Bug 修正
+        # 5️⃣ 日期格式統一
         df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
 
-        # ✨ Bug 修正核心：檢查內部日期與檔案名稱日期是否一致
-        # 檔名可能是 2026_02_12.xlsx，轉換為 2026-02-12
+        # 👇 ----- 修改這裡：移除嚴格比對，改為單純印出提示即可 ----- 👇
         file_date_str = file_path.stem.replace('_', '-')
         internal_date_str = df["date"].iloc[0]
 
         if internal_date_str != file_date_str:
-            # 如果日期不符（例如 2/12 檔案內寫的是 2/11 資料），回傳空表不予解析
-            print(f"⚠️  排除重複資料: {file_path.name} (內部日期 {internal_date_str} 與檔名不符)")
-            return pd.DataFrame(columns=['stock_code', 'stock_name', 'shares', 'weight', 'date'])
+            print(f"💡 提示: {file_path.name} 淨值更新日與持股交易日({internal_date_str})不同，以持股交易日為主。")
+            # 不要 return 空表，讓程式繼續往下跑
+        # 👆 -------------------------------------------------------- 👆
 
-        # 6️⃣ 確保資料不重複 (雙重保險)
+        # 6️⃣ 確保單一檔案內資料不重複
         df = df.drop_duplicates(subset=['stock_code', 'date'], keep='last')
 
         return df
+
     def parse_all_files(self):
         """解析所有檔案並輸出 CSV"""
         # 1️⃣ 防呆：RAW_DIR 必須存在
@@ -139,14 +139,25 @@ class EZMoneyParser:
 
 
 # 保留原本的執行方式
+# 保留原本的執行方式
 def run():
-    """向下相容：舊的執行方式"""
-    BASE_DIR = Path(__file__).resolve().parents[3]  # 調整為專案根目錄
-    raw_dir = BASE_DIR / "戰情室" / "data" / "raw" / "ezmoney" / "00981A"
-    clean_dir = BASE_DIR / "戰情室" / "data" / "clean" / "ezmoney"
+    """向下相容：舊的執行方式，加入自動尋找根目錄防呆"""
+    current_path = Path(__file__).resolve()
+
+    # 自動往上層尋找，直到找到包含 'data' 目錄的那一層 (也就是 StockWarRoomV3)
+    BASE_DIR = current_path
+    for parent in current_path.parents:
+        if (parent / "data").exists():
+            BASE_DIR = parent
+            break
+
+    # 正確的路徑：直接接 data/raw/... (移除幽靈的 "戰情室" 目錄)
+    raw_dir = BASE_DIR / "data" / "raw" / "ezmoney" / "00981A"
+    clean_dir = BASE_DIR / "data" / "clean" / "ezmoney"
 
     parser = EZMoneyParser(raw_dir, clean_dir)
     parser.parse_all_files()
+
 
 
 if __name__ == "__main__":

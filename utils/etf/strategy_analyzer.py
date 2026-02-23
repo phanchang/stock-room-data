@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import sys
-import os
 from datetime import datetime
 
 # ==================================================
@@ -15,15 +14,42 @@ if str(project_root) not in sys.path:
 
 
 class StrategyAnalyzer:
-    """主動式 ETF 策略分析器：整合多投信籌碼動向"""
+    """主動式 ETF 策略分析器：雙榜單系統 (重金押寶榜 vs 潛伏偷買榜)"""
 
     def __init__(self):
         self.clean_dir = project_root / "data" / "clean"
+        self.cache_dir = project_root / "data" / "cache" / "tw"
         self.all_data = []
-        self.latest_report_dates = {}
+        self.stock_market_map = {}
+        self.latest_report_date = None
+
+        self.load_market_info()
+
+    def load_market_info(self):
+        csv_path = project_root / "data" / "stock_list.csv"
+        if csv_path.exists():
+            try:
+                for enc in ['utf-8', 'utf-8-sig', 'big5']:
+                    try:
+                        df = pd.read_csv(csv_path, dtype=str, encoding=enc)
+                        df.columns = [c.lower().strip() for c in df.columns]
+                        code_col = next((col for col in ['stock_id', 'code', 'id'] if col in df.columns), None)
+
+                        if code_col and 'market' in df.columns:
+                            for _, row in df.iterrows():
+                                sid = str(row[code_col]).strip()
+                                market = str(row['market']).strip().upper()
+                                self.stock_market_map[sid] = market
+                            break
+                    except:
+                        continue
+            except Exception as e:
+                print(f"❌ 讀取市場資訊失敗: {e}")
+
+    def get_market_suffix(self, stock_id):
+        return self.stock_market_map.get(str(stock_id), "TW")
 
     def load_all_clean_data(self):
-        """動態掃描 data/clean 下所有投信的 CSV 檔案並標準化"""
         print(f"🔍 正在掃描資料夾: {self.clean_dir}")
         for csv_file in self.clean_dir.rglob("*.csv"):
             if csv_file.name.startswith("._") or "stock_list" in csv_file.name:
@@ -32,163 +58,219 @@ class StrategyAnalyzer:
                 df = pd.read_csv(csv_file)
                 df['date'] = pd.to_datetime(df['date'])
                 id_col = 'stock_code' if 'stock_code' in df.columns else 'stock_id'
-                df = df.drop_duplicates(subset=['date', id_col], keep='last')
 
-                # 欄位別名處理
-                df = df.rename(columns={
-                    'stock_code': 'stock_id',
-                    'code': 'stock_id',
-                    'stock_name': 'name'
-                })
-
+                df = df.rename(columns={id_col: 'stock_id', 'stock_name': 'name'})
                 df['stock_id'] = df['stock_id'].astype(str)
-                # 標記來源 e.g., capitalfund_00982A
-                source_tag = f"{csv_file.parent.name}_{csv_file.stem}"
-                df['etf_source'] = source_tag
+                df['etf_source'] = f"{csv_file.parent.name}_{csv_file.stem}"
+
+                for col in ['shares', 'weight']:
+                    if col in df.columns and df[col].dtype == 'object':
+                        df[col] = df[col].astype(str).str.replace(',', '').str.replace('%', '')
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
 
                 self.all_data.append(df)
             except Exception as e:
-                print(f"⚠️ 讀取檔案 {csv_file.name} 發生錯誤: {e}")
+                pass
 
-    def get_individual_diffs(self):
-        """針對每檔 ETF 獨立計算其最後兩個交易日的增減"""
-        all_diffs = []
+    def analyze_dual_leaderboards(self):
+        """計算雙榜單所需的所有歷史與價格特徵"""
+        if not self.all_data: return pd.DataFrame()
 
-        for df in self.all_data:
-            source = df['etf_source'].iloc[0]
-            dates = sorted(df['date'].unique())
+        combined_df = pd.concat(self.all_data, ignore_index=True)
+        daily_summary = combined_df.groupby(['date', 'stock_id', 'name'])['shares'].sum().reset_index()
 
-            if len(dates) < 2:
-                print(f"ℹ️ {source} 資料天數不足，跳過比對")
-                continue
+        dates = sorted(daily_summary['date'].unique())
+        if len(dates) < 5:
+            print("⚠️ 歷史資料過少，無法分析。")
+            return pd.DataFrame()
 
-            latest_t = dates[-1]
-            prev_t = dates[-2]
-            self.latest_report_dates[source] = latest_t.strftime('%Y-%m-%d')
+        self.latest_report_date = dates[-1].strftime('%Y-%m-%d')
 
-            # 提取最新與前一次資料
-            df_now = df[df['date'] == latest_t].copy()
-            df_prev = df[df['date'] == prev_t].copy()
+        t_now = dates[-1]
+        t_5 = dates[-5] if len(dates) >= 5 else dates[0]
+        t_20 = dates[-20] if len(dates) >= 20 else dates[0]
+        t_60 = dates[-60] if len(dates) >= 60 else dates[0]
 
-            # 合併比對
-            merged = pd.merge(
-                df_now, df_prev,
-                on=['stock_id', 'name', 'etf_source'],
-                how='outer',
-                suffixes=('_now', '_prev')
-            ).fillna(0)
+        analysis_results = []
+        stocks = daily_summary['stock_id'].unique()
 
-            # 計算股數變動
-            merged['shares_diff'] = merged['shares_now'] - merged['shares_prev']
+        print(f"📈 啟動雙榜單籌碼追蹤引擎...")
 
-            # 💡 關鍵：過濾掉沒有變動的，以及賣出的（我們專注於買入共識）
-            merged = merged[merged['shares_diff'] > 0]
+        for stock_id in stocks:
+            stock_data = daily_summary[daily_summary['stock_id'] == stock_id].sort_values('date')
+            name = stock_data['name'].iloc[0]
 
-            # 標記是否為「新進榜」
-            merged['action'] = np.where(merged['shares_prev'] == 0, "🆕新買入", "📈增持")
+            def get_shares(t_date):
+                return stock_data[stock_data['date'] == t_date]['shares'].sum() if t_date in stock_data[
+                    'date'].values else 0
 
-            all_diffs.append(merged)
+            shares_now = get_shares(t_now)
+            shares_5d_ago = get_shares(t_5)
+            shares_20d_ago = get_shares(t_20)
+            shares_60d_ago = get_shares(t_60)
 
-        return pd.concat(all_diffs, ignore_index=True) if all_diffs else pd.DataFrame()
+            diff_5d = shares_now - shares_5d_ago
+            diff_20d = shares_now - shares_20d_ago
+            diff_60d = shares_now - shares_60d_ago
 
-    def generate_ai_prompt(self, diff_df):
-            """產出餵給 Gemini 的深度分析 Prompt (強化客觀、全面與查證紀律)"""
+            # 條件過濾：我們只看「近5天有在買」的活水股
+            if diff_5d <= 0: continue
 
-            # 1. 處理共識標的 (Consensus)
-            consensus = diff_df.groupby(['stock_id', 'name']).agg({
-                'etf_source': 'count',
-                'shares_diff': 'sum',
-                'weight_now': 'mean',
-                'action': lambda x: "/".join(set(x))
-            }).rename(columns={'etf_source': '投信家數', 'shares_diff': '總加碼股數',
-                               'weight_now': '平均權重(%)'}).sort_values('投信家數', ascending=False)
+            market = self.get_market_suffix(stock_id)
+            price_path = self.cache_dir / f"{stock_id}_{market}.parquet"
 
-            consensus_table = consensus[consensus['投信家數'] > 1].reset_index()
+            current_price = 0
+            estimated_cost_60d = 0
+            net_buy_value_60d = 0
 
-            # 2. 處理黑馬標的 (Top Buys)
-            dark_horses = diff_df.sort_values('shares_diff', ascending=False).head(15)
-            # 欄位中文化與美化
-            dark_horses_table = dark_horses[
-                ['stock_id', 'name', 'etf_source', 'action', 'shares_diff', 'weight_now']].rename(
-                columns={
-                    'stock_id': '代號', 'name': '名稱', 'etf_source': 'ETF來源',
-                    'action': '動作', 'shares_diff': '加碼股數', 'weight_now': '當前權重(%)'
-                }
-            )
+            if price_path.exists():
+                try:
+                    price_df = pd.read_parquet(price_path)
+                    price_df.columns = [c.capitalize() for c in price_df.columns]
+                    price_df.index = pd.to_datetime(price_df.index).tz_localize(None)
 
-            # 3. 組裝日期 Metadata
-            date_meta = "\n".join([f"- {k}: {v}" for k, v in self.latest_report_dates.items()])
+                    if not price_df.empty:
+                        current_price = price_df.iloc[-1]['Close']
 
-            # 4. 建立 Markdown (導入強格式與嚴格查證指令)
-            prompt = f"""# 📅 台股主動式 ETF 籌碼交叉戰情報表
+                        stock_data_60 = stock_data[stock_data['date'] >= t_60].copy()
+                        stock_data_60['share_change'] = stock_data_60['shares'].diff().fillna(0)
 
-    ## 📊 第一階段：量化數據基準 (客觀事實)
-    **資料庫基準日：**
-    {date_meta}
+                        total_buy_cost = 0
+                        total_buy_shares = 0
 
-    ### 🎯 投信高度共識標的 (多檔 ETF 同步增持)
-    > 說明：下表為跨家投信同時買入的個股。共識度越高，代表法人資金匯聚的客觀事實。
-    {consensus_table.to_markdown(index=False) if not consensus_table.empty else "今日暫無多家共識標的。"}
+                        for _, row in stock_data_60.iterrows():
+                            if row['share_change'] > 0:
+                                p_date = row['date']
+                                if p_date in price_df.index:
+                                    daily_price = price_df.loc[p_date, 'Close']
+                                else:
+                                    nearest_idx = price_df.index.get_indexer([p_date], method='nearest')[0]
+                                    daily_price = price_df.iloc[nearest_idx]['Close']
 
-    ### 🚀 單一投信顯著加碼/新進榜黑馬 (Top 15)
-    > 說明：下表為各家 ETF 單日加碼張數最顯著的標的。
-    {dark_horses_table.to_markdown(index=False) if not dark_horses_table.empty else "無明顯加碼標的。"}
+                                total_buy_cost += (row['share_change'] * daily_price)
+                                total_buy_shares += row['share_change']
 
-    ---
+                        if total_buy_shares > 0:
+                            estimated_cost_60d = total_buy_cost / total_buy_shares
+                            net_buy_value_60d = total_buy_cost / 10000
 
-    ## 🤖 第二階段：AI 深度研究與客觀分析指令
+                except Exception:
+                    pass
 
-    你是一位具備 20 年經驗的台股量化與基本面操盤手。請基於上方【第一階段】的客觀籌碼數據，執行以下分析任務。
+            analysis_results.append({
+                '代號': stock_id,
+                '名稱': name,
+                '當前股數': shares_now,
+                '20日前股數': shares_20d_ago,
+                '近5日增減': diff_5d,
+                '近20日增減': diff_20d,
+                '一季耗資(萬)': round(net_buy_value_60d, 0),
+                '最新收盤價': current_price,
+                '投信季成本': round(estimated_cost_60d, 2)
+            })
 
-    ⚠️ 【最高指導原則：絕對客觀與真實】⚠️
-    1. 引用數據做推理與研究「必須」使用 Google search 進行多方來源交叉查證。
-    2. 絕不允許自己產生、捏造或猜測真實數據。
-    3. 引用任何數據做呈現或計算，必須在該段落明確附上「來源網站與資料出處」。
+        result_df = pd.DataFrame(analysis_results)
+        if result_df.empty: return result_df
 
-    ### 🔍 任務 1：資金板塊與產業綜觀 (Macroscopic View)
-    請客觀觀察上方的「共識標的」與「黑馬標的」，歸納出目前投信資金正在流向哪些「具體產業」或「概念板塊」（例如：AI 伺服器、網通、低基期傳產等）。
-    * **要求**：請用 1-2 段話精要總結目前的資金輪廓，不可過度發散，僅針對有出現在上方表格的標的進行產業分類歸納。
+        result_df['乖離(%)'] = np.where(result_df['投信季成本'] > 0,
+                                        ((result_df['最新收盤價'] - result_df['投信季成本']) / result_df[
+                                            '投信季成本'] * 100), 0)
+        result_df['乖離(%)'] = result_df['乖離(%)'].round(2)
 
-    ### 🕵️‍♂️ 任務 2：重點標的基本面與事件查證 (Fact-Checking)
-    針對「共識標的」清單，以及「黑馬標的」中加碼最顯著的前三名個股，強制使用 Google 搜尋查證近一週內的重大事件。
-    * **輸出格式要求**：請以「表格」呈現查證結果，必須包含以下欄位：
-      | 股票名稱 | 近期催化劑 (法說會/營收/財報等客觀事實) | 法人/外資動態新聞 | 資料來源 (必須附上 URL 或明確的媒體來源) |
+        return result_df
 
-    ### 🎯 任務 3：明日客觀交易觀察清單 (Actionable & Predictable)
-    綜合「籌碼共識數據」與「任務 2 的網路查證事實」，客觀篩選出明早開盤最值得關注的 3 檔股票。
-    * **輸出格式要求**：請嚴格依照以下格式條列，確保每次輸出的可預測性。
-      1. **[股票代號/名稱]**
-         * **籌碼面客觀事實**：(如：2家投信共識買入，或單一投信大買 XX 股)
-         * **基本面/消息面支撐**：(引用任務 2 查證到的事實，並附註來源)
-         * **技術面/型態觀察點**：(若能搜尋到近期股價位階或法人目標價，請客觀列出；若無則寫「無特殊資訊」)
-    """
-            return prompt
+    def generate_ai_prompt(self, df):
+        """產出雙榜單與防幻覺查證指令的 AI Prompt"""
+
+        # ==========================================
+        # 榜單 A：重金押寶榜 (依耗資金額排序 Top 15)
+        # ==========================================
+        list_a = df.sort_values('一季耗資(萬)', ascending=False).head(15).copy()
+        # 格式化顯示
+        list_a['當前股數'] = list_a['當前股數'].apply(lambda x: f"{x:,}")
+        list_a_view = list_a[
+            ['代號', '名稱', '當前股數', '近5日增減', '近20日增減', '一季耗資(萬)', '投信季成本', '乖離(%)']]
+
+        # ==========================================
+        # 榜單 B：潛伏偷買榜 (過濾掉 List A，找出 20 日前無庫存，或近期才開始買的標的)
+        # ==========================================
+        exclude_ids = list_a['代號'].tolist()
+        list_b_candidates = df[~df['代號'].isin(exclude_ids)].copy()
+
+        # 條件：20 日前庫存為 0 (從無到有)，且近 5 日有買進。或是近 5 日買超佔了近 20 日絕大比例。
+        stealth_mask = (list_b_candidates['20日前股數'] == 0) | (
+                    list_b_candidates['近5日增減'] == list_b_candidates['近20日增減'])
+        list_b = list_b_candidates[stealth_mask].sort_values('近5日增減', ascending=False).head(15)
+
+        list_b['當前股數'] = list_b['當前股數'].apply(lambda x: f"{x:,}")
+        list_b_view = list_b[
+            ['代號', '名稱', '當前股數', '近5日增減', '近20日增減', '一季耗資(萬)', '投信季成本', '乖離(%)']]
+
+        prompt = f"""# 📅 台股主動式 ETF 【雙榜單】籌碼戰情報表
+
+## 📊 第一階段：量化數據基準
+**資料庫基準日：** {self.latest_report_date}
+
+### 🏆 榜單 A：重金押寶榜 (Top 15 主力資金流向)
+> 說明：投信近一季砸下最多「絕對金額」的核心標的。請藉此觀察大盤的主流產業與資金聚落。
+{list_a_view.to_markdown(index=False) if not list_a_view.empty else "無符合條件標的"}
+
+### 🥷 榜單 B：破蛋潛伏偷買榜 (Top 15 零到一黑馬)
+> 說明：這些標的絕對金額不大，但特徵是「過去 20 天沒買，最近 5 天突然連續買進 / 從零建倉」。這通常是法人掌握了未公開的資訊落差，正在左側默默吃貨。
+{list_b_view.to_markdown(index=False) if not list_b_view.empty else "無符合條件標的"}
+
+---
+
+## 🤖 第二階段：AI 操盤手深度推斷與【強制多方查證指令】
+
+你是一位具備 20 年經驗的台股量化與基本面操盤手。請基於上方雙榜單執行分析。
+
+⚠️ 【最高指導原則：絕對客觀與真實】⚠️
+1. 引用數據做推理與研究「必須」使用 Google search 進行多方來源交叉查證。
+2. 絕不允許自己產生、捏造或猜測真實數據。
+3. 引用任何數據做呈現或計算，必須在該段落明確附上「來源網站與資料出處」。
+
+### 🔍 任務 1：主流板塊 vs 潛伏板塊對比分析
+* 觀察【榜單 A】，目前投信重兵集結在哪 1~2 個產業？
+* 觀察【榜單 B】，投信正在偷偷佈局哪些「冷門」或「低基期」產業？這是否暗示資金有高低位階轉換的跡象？
+
+### 🕵️‍♂️ 任務 2：雙榜單核心標的客觀事實查證 (Fact-Checking)
+請從【榜單 A】挑選 2 檔，從【榜單 B】挑選 2 檔，**強制使用 Google 搜尋查證**近一個月內的重大事件（營收、法說會、外資報告等）。
+* **特別防呆指令**：對於【榜單 B】的潛伏股，**如果你查不到任何近期利多新聞，請直接在表格中寫明「經多方查證，無近期相關新聞發布」**。這是非常重要的客觀事實，代表該股正處於「無聲建倉期」，絕對禁止捏造利多！
+* **輸出格式要求**：(請以 Markdown 表格呈現)
+  | 所屬榜單 | 股票名稱 | 近期真實催化劑 (查無新聞請誠實填寫) | 資料來源 (必須附上 URL 或媒體名稱) |
+
+### 🎯 任務 3：明日實戰交易清單推斷 (Actionable Plan)
+基於法人籌碼節奏與你的客觀查證，挑選出 3 檔最值得列入明日觀察名單的股票。
+* **推薦邏輯**：
+  - 若推薦【榜單 A】標的：需說明其趨勢動能，並評估目前的「乖離率」是否有追高風險。
+  - 若推薦【榜單 B】標的：需說明為何在「沒有明顯新聞」的情況下，投信的「從零建倉」行為值得跟隨（例如：下檔具備投信成本保護，勝率極高）。
+* 請依序條列這 3 檔，並再次附上支撐你論點的資料出處。
+"""
+        return prompt
 
     def run(self):
-        print(f"=== 戰情室分析系統啟動: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
+        print(f"=== 戰情室雙榜單分析系統啟動: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
 
         self.load_all_clean_data()
-        if not self.all_data:
-            print("❌ 錯誤：找不到任何 clean 資料，請先執行爬蟲與 Parser。")
-            return
+        result_df = self.analyze_dual_leaderboards()
 
-        diff_df = self.get_individual_diffs()
+        if not result_df.empty:
+            prompt = self.generate_ai_prompt(result_df)
 
-        if not diff_df.empty:
-            prompt = self.generate_ai_prompt(diff_df)
-
-            # 儲存到 data 資料夾
             output_path = project_root / "data" / "daily_ai_prompt.txt"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(prompt)
 
-            print(f"\n✅ 分析報表產出成功！")
+            print(f"\n✅ 雙榜單深度分析報表產出成功！")
             print(f"📍 檔案位置: {output_path}")
             print("-" * 50)
-            print("💡 操作提示：請將檔案內容貼給 Gemini 1.5 或 2.0 Pro，讓它開始執行網路查證與研報撰寫。")
+            print("💡 提示：現在 AI 能夠明確區分「重金動能股」與「無聲潛伏股」了，快貼給 Gemini 測試看看！")
             print("-" * 50)
         else:
-            print("⚠️ 警告：計算後無任何股數變動資料（可能今日各投信皆未更新股數）。")
+            print("⚠️ 警告：無法計算出波段數據。")
 
 
 if __name__ == "__main__":
