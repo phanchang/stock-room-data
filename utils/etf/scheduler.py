@@ -1,8 +1,7 @@
 from datetime import datetime, timedelta
 import time
 import os
-from parse import parse_specific as parse_data
-
+from utils.etf.parse import parse_specific as parse_data
 
 class ETFScheduler:
     def __init__(self, scrapers_config, base_dir, proxy, retry_interval=30, max_retry_until="23:59",
@@ -36,7 +35,8 @@ class ETFScheduler:
         if not os.path.exists(save_dir):
             return None
 
-        files = [f for f in os.listdir(save_dir) if f.endswith(('.xlsx', '.xls'))]
+        #files = [f for f in os.listdir(save_dir) if f.endswith(('.xlsx', '.xls'))]
+        files = [f for f in os.listdir(save_dir) if f.endswith(('.xlsx', '.xls', '.json'))]
         if not files:
             return None
 
@@ -139,8 +139,11 @@ class ETFScheduler:
             scraper_class = config['class']
 
             # 記錄補齊前的檔案數
-            files_before = len([f for f in os.listdir(save_dir)
-                                if f.endswith(('.xlsx', '.xls'))]) if os.path.exists(save_dir) else 0
+            #files_before = len([f for f in os.listdir(save_dir)
+            #                    if f.endswith(('.xlsx', '.xls'))]) if os.path.exists(save_dir) else 0
+            files_before = len(
+                [f for f in os.listdir(save_dir) if f.endswith(('.xlsx', '.xls', '.json'))]) if os.path.exists(
+                save_dir) else 0
 
             scraper = scraper_class(
                 fund_code=fund['code'],

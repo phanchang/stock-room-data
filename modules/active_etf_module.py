@@ -32,14 +32,29 @@ class ETFDataWorker(QThread):
         self.provider = provider
 
     def run(self):
-        url = f"https://raw.githubusercontent.com/phanchang/stock-room-data/main/data/clean/{self.provider}/{self.etf_id}.csv"
-        try:
-            print(f"🚀 [ETF] 下載中: {url}")
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                csv_data = StringIO(response.text)
-                df = pd.read_csv(csv_data)
+        # 1. 先定義好本地端與雲端路徑
+        local_path = Path(f"data/clean/{self.provider}/{self.etf_id}.csv")
+        github_url = f"https://raw.githubusercontent.com/phanchang/stock-room-data/main/data/clean/{self.provider}/{self.etf_id}.csv"
 
+        df = pd.DataFrame()
+
+        try:
+            # 2. 優先嘗試讀取本地端剛抓好的最新資料
+            if local_path.exists():
+                print(f"🏠 [ETF] 讀取本地資料: {local_path}")
+                df = pd.read_csv(local_path)
+            else:
+                # 3. 本地沒有，再嘗試從雲端抓取
+                print(f"🚀 [ETF] 讀取雲端資料: {github_url}")
+                response = requests.get(github_url, timeout=10)
+                if response.status_code == 200:
+                    csv_data = StringIO(response.text)
+                    df = pd.read_csv(csv_data)
+                else:
+                    print(f"⚠️ [ETF] 雲端無資料或連線失敗，狀態碼: {response.status_code}")
+
+            # 4. 如果有順利拿到資料，進行欄位標準化
+            if not df.empty:
                 df.columns = [c.lower().strip() for c in df.columns]
 
                 rename_map = {}
@@ -60,10 +75,10 @@ class ETFDataWorker(QThread):
                 self.data_fetched.emit(df, self.etf_id)
             else:
                 self.data_fetched.emit(pd.DataFrame(), self.etf_id)
-        except Exception as e:
-            print(f"❌ [ETF] 連線錯誤: {e}")
-            self.data_fetched.emit(pd.DataFrame(), self.etf_id)
 
+        except Exception as e:
+            print(f"❌ [ETF] 解析或連線錯誤: {e}")
+            self.data_fetched.emit(pd.DataFrame(), self.etf_id)
 
 # --- 主動式 ETF 模組 ---
 class ActiveETFModule(QWidget):
@@ -78,7 +93,8 @@ class ActiveETFModule(QWidget):
 
         self.mapping = {
             "00981A": ("ezmoney", "統一-00981A (統一台股增長)"),
-            "00991A": ("fhtrust", "復華-00991A (復華未來50)")
+            "00991A": ("fhtrust", "復華-00991A (復華未來50)"),
+            "00982A": ("capitalfund", "群益-00982A (台灣精選強棒)")
         }
 
         self.load_market_info()
@@ -369,16 +385,24 @@ class ActiveETFModule(QWidget):
 
         price_data = pd.DataFrame()
         price_path = Path(f"data/cache/tw/{stock_id}_{market}.parquet")
-
+        # 1. 印出路徑與存在狀態，確認到底有沒有找對檔案
+        print(f"🔍 [圖表除錯] 嘗試讀取: {price_path} (檔案存在: {price_path.exists()})")
         if price_path.exists():
             try:
                 price_df = pd.read_parquet(price_path)
                 price_df.columns = [c.capitalize() for c in price_df.columns]
+                # 2. 強制將 Parquet 的 index 轉為標準的時間格式，並移除時區，避免比較時報錯
+                price_df.index = pd.to_datetime(price_df.index).tz_localize(None)
+
                 if not trend_data.empty:
                     min_date = trend_data['date'].min()
                     price_data = price_df[price_df.index >= min_date].copy()
+                    print(f"✅ [圖表除錯] 成功篩選出 {len(price_data)} 筆股價資料 (從 {min_date.strftime('%Y-%m-%d')} 開始)")
             except:
-                pass
+                # 4. 把被吃掉的錯誤印出來！
+                print(f"❌ [圖表除錯] 讀取股價 {stock_id} 發生錯誤: {e}")
+        else:
+            print(f"⚠️ [圖表除錯] 找不到實體檔案，可能 market 判斷錯誤 (TW/TWO)")
 
         self.fig_trend.clear()
         ax1 = self.fig_trend.add_subplot(111)

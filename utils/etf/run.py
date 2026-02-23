@@ -73,6 +73,7 @@ def print_help():
     print("  python run.py                 # 處理所有投信")
     print("  python run.py ezmoney         # 只處理 EZMoney")
     print("  python run.py fhtrust         # 只處理復華投信")
+    print("  python run.py capitalfund     # 只處理群益投信")  # 👈 新增這行
 
     print("\n【僅下載】")
     print("  python main.py --now          # 立即下載所有投信")
@@ -93,7 +94,7 @@ if __name__ == "__main__":
 
         if cmd in ['--help', '-h']:
             print_help()
-        elif cmd in ['ezmoney', 'fhtrust']:
+        elif cmd in ['ezmoney', 'fhtrust', 'capitalfund']:
             run_full_pipeline(company=cmd)
         else:
             print(f"未知參數: {cmd}")

@@ -1,28 +1,25 @@
+# main.py
 import sys
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# 載入 .env 環境變數
 load_dotenv()
 
-# 設定專案路徑 - 從當前檔案往上找到專案根目錄
+# ===== 1. 設定專案路徑 (必須在 import 之前) =====
 current_file = Path(__file__).resolve()
 project_root = current_file.parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
-sys.path.insert(0, str(project_root))
-
+# ===== 2. 引入排程器與爬蟲 (改用絕對路徑，並加入群益) =====
 from utils.etf.scheduler import ETFScheduler
-from modules.scrapers.ezmoney import EZMoneyScraper
-from modules.scrapers.fhtrust import FHTrustScraper
+from utils.etf.modules.scrapers.ezmoney import EZMoneyScraper
+from utils.etf.modules.scrapers.fhtrust import FHTrustScraper
+from utils.etf.modules.scrapers.capitalfund import CapitalFundScraper
 
-# 動態設定基礎目錄
-# main.py 位置: 戰情室/modules/scrapers/main.py
-# 目標路徑: 戰情室/data/raw
-# 路徑推算: main.py -> scrapers -> modules -> 戰情室 -> /data/raw
-BASE_DIR = current_file.parent.parent.parent / 'data' / 'raw'
+BASE_DIR = project_root / 'data' / 'raw'
 
-# Proxy 設定 - 從 .env 讀取，家裡不用設定
 PROXY_HOST = os.getenv('PROXY_HOST')
 PROXY_PORT = os.getenv('PROXY_PORT')
 PROXY = f"{PROXY_HOST}:{PROXY_PORT}" if PROXY_HOST and PROXY_PORT else None
@@ -30,19 +27,22 @@ PROXY = f"{PROXY_HOST}:{PROXY_PORT}" if PROXY_HOST and PROXY_PORT else None
 SCRAPERS = {
     'ezmoney': {
         'class': EZMoneyScraper,
-        'funds': [
-            {'code': '49YTW', 'name': '00981A', 'dir': 'ezmoney/00981A'}
-        ],
+        'funds': [{'code': '49YTW', 'name': '00981A', 'dir': 'ezmoney/00981A'}],
         'schedule_time': '15:30'
     },
     'fhtrust': {
         'class': FHTrustScraper,
-        'funds': [
-            {'code': 'ETF23', 'name': '00991A', 'dir': 'fhtrust/00991A'}
-        ],
+        'funds': [{'code': 'ETF23', 'name': '00991A', 'dir': 'fhtrust/00991A'}],
         'schedule_time': '15:30'
+    },
+    'capitalfund': {
+        'class': CapitalFundScraper,
+        'funds': [{'code': '399', 'name': '00982A', 'dir': 'capitalfund/00982A'}],
+        'schedule_time': '16:00'
     }
 }
+
+# ... 下面的 manual_fetch_all, run_scheduler 等函式完全不用動 ...
 
 def manual_fetch_all():
     """手動抓取所有投信"""

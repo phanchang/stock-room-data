@@ -2,45 +2,43 @@
 import sys
 import os
 from pathlib import Path
-from modules.parsers.ezmoney_parser import EZMoneyParser
-from modules.parsers.fhtrust_parser import FHTrustParser
 
-# ===== 重要：正確設定專案根目錄 =====
-# 方法 1：使用絕對路徑（推薦，最穩定）
-#BASE_DIR = Path(r'C:\Users\andychang\Desktop\每日選股\戰情室')
-
-# 方法 2：從 parse.py 位置往上推算（如果目錄結構固定）
-# BASE_DIR = Path(__file__).resolve().parents[2]  # 往上兩層到戰情室
-
-# 設定專案路徑 - 從當前檔案往上找到專案根目錄
+# ===== 1. 設定專案路徑 (必須在 import 自訂模組之前) =====
 current_file = Path(__file__).resolve()
-RAW_DIR = current_file.parent.parent.parent / 'data' / 'raw'
-CLEAN_DIR = current_file.parent.parent.parent / 'data' / 'clean'
-#RAW_DIR = BASE_DIR / 'data' / 'raw'
-#CLEAN_DIR = BASE_DIR / 'data' / 'clean'
+project_root = current_file.parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+# ===== 2. 引入模組 (改用絕對路徑，並加入群益) =====
+from utils.etf.modules.parsers.ezmoney_parser import EZMoneyParser
+from utils.etf.modules.parsers.fhtrust_parser import FHTrustParser
+from utils.etf.modules.parsers.capitalfund_parser import CapitalFundParser
+
+RAW_DIR = project_root / 'data' / 'raw'
+CLEAN_DIR = project_root / 'data' / 'clean'
 
 PARSERS = {
     'ezmoney': {
         'class': EZMoneyParser,
         'funds': [
-            {
-                'name': '00981A',
-                'raw_dir': RAW_DIR / 'ezmoney' / '00981A',
-                'clean_dir': CLEAN_DIR / 'ezmoney'
-            }
+            {'name': '00981A', 'raw_dir': RAW_DIR / 'ezmoney' / '00981A', 'clean_dir': CLEAN_DIR / 'ezmoney'}
         ]
     },
     'fhtrust': {
         'class': FHTrustParser,
         'funds': [
-            {
-                'name': '00991A',
-                'raw_dir': RAW_DIR / 'fhtrust' / '00991A',
-                'clean_dir': CLEAN_DIR / 'fhtrust'
-            }
+            {'name': '00991A', 'raw_dir': RAW_DIR / 'fhtrust' / '00991A', 'clean_dir': CLEAN_DIR / 'fhtrust'}
+        ]
+    },
+    'capitalfund': {
+        'class': CapitalFundParser,
+        'funds': [
+            {'name': '00982A', 'raw_dir': RAW_DIR / 'capitalfund' / '00982A', 'clean_dir': CLEAN_DIR / 'capitalfund'}
         ]
     }
 }
+
+# ... 下面的 parse_all, parse_specific 等函式完全不用動 ...
 
 
 def parse_all():

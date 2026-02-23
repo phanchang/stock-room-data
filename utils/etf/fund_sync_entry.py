@@ -43,11 +43,10 @@ def is_fund_updated(company, etf_code):
         return False
 
 def count_files(directory):
-    """計算目錄下 excel 檔案的數量"""
     path = Path(directory)
-    if not path.exists():
-        return 0
-    return len(list(path.glob("*.xls*")))
+    if not path.exists(): return 0
+    # 同時計算 excel 和 json 的數量
+    return len(list(path.glob("*.xls*"))) + len(list(path.glob("*.json")))
 
 
 def main():
