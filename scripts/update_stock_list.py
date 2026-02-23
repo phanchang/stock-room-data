@@ -108,7 +108,7 @@ def main():
     # 1. 上市 (TWSE) - Mode 2
     all_stocks.extend(fetch_isin_table(2, "TW", proxies))
     time.sleep(1)
-
+    #
     # 2. 上櫃 (TPEx) - Mode 4
     all_stocks.extend(fetch_isin_table(4, "TWO", proxies))
 
