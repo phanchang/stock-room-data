@@ -153,7 +153,9 @@ class TechnicalStrategies:
             if close.iloc[i] <= open_p.iloc[i]: fail_reasons.append("非紅K")
             if vol.iloc[i] < prev_vol.iloc[i] * cfg.get('trigger_vol_multiplier', 1.1): fail_reasons.append(
                 "量能未達標")
-            if low.iloc[i] <= curr_ma: fail_reasons.append("盤中未脫離均線")
+
+            # 放寬條件：只要「收盤價」站上均線即可，允許盤中跌破或從下方突破
+            if close.iloc[i] <= curr_ma: fail_reasons.append("收盤未站上均線")
 
             if fail_reasons:
                 if is_debug: print(f"--- 偵錯 {dt_str} --- 基礎門檻失敗: {', '.join(fail_reasons)}")
@@ -163,6 +165,7 @@ class TechnicalStrategies:
             # 判斷基位：上週收盤距離 MA30 的乖離
             prev_bias = (prev_c - curr_ma) / curr_ma
             current_bias_limit = cfg.get('adhesive_bias', 0.12)
+
             # --- 1. 黏貼整理 ---
             if curr_ma > p_ma_val and prev_bias <= current_bias_limit:
                 start_adh = i - cfg.get('adhesive_weeks', 2)
@@ -171,7 +174,7 @@ class TechnicalStrategies:
                     for k in range(start_adh, i):
                         dev = max(abs(high.iloc[k] - ma30.iloc[k]), abs(low.iloc[k] - ma30.iloc[k])) / ma30.iloc[k]
                         if dev > cfg.get('adhesive_bias', 0.2):
-                            is_adh_tmp = False;
+                            is_adh_tmp = False
                             break
                         max_d = max(max_d, dev)
                     if is_adh_tmp:
@@ -182,20 +185,19 @@ class TechnicalStrategies:
             if prev_bias <= cfg.get('shakeout_prev_bias_limit', 0.20):
                 if curr_ma >= p_ma_val * 0.999 and prev_c >= ma30.iloc[i - 1]:
                     start_shk = max(0, i - cfg.get('shakeout_lookback', 12))
-                    has_dip, valid_depth, uw_weeks = False, True, 0
+
+                    has_dip, uw_weeks = False, 0
                     for k in range(start_shk, i):
                         if low.iloc[k] < ma30.iloc[k]:
                             has_dip = True
-                            if low.iloc[k] < ma30.iloc[k] * (1 - cfg.get('shakeout_max_depth', 0.35)):
-                                valid_depth = False;
-                                break
                         if close.iloc[k] < ma30.iloc[k]:
                             uw_weeks += 1
 
                     if is_debug:
-                        print(f"--- 偵錯 {dt_str} --- 曾跌破={has_dip}, 深度合規={valid_depth}, 水下={uw_weeks}w")
+                        print(f"--- 偵錯 {dt_str} --- 曾跌破={has_dip}, 水下={uw_weeks}w")
 
-                    if valid_depth and has_dip and (0 < uw_weeks <= cfg.get('shakeout_underwater_limit', 10)):
+                    # 拿掉跌破深度判斷，只要有破線 (has_dip) 且水下週數合規即視為甩轎
+                    if has_dip and (0 < uw_weeks <= cfg.get('shakeout_underwater_limit', 10)):
                         is_shk = True
                         results.at[df.index[i], 'Shk_Info'] = f"Dip {uw_weeks}w"
 

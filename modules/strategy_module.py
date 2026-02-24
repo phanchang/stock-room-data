@@ -1,5 +1,6 @@
 import sys
 import json
+import time  # 👉 新增 time 模組
 import pandas as pd
 from pathlib import Path
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -18,7 +19,8 @@ from PyQt6.QtGui import QColor, QAction, QCursor, QFont
 FULL_COLUMN_SPECS = {
     'sid': {'name': '代號', 'show': True, 'tip': '股票代號', 'type': 'str'},
     'name': {'name': '名稱', 'show': True, 'tip': '股票名稱', 'type': 'str'},
-    'rev_ym': {'name': '營收月', 'show': True, 'tip': '資料所屬月份 (如 11301 代表 2024年1月)', 'type': 'str'},    'industry': {'name': '產業', 'show': True, 'tip': '所屬產業類別', 'type': 'str'},
+    'rev_ym': {'name': '營收月', 'show': True, 'tip': '資料所屬月份 (如 11301 代表 2024年1月)', 'type': 'str'},
+    'industry': {'name': '產業', 'show': True, 'tip': '所屬產業類別', 'type': 'str'},
     '現價': {'name': '股價', 'show': True, 'tip': '最新收盤價', 'type': 'num'},
     '漲幅5d': {'name': '5日%', 'show': False, 'tip': '近5日漲跌幅', 'type': 'num'},
     '漲幅20d': {'name': '月漲幅%', 'show': True, 'tip': '近20日漲跌幅', 'type': 'num'},
@@ -43,14 +45,15 @@ FULL_COLUMN_SPECS = {
     'rev_yoy': {'name': '月YoY%', 'show': True, 'tip': '最新月營收年增率', 'type': 'num'},
     'rev_cum_yoy': {'name': '累營YoY%', 'show': True, 'tip': '當年累計營收年增率', 'type': 'num'},
     'eps_q': {'name': 'EPS(累)', 'show': True, 'tip': '累計季 EPS', 'type': 'num'},
-    'eps_date': {'name': 'EPS季別', 'show': True, 'tip': 'EPS數據所屬年度與季別', 'type': 'str'}, # 🔥 新增這行
+    'eps_date': {'name': 'EPS季別', 'show': True, 'tip': 'EPS數據所屬年度與季別', 'type': 'str'},
     'pe': {'name': 'PE', 'show': True, 'tip': '本益比', 'type': 'num'},
     'pbr': {'name': 'PB', 'show': False, 'tip': '股價淨值比', 'type': 'num'},
     'yield': {'name': '殖利率%', 'show': True, 'tip': '現金殖利率', 'type': 'num'},
     'is_tu_yang': {'name': '土洋對作', 'show': False, 'tip': '1=符合土洋對作訊號', 'type': 'num'},
     '強勢特徵': {'name': '強勢特徵', 'show': True, 'tip': '策略觸發訊號標籤', 'type': 'str'},
     'str_30w_week_offset': {'name': '訊號週數', 'show': True, 'tip': '0=本週, 1=上週...', 'type': 'num'},
-    'str_st_week_offset': {'name': 'ST買訊(週)', 'show': True, 'tip': '距離最近一次週線SuperTrend買訊週數 (0=本週)', 'type': 'num'}
+    'str_st_week_offset': {'name': 'ST買訊(週)', 'show': True, 'tip': '距離最近一次週線SuperTrend買訊週數 (0=本週)',
+                           'type': 'num'}
 }
 
 # ==========================================
@@ -89,9 +92,9 @@ FULL_FILTER_SPECS = [
 
 DEFAULT_ACTIVE_FILTERS = ['str_30w_week_offset', '量比', '漲幅20d']
 
-# 🔥 修正重點：新增 30W 選項
 TAG_CATEGORIES = {
-    "🔥 趨勢型態": ["ST轉多", "30W黏貼", "30W甩轎", "主力掃單(ILSS)", "土洋對作", "超強勢", "突破30週", "創季高", "創月高", "強勢多頭", "波段黑馬", "假跌破"],
+    "🔥 趨勢型態": ["ST轉多", "30W黏貼", "30W甩轎", "主力掃單(ILSS)", "土洋對作", "超強勢", "突破30週", "創季高",
+                   "創月高", "強勢多頭", "波段黑馬", "假跌破"],
     "📉 整理型態": ["極度壓縮", "波動壓縮", "盤整5日", "盤整10日", "盤整20日", "盤整60日", "Vix反轉"],
     "💰 籌碼支撐": ["投信認養", "散戶退場", "回測季線", "回測年線"]
 }
@@ -315,44 +318,43 @@ class StrategyTableModel(QAbstractTableModel):
     def columnCount(self, parent=None):
         return len(self.visible_cols)
 
-        # 取代 StrategyTableModel 內的 data 函式
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
-            if not index.isValid(): return None
-            col_key = self.visible_cols[index.column()]
-            value = self._df.iloc[index.row()][col_key]
-            if role == Qt.ItemDataRole.UserRole: return value
-            if role == Qt.ItemDataRole.DisplayRole:
-                if isinstance(value, (int, float)):
-                    if col_key in ['RS強度', 'pe', 'pbr', '量比', 'eps_q']: return f"{value:.1f}"
-                    if 'rev_now' in col_key: return f"{value:,.0f}"
-                    if '漲幅' in col_key or 'yield' in col_key or 'width' in col_key or 'yoy' in col_key: return f"{value:.2f}%"
-                    if 'sum' in col_key or 'net' in col_key: return f"{value:,.0f}"
-                    if 'streak' in col_key or 'offset' in col_key: return f"{int(value)}"
-                    return f"{value:,.2f}"
-                return str(value)
-            if role == Qt.ItemDataRole.ToolTipRole:
-                if col_key == '強勢特徵' and isinstance(value, str):
-                    tags = [t.strip() for t in value.split(',')]
-                    tips = [f"• {t}: {TAG_TOOLTIPS.get(t, '')}" for t in tags]
-                    return "\n".join(tips)
-                return FULL_COLUMN_SPECS.get(col_key, {}).get('tip', '')
-            if role == Qt.ItemDataRole.ForegroundRole:
-                if isinstance(value, (int, float)):
-                    if '漲幅' in col_key or 'sum' in col_key or '買賣超' in col_key or 'yoy' in col_key or 'eps' in col_key or 'streak' in col_key:
-                        if value > 0: return QColor("#FF4444")
-                        if value < 0: return QColor("#00CC00")
-                if col_key == '強勢特徵' and value:
-                    if 'ST剛轉多' in str(value): return QColor("#FF3333")
-                    if '30W' in str(value): return QColor("#00E5FF")  # 亮藍色
-                    if 'ILSS' in str(value): return QColor("#FF00FF")  # 紫紅色
-                    if '土洋' in str(value): return QColor("#FFFF00")  # 亮黃色
-                    return QColor("#E0E0E0")
+        if not index.isValid(): return None
+        col_key = self.visible_cols[index.column()]
+        value = self._df.iloc[index.row()][col_key]
+        if role == Qt.ItemDataRole.UserRole: return value
+        if role == Qt.ItemDataRole.DisplayRole:
+            if isinstance(value, (int, float)):
+                if col_key in ['RS強度', 'pe', 'pbr', '量比', 'eps_q']: return f"{value:.1f}"
+                if 'rev_now' in col_key: return f"{value:,.0f}"
+                if '漲幅' in col_key or 'yield' in col_key or 'width' in col_key or 'yoy' in col_key: return f"{value:.2f}%"
+                if 'sum' in col_key or 'net' in col_key: return f"{value:,.0f}"
+                if 'streak' in col_key or 'offset' in col_key: return f"{int(value)}"
+                return f"{value:,.2f}"
+            return str(value)
+        if role == Qt.ItemDataRole.ToolTipRole:
+            if col_key == '強勢特徵' and isinstance(value, str):
+                tags = [t.strip() for t in value.split(',')]
+                tips = [f"• {t}: {TAG_TOOLTIPS.get(t, '')}" for t in tags]
+                return "\n".join(tips)
+            return FULL_COLUMN_SPECS.get(col_key, {}).get('tip', '')
+        if role == Qt.ItemDataRole.ForegroundRole:
+            if isinstance(value, (int, float)):
+                if '漲幅' in col_key or 'sum' in col_key or '買賣超' in col_key or 'yoy' in col_key or 'eps' in col_key or 'streak' in col_key:
+                    if value > 0: return QColor("#FF4444")
+                    if value < 0: return QColor("#00CC00")
+            if col_key == '強勢特徵' and value:
+                if 'ST剛轉多' in str(value): return QColor("#FF3333")
+                if '30W' in str(value): return QColor("#00E5FF")
+                if 'ILSS' in str(value): return QColor("#FF00FF")
+                if '土洋' in str(value): return QColor("#FFFF00")
                 return QColor("#E0E0E0")
-            if role == Qt.ItemDataRole.TextAlignmentRole:
-                if isinstance(value, (int, float)) or col_key == '現價':
-                    return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-                return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-            return None
+            return QColor("#E0E0E0")
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            if isinstance(value, (int, float)) or col_key == '現價':
+                return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        return None
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if orientation == Qt.Orientation.Horizontal:
@@ -386,6 +388,9 @@ class StrategyModule(QWidget):
         self.full_df = pd.DataFrame()
         self.display_df = pd.DataFrame()
         self.watchlist_data = {}
+
+        # 👉 初始化載入時間紀錄
+        self.last_load_time = 0
 
         self.settings_dir = Path(__file__).resolve().parent.parent / "data" / "settings"
         self.settings_dir.mkdir(parents=True, exist_ok=True)
@@ -434,7 +439,8 @@ class StrategyModule(QWidget):
         self.txt_search.returnPressed.connect(self.on_search_triggered)
 
         title = QLabel("戰略選股")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #00E5FF; border: none; background: transparent;")
+        title.setStyleSheet(
+            "font-size: 16px; font-weight: bold; color: #00E5FF; border: none; background: transparent;")
 
         self.btn_reload = QToolButton()
         self.btn_reload.setText("🔄")
@@ -667,6 +673,25 @@ class StrategyModule(QWidget):
         self.loader_thread.error_occurred.connect(self.on_load_error)
         self.loader_thread.start()
 
+    # 👉 這裡新增 showEvent 進行背景自動偵測
+    def showEvent(self, event):
+        super().showEvent(event)
+
+        base_path = Path(__file__).resolve().parent.parent
+        f_path = base_path / "data" / "strategy_results" / "factor_snapshot.parquet"
+        csv_path = base_path / "data" / "strategy_results" / "戰情室今日快照_全中文版.csv"
+
+        latest_mtime = 0
+        if f_path.exists():
+            latest_mtime = max(latest_mtime, f_path.stat().st_mtime)
+        elif csv_path.exists():
+            latest_mtime = max(latest_mtime, csv_path.stat().st_mtime)
+
+        if latest_mtime > getattr(self, 'last_load_time', 0):
+            print("🔄 偵測到背景資料已更新，自動重新整理選股畫面...")
+            self.load_data()
+
+    # 👉 整個檔案確保「只有這一個」on_data_loaded
     def on_data_loaded(self, df):
         self.full_df = df
         self.update_industry_combo()
@@ -674,6 +699,9 @@ class StrategyModule(QWidget):
         self.apply_filters_real()
         self.lbl_status.setText(f"✅ {len(df)} 檔")
         self.btn_reload.setEnabled(True)
+
+        # 紀錄最後讀取檔案的時間
+        self.last_load_time = time.time()
 
     def on_load_error(self, msg):
         QMessageBox.critical(self, "錯誤", msg)

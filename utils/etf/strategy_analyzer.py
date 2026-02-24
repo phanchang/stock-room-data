@@ -152,8 +152,7 @@ class StrategyAnalyzer:
 
                         if total_buy_shares > 0:
                             estimated_cost_60d = total_buy_cost / total_buy_shares
-                            net_buy_value_60d = total_buy_cost / 10000
-
+                            net_buy_value_60d = total_buy_cost / 100000000
                 except Exception:
                     pass
 
@@ -164,7 +163,7 @@ class StrategyAnalyzer:
                 '20日前股數': shares_20d_ago,
                 '近5日增減': diff_5d,
                 '近20日增減': diff_20d,
-                '一季耗資(萬)': round(net_buy_value_60d, 0),
+                '一季耗資(億)': round(net_buy_value_60d, 0),
                 '最新收盤價': current_price,
                 '投信季成本': round(estimated_cost_60d, 2)
             })
@@ -180,74 +179,74 @@ class StrategyAnalyzer:
         return result_df
 
     def generate_ai_prompt(self, df):
-        """產出雙榜單與防幻覺查證指令的 AI Prompt"""
+            """產出雙榜單與防幻覺查證指令的 AI Prompt"""
 
-        # ==========================================
-        # 榜單 A：重金押寶榜 (依耗資金額排序 Top 15)
-        # ==========================================
-        list_a = df.sort_values('一季耗資(萬)', ascending=False).head(15).copy()
-        # 格式化顯示
-        list_a['當前股數'] = list_a['當前股數'].apply(lambda x: f"{x:,}")
-        list_a_view = list_a[
-            ['代號', '名稱', '當前股數', '近5日增減', '近20日增減', '一季耗資(萬)', '投信季成本', '乖離(%)']]
+            # ==========================================
+            # 榜單 A：重金押寶榜 (依耗資金額排序 Top 15)
+            # ==========================================
+            list_a = df.sort_values('一季耗資(億)', ascending=False).head(15).copy()
+            list_a['當前股數'] = list_a['當前股數'].apply(lambda x: f"{x:,}")
+            list_a_view = list_a[
+                ['代號', '名稱', '當前股數', '近5日增減', '近20日增減', '一季耗資(億)', '投信季成本', '乖離(%)']]
 
-        # ==========================================
-        # 榜單 B：潛伏偷買榜 (過濾掉 List A，找出 20 日前無庫存，或近期才開始買的標的)
-        # ==========================================
-        exclude_ids = list_a['代號'].tolist()
-        list_b_candidates = df[~df['代號'].isin(exclude_ids)].copy()
+            # ==========================================
+            # 榜單 B：潛伏偷買榜
+            # ==========================================
+            exclude_ids = list_a['代號'].tolist()
+            list_b_candidates = df[~df['代號'].isin(exclude_ids)].copy()
 
-        # 條件：20 日前庫存為 0 (從無到有)，且近 5 日有買進。或是近 5 日買超佔了近 20 日絕大比例。
-        stealth_mask = (list_b_candidates['20日前股數'] == 0) | (
+            stealth_mask = (list_b_candidates['20日前股數'] == 0) | (
                     list_b_candidates['近5日增減'] == list_b_candidates['近20日增減'])
-        list_b = list_b_candidates[stealth_mask].sort_values('近5日增減', ascending=False).head(15)
+            list_b = list_b_candidates[stealth_mask].sort_values('近5日增減', ascending=False).head(15)
 
-        list_b['當前股數'] = list_b['當前股數'].apply(lambda x: f"{x:,}")
-        list_b_view = list_b[
-            ['代號', '名稱', '當前股數', '近5日增減', '近20日增減', '一季耗資(萬)', '投信季成本', '乖離(%)']]
+            list_b['當前股數'] = list_b['當前股數'].apply(lambda x: f"{x:,}")
+            list_b_view = list_b[
+                ['代號', '名稱', '當前股數', '近5日增減', '近20日增減', '一季耗資(億)', '投信季成本', '乖離(%)']]
 
-        prompt = f"""# 📅 台股主動式 ETF 【雙榜單】籌碼戰情報表
+            # 取得當前真實年份與月份，做為防呆錨點
+            current_year = pd.to_datetime(self.latest_report_date).year
+            current_month = pd.to_datetime(self.latest_report_date).month
 
-## 📊 第一階段：量化數據基準
-**資料庫基準日：** {self.latest_report_date}
+            prompt = f"""# 📅 台股主動式 ETF 【雙榜單】籌碼戰情報表
 
-### 🏆 榜單 A：重金押寶榜 (Top 15 主力資金流向)
-> 說明：投信近一季砸下最多「絕對金額」的核心標的。請藉此觀察大盤的主流產業與資金聚落。
-{list_a_view.to_markdown(index=False) if not list_a_view.empty else "無符合條件標的"}
+    ## 📊 第一階段：量化數據基準
+    **資料庫基準日：** {self.latest_report_date} (請注意現在的年份是 {current_year} 年 {current_month} 月)
 
-### 🥷 榜單 B：破蛋潛伏偷買榜 (Top 15 零到一黑馬)
-> 說明：這些標的絕對金額不大，但特徵是「過去 20 天沒買，最近 5 天突然連續買進 / 從零建倉」。這通常是法人掌握了未公開的資訊落差，正在左側默默吃貨。
-{list_b_view.to_markdown(index=False) if not list_b_view.empty else "無符合條件標的"}
+    ### 🏆 榜單 A：重金押寶榜 (Top 15 主力資金流向)
+    > 說明：投信近一季砸下最多「絕對金額」的核心標的 (單位為新台幣『億』元)。
+    {list_a_view.to_markdown(index=False) if not list_a_view.empty else "無符合條件標的"}
 
----
+    ### 🥷 榜單 B：破蛋潛伏偷買榜 (Top 15 零到一黑馬)
+    > 說明：特徵為「過去 20 天沒買，最近突然連續買進 / 從零建倉」。
+    {list_b_view.to_markdown(index=False) if not list_b_view.empty else "無符合條件標的"}
 
-## 🤖 第二階段：AI 操盤手深度推斷與【強制多方查證指令】
+    ---
 
-你是一位具備 20 年經驗的台股量化與基本面操盤手。請基於上方雙榜單執行分析。
+    ## 🤖 第二階段：AI 操盤手深度推斷與【強制多方查證指令】
 
-⚠️ 【最高指導原則：絕對客觀與真實】⚠️
-1. 引用數據做推理與研究「必須」使用 Google search 進行多方來源交叉查證。
-2. 絕不允許自己產生、捏造或猜測真實數據。
-3. 引用任何數據做呈現或計算，必須在該段落明確附上「來源網站與資料出處」。
+    你是一位具備 20 年經驗的台股量化與基本面操盤手。請基於上方雙榜單執行分析。
 
-### 🔍 任務 1：主流板塊 vs 潛伏板塊對比分析
-* 觀察【榜單 A】，目前投信重兵集結在哪 1~2 個產業？
-* 觀察【榜單 B】，投信正在偷偷佈局哪些「冷門」或「低基期」產業？這是否暗示資金有高低位階轉換的跡象？
+    ⚠️ 【最高指導原則：絕對客觀與防時間幻覺】⚠️
+    1. 引用數據做推理與研究「必須」使用 Google search 進行多方來源交叉查證。
+    2. 絕不允許自己產生、捏造或猜測真實數據。
+    3. 引用任何數據做呈現或計算，必須在該段落明確附上「來源網站與資料出處」。
+    4. 🛑【時間防偽警告】：現在是 {current_year} 年 {current_month} 月。搜尋新聞與財報時，請嚴格過濾時間！**絕對禁止**把 {current_year - 1} 年或更早的舊新聞當成現在的事件！
 
-### 🕵️‍♂️ 任務 2：雙榜單核心標的客觀事實查證 (Fact-Checking)
-請從【榜單 A】挑選 2 檔，從【榜單 B】挑選 2 檔，**強制使用 Google 搜尋查證**近一個月內的重大事件（營收、法說會、外資報告等）。
-* **特別防呆指令**：對於【榜單 B】的潛伏股，**如果你查不到任何近期利多新聞，請直接在表格中寫明「經多方查證，無近期相關新聞發布」**。這是非常重要的客觀事實，代表該股正處於「無聲建倉期」，絕對禁止捏造利多！
-* **輸出格式要求**：(請以 Markdown 表格呈現)
-  | 所屬榜單 | 股票名稱 | 近期真實催化劑 (查無新聞請誠實填寫) | 資料來源 (必須附上 URL 或媒體名稱) |
+    ### 🔍 任務 1：主流板塊 vs 潛伏板塊對比分析
+    * 觀察【榜單 A】，目前投信重兵集結在哪 1~2 個產業？(表內的耗資單位為「億」，請直接以億為單位解讀，例如 81.15 就是 81.15 億)
+    * 觀察【榜單 B】，投信正在偷偷佈局哪些產業？這是否暗示資金有高低位階轉換的跡象？
 
-### 🎯 任務 3：明日實戰交易清單推斷 (Actionable Plan)
-基於法人籌碼節奏與你的客觀查證，挑選出 3 檔最值得列入明日觀察名單的股票。
-* **推薦邏輯**：
-  - 若推薦【榜單 A】標的：需說明其趨勢動能，並評估目前的「乖離率」是否有追高風險。
-  - 若推薦【榜單 B】標的：需說明為何在「沒有明顯新聞」的情況下，投信的「從零建倉」行為值得跟隨（例如：下檔具備投信成本保護，勝率極高）。
-* 請依序條列這 3 檔，並再次附上支撐你論點的資料出處。
-"""
-        return prompt
+    ### 🕵️‍♂️ 任務 2：雙榜單核心標的客觀事實查證 (Fact-Checking)
+    請從【榜單 A】與【榜單 B】各挑選 2 檔，**強制使用 Google 搜尋查證**近一個月內 ({current_year}年) 的重大事件。
+    * **時間防呆檢查**：找到新聞後，請先確認新聞發布年份是否為 {current_year} 年。如果是舊聞請捨棄。
+    * **潛伏股防呆**：對於【榜單 B】，如果你查不到任何 {current_year} 年的近期利多新聞，請直接寫明「經查證，近期無 {current_year} 年相關新聞發布」。代表該股處於「無聲建倉期」，絕對禁止拿舊新聞填補或捏造！
+    * **輸出格式要求**：(以表格呈現)
+      | 所屬榜單 | 股票名稱 | 近期真實催化劑 (查無近期新聞請誠實填寫) | 發生年份 | 資料來源 (必須附上 URL) |
+
+    ### 🎯 任務 3：明日實戰交易清單推斷 (Actionable Plan)
+    基於法人籌碼節奏與你的客觀查證，挑選出 3 檔最值得列入明日觀察名單的股票。請依序條列，並再次附上支撐你論點的 {current_year} 年最新資料出處網址。
+    """
+            return prompt
 
     def run(self):
         print(f"=== 戰情室雙榜單分析系統啟動: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
