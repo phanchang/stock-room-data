@@ -1,6 +1,6 @@
 # modules/fhtrust.py
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 
 
@@ -120,7 +120,9 @@ class FHTrustScraper:
             list: 需要補齊的日期列表 (datetime objects)
         """
         last_date = self.get_last_data_date()
-        today = datetime.now().date()
+        # ✨ 強制台灣時區
+        tw_tz = timezone(timedelta(hours=8))
+        today = datetime.now(tw_tz).date()
 
         # 如果沒有任何資料，從往前 lookback_days 天開始
         if last_date is None:
@@ -148,7 +150,9 @@ class FHTrustScraper:
         2. 逐一嘗試下載每個缺失日期的資料
         3. 最後檢查今天的資料是否已取得
         """
-        now = datetime.now()
+        # ✨ 強制台灣時區
+        tw_tz = timezone(timedelta(hours=8))
+        now = datetime.now(tw_tz)
         today_str = now.strftime('%Y%m%d')
         today_date = now.date()
 

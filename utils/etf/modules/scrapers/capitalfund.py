@@ -3,7 +3,7 @@ import os
 import requests
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone  # ✨ 加入 timezone
 from pathlib import Path
 
 
@@ -42,10 +42,14 @@ class CapitalFundScraper:
             return None
 
     def get_missing_dates(self, lookback_days=30):
+        # ✨ 這行就是剛剛不小心消失的關鍵！必須先建立空陣列
         missing_dates = []
-        today = datetime.now()
 
-        # ✨ 破譯修正：每一天都查！不再排除六日，因為 API 會把星期五跟連假前的資料藏在假日的查詢結果裡
+        # ✨ 強制台灣時區
+        tw_tz = timezone(timedelta(hours=8))
+        today = datetime.now(tw_tz)
+
+        # 破譯修正：每一天都查！不再排除六日，因為 API 會把星期五跟連假前的資料藏在假日的查詢結果裡
         for i in range(lookback_days, -1, -1):
             check_date = today - timedelta(days=i)
             missing_dates.append(check_date)
@@ -53,7 +57,11 @@ class CapitalFundScraper:
         return missing_dates
 
     def fetch_and_save(self):
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [群益投信] 開始檢查...")
+        # ✨ 強制台灣時區
+        tw_tz = timezone(timedelta(hours=8))
+        now = datetime.now(tw_tz)
+
+        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [群益投信] 開始檢查...")
 
         missing_dates = self.get_missing_dates()
         if not missing_dates:

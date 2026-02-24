@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 import json
 import html
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import os
 
 
@@ -116,9 +116,10 @@ class EZMoneyScraper:
         抓取並儲存
         修正 Bug: 嚴格比對資料內部的 data_date，防止假日抓到舊資料卻重複儲存
         """
-        now = datetime.now()
+        # ✨ 強制台灣時區
+        tw_tz = timezone(timedelta(hours=8))
+        now = datetime.now(tw_tz)
         today_str = now.strftime('%Y-%m-%d')
-
         print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [統一投信] 開始抓取...")
 
         # 抓取資料
