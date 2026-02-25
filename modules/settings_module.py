@@ -14,90 +14,77 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QSpinBox, QScrollArea, QMessageBox, QProgressBar,
                              QTextEdit, QFrame, QProgressDialog, QApplication)
 
-# 🔥 加入 QProcessEnvironment 以解決編碼問題
 from PyQt6.QtCore import Qt, QTimer, QProcess, pyqtSignal, QProcessEnvironment
 
-# --- 美學 CSS ---
+# ==========================================
+# 🎨 1. 介面基礎樣式 (拿掉奇怪的輸入框設計，回歸乾淨大字體)
+# ==========================================
 STYLES = """
     QWidget { font-family: "Segoe UI", "Microsoft JhengHei"; background-color: #121212; color: #E0E0E0; }
-    QFrame.Card { background-color: #1E1E1E; border-radius: 12px; border: 1px solid #3E3E42; }
 
-    QLabel.Title { font-size: 26px; font-weight: bold; color: #00E5FF; margin-bottom: 10px; }
-    QLabel.CardTitle { font-size: 18px; font-weight: bold; color: #FFFFFF; }
+    QFrame#Card { background-color: #1E1E1E; border-radius: 12px; border: 1px solid #3E3E42; }
 
-    QLabel.Label { font-size: 16px; color: #FFFFFF; font-weight: bold; }
-    QLabel.Value { font-size: 16px; font-weight: bold; color: #00E5FF; }
-    QLabel.Desc { font-size: 14px; color: #BBBBBB; font-style: normal; }
+    QLabel#Title { font-size: 26px; font-weight: bold; color: #00E5FF; margin-bottom: 10px; }
+    QLabel#CardTitle { font-size: 18px; font-weight: bold; color: #FFFFFF; }
+    QLabel#Label { font-size: 16px; color: #FFFFFF; font-weight: bold; }
+    QLabel#Value { font-size: 16px; font-weight: bold; color: #00E5FF; }
+    QLabel#Desc { font-size: 14px; color: #BBBBBB; font-style: normal; }
+    QLabel#StrategyTime { font-size: 14px; color: #FFEB3B; font-weight: bold; margin-right: 10px; }
 
-    /* 策略時間標籤 */
-    QLabel.StrategyTime { font-size: 14px; color: #FFEB3B; font-weight: bold; margin-right: 10px; }
-
-    /* --- 輸入框與微調按鈕優化 --- */
+    /* 單純把輸入框變大、背景變暗，不蓋掉系統預設的上下按鈕 */
     QDoubleSpinBox, QSpinBox {
         background-color: #2D2D30; 
         border: 1px solid #555; 
         border-radius: 4px;
         padding: 8px 10px;
-        font-size: 18px;
+        font-size: 20px; /* 字體放大 */
         color: #00E5FF; 
         font-weight: bold;
-        min-width: 100px; 
-        max-width: 140px;
+        min-width: 120px; 
+        max-width: 160px;
     }
 
-    QDoubleSpinBox::up-button, QSpinBox::up-button,
-    QDoubleSpinBox::down-button, QSpinBox::down-button {
-        width: 35px;
-        border-left: 1px solid #555;
-        background-color: #3A3A3A;
-        border-radius: 0px 4px 4px 0px;
-    }
-
-    QDoubleSpinBox::up-button:hover, QSpinBox::up-button:hover,
-    QDoubleSpinBox::down-button:hover, QSpinBox::down-button:hover {
-        background-color: #555555;
-    }
-
-    QDoubleSpinBox::up-button:pressed, QSpinBox::up-button:pressed,
-    QDoubleSpinBox::down-button:pressed, QSpinBox::down-button:pressed {
-        background-color: #00E5FF;
-    }
-
-    QDoubleSpinBox::up-arrow, QSpinBox::up-arrow,
-    QDoubleSpinBox::down-arrow, QSpinBox::down-arrow {
-        width: 12px; height: 12px;
-    }
-
-    QPushButton {
-        background-color: #3A3A3A; 
-        border: 1px solid #555; 
-        border-radius: 6px;
-        padding: 8px 15px; 
-        font-size: 15px; 
-        color: white;
-        font-weight: bold;
-    }
-    QPushButton:hover { background-color: #505050; border-color: #FFF; }
-
-    QPushButton.ActionBtn { background-color: #0078D4; border-color: #0099FF; }
-    QPushButton.ActionBtn:hover { background-color: #1084E0; }
-
-    QPushButton.CheckBtn { background-color: #009688; border-color: #4DB6AC; }
-    QPushButton.CheckBtn:hover { background-color: #26A69A; }
-
-    QPushButton.DangerBtn { background-color: #C62828; border-color: #E57373; }
-    QPushButton.DangerBtn:hover { background-color: #D32F2F; }
-
-    QPushButton.ResetBtn { background-color: #444; border-color: #888; color: #DDD; }
-    QPushButton.ResetBtn:hover { background-color: #666; color: #FFF; border-color: #FFF; }
-
+    /* 進度條與日誌區塊 */
     QProgressBar {
         border: 1px solid #555; border-radius: 6px; text-align: center;
         background-color: #252526; color: white; font-weight: bold;
         min-height: 20px;
     }
     QProgressBar::chunk { background-color: #00E5FF; border-radius: 5px; }
-    QTextEdit { background-color: #1E1E1E; border: 1px solid #3E3E42; border-radius: 6px; font-family: Consolas; color: #CCC; }
+    QTextEdit { background-color: #1E1E1E; border: 1px solid #3E3E42; border-radius: 6px; font-family: Consolas; color: #CCC; font-size: 14px; }
+"""
+
+# ==========================================
+# 🎨 2. 獨立按鈕樣式 (絕對保證 hover 會變色)
+# ==========================================
+BTN_ACTION = """
+    QPushButton { background-color: #0066CC; border: 2px solid #004C99; border-radius: 6px; padding: 10px 15px; font-size: 16px; color: white; font-weight: bold; }
+    QPushButton:hover { background-color: #3399FF; border: 2px solid #FFFFFF; }
+    QPushButton:pressed { background-color: #004C99; border: 2px solid #003366; }
+    QPushButton:disabled { background-color: #222222; border: 2px solid #333333; color: #666666; }
+"""
+BTN_CHECK = """
+    QPushButton { background-color: #00897B; border: 2px solid #00695C; border-radius: 6px; padding: 10px 15px; font-size: 16px; color: white; font-weight: bold; }
+    QPushButton:hover { background-color: #26A69A; border: 2px solid #FFFFFF; }
+    QPushButton:pressed { background-color: #004D40; border: 2px solid #00332B; }
+    QPushButton:disabled { background-color: #222222; border: 2px solid #333333; color: #666666; }
+"""
+BTN_DANGER = """
+    QPushButton { background-color: #D32F2F; border: 2px solid #B71C1C; border-radius: 6px; padding: 10px 15px; font-size: 16px; color: white; font-weight: bold; }
+    QPushButton:hover { background-color: #FF5252; border: 2px solid #FFFFFF; }
+    QPushButton:pressed { background-color: #B71C1C; border: 2px solid #7F0000; }
+    QPushButton:disabled { background-color: #222222; border: 2px solid #333333; color: #666666; }
+"""
+BTN_RESET = """
+    QPushButton { background-color: #555555; border: 2px solid #444444; border-radius: 6px; padding: 10px 15px; font-size: 16px; color: #DDDDDD; font-weight: bold; }
+    QPushButton:hover { background-color: #888888; border: 2px solid #FFFFFF; color: #FFFFFF; }
+    QPushButton:pressed { background-color: #333333; border: 2px solid #222222; }
+    QPushButton:disabled { background-color: #222222; border: 2px solid #333333; color: #666666; }
+"""
+BTN_TOGGLE = """
+    QPushButton { background-color: #1E1E1E; border: 1px solid #3E3E42; text-align: left; font-size: 16px; color: #00E5FF; padding: 10px 15px; border-radius: 6px; font-weight: bold; }
+    QPushButton:hover { background-color: #333337; border: 1px solid #00E5FF; color: #FFFFFF; }
+    QPushButton:pressed { background-color: #111111; border: 1px solid #0099CC; }
 """
 
 
@@ -111,7 +98,6 @@ class ScriptRunner(QProcess):
         self.args = args or []
         self.use_python = use_python
 
-        # 🔥 核心修正：強制設定子進程的 Python IO 為 UTF-8，徹底消滅 cp950 錯誤
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONIOENCODING", "utf-8")
         self.setProcessEnvironment(env)
@@ -128,14 +114,10 @@ class ScriptRunner(QProcess):
     def handle_output(self):
         try:
             data = self.readAllStandardOutput()
-            # 強制使用 utf-8 解碼，遇到無法解析的字元直接替換
             text = bytes(data).decode('utf-8', errors='replace')
-
-            # 解析進度條 (攔截腳本輸出的 PROGRESS: XX)
             match = re.search(r"PROGRESS:\s*(\d+)", text)
             if match:
                 self.progress_signal.emit(int(match.group(1)))
-
             self.output_signal.emit(text)
         except:
             pass
@@ -159,15 +141,13 @@ class SettingsModule(QWidget):
         self.set_inputs_enabled(False)
 
     def set_inputs_enabled(self, enabled):
-        """控制所有輸入框的鎖定狀態"""
         self.is_editing = enabled
         for inp in self.inputs.values():
             inp.setEnabled(enabled)
 
         self.btn_edit.setText("🔒 取消編輯" if enabled else "🔧 進入編輯模式")
-        self.btn_edit.setProperty("class", "ResetBtn" if enabled else "CheckBtn")
-        self.btn_edit.style().unpolish(self.btn_edit)
-        self.btn_edit.style().polish(self.btn_edit)
+        # 🔥 直接切換獨立樣式
+        self.btn_edit.setStyleSheet(BTN_RESET if enabled else BTN_CHECK)
 
         if not enabled:
             self.update_action_button_text()
@@ -182,7 +162,7 @@ class SettingsModule(QWidget):
 
     def _create_label(self, text, style_class, tooltip=""):
         lbl = QLabel(text)
-        lbl.setProperty("class", style_class)
+        lbl.setObjectName(style_class)
         if tooltip: lbl.setToolTip(tooltip)
         return lbl
 
@@ -203,9 +183,8 @@ class SettingsModule(QWidget):
         content_layout.setSpacing(25)
         content_layout.setContentsMargins(0, 0, 50, 0)
 
-        # === 1. 雲端運算與同步卡片 ===
         card_data = QFrame()
-        card_data.setProperty("class", "Card")
+        card_data.setObjectName("Card")
         l_data = QVBoxLayout(card_data)
         l_data.setContentsMargins(25, 25, 25, 25)
 
@@ -230,16 +209,16 @@ class SettingsModule(QWidget):
 
         btn_layout = QHBoxLayout()
         self.btn_check_cloud = QPushButton("🔄 檢查雲端是否有新資料")
-        self.btn_check_cloud.setProperty("class", "CheckBtn")
+        self.btn_check_cloud.setStyleSheet(BTN_CHECK)
         self.btn_check_cloud.clicked.connect(self.check_cloud_status)
 
         self.btn_download_zip = QPushButton("☁️ 下載並套用雲端結果 (ZIP)")
-        self.btn_download_zip.setProperty("class", "ActionBtn")
+        self.btn_download_zip.setStyleSheet(BTN_ACTION)
         self.btn_download_zip.setEnabled(False)
         self.btn_download_zip.clicked.connect(self.download_cloud_data)
 
         self.btn_force_local = QPushButton("⚡ 本機重跑 (三部曲全面更新)")
-        self.btn_force_local.setProperty("class", "DangerBtn")
+        self.btn_force_local.setStyleSheet(BTN_DANGER)
         self.btn_force_local.setToolTip("警告：這將啟動 K線更新 ➔ 籌碼營收抓取 ➔ 策略計算")
         self.btn_force_local.clicked.connect(self.run_full_update_local)
 
@@ -250,46 +229,53 @@ class SettingsModule(QWidget):
         l_data.addLayout(btn_layout)
         content_layout.addWidget(card_data)
 
-        # === 2. 策略參數微調卡片 ===
         card_param = QFrame()
-        card_param.setProperty("class", "Card")
+        card_param.setObjectName("Card")
         l_param = QVBoxLayout(card_param)
         l_param.setContentsMargins(25, 25, 25, 25)
 
-        header_layout = QHBoxLayout()
-        header_label = self._create_label("📈 策略參數微調", "CardTitle")
+        l_param.addWidget(self._create_label("⚙️ 系統參數設定", "CardTitle"))
 
+        self.btn_toggle_30w = QPushButton("▶ 30W 策略參數設定 (點擊展開)")
+        self.btn_toggle_30w.setStyleSheet(BTN_TOGGLE)
+        self.btn_toggle_30w.clicked.connect(self.toggle_30w_params)
+        l_param.addWidget(self.btn_toggle_30w)
+
+        self.container_30w = QWidget()
+        l_30w = QVBoxLayout(self.container_30w)
+        l_30w.setContentsMargins(10, 10, 0, 0)
+
+        header_layout = QHBoxLayout()
         self.lbl_strategy_time = self._create_label("上次運算: --", "StrategyTime")
         self.lbl_strategy_time.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         self.btn_edit = QPushButton("🔧 進入編輯模式")
-        self.btn_edit.setProperty("class", "CheckBtn")
+        self.btn_edit.setStyleSheet(BTN_CHECK)
         self.btn_edit.clicked.connect(self.toggle_edit_mode)
 
         self.btn_reset = QPushButton("↺ 恢復預設")
-        self.btn_reset.setProperty("class", "ResetBtn")
+        self.btn_reset.setStyleSheet(BTN_RESET)
         self.btn_reset.clicked.connect(self.restore_defaults)
 
         self.btn_save_recalc = QPushButton("⚡ 僅重算")
-        self.btn_save_recalc.setProperty("class", "ActionBtn")
+        self.btn_save_recalc.setStyleSheet(BTN_ACTION)
         self.btn_save_recalc.clicked.connect(self.handle_action_click)
 
-        header_layout.addWidget(header_label)
-        header_layout.addStretch()
         header_layout.addWidget(self.lbl_strategy_time)
+        header_layout.addStretch()
         header_layout.addWidget(self.btn_edit)
         header_layout.addSpacing(10)
         header_layout.addWidget(self.btn_reset)
         header_layout.addSpacing(10)
         header_layout.addWidget(self.btn_save_recalc)
 
-        l_param.addLayout(header_layout)
+        l_30w.addLayout(header_layout)
 
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
         line.setFrameShadow(QFrame.Shadow.Sunken)
         line.setStyleSheet("background-color: #333; max-height: 1px; margin: 10px 0px;")
-        l_param.addWidget(line)
+        l_30w.addWidget(line)
 
         grid_p = QGridLayout()
         grid_p.setVerticalSpacing(12)
@@ -326,10 +312,11 @@ class SettingsModule(QWidget):
             grid_p.addWidget(desc_item, i, 2)
 
         grid_p.setColumnStretch(2, 1)
-        l_param.addLayout(grid_p)
+        l_30w.addLayout(grid_p)
+
+        self.container_30w.setVisible(False)
         content_layout.addWidget(card_param)
 
-        # === 3. 日誌與進度條 ===
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
         self.log_output.setFixedHeight(120)
@@ -345,6 +332,14 @@ class SettingsModule(QWidget):
 
         for inp in self.inputs.values():
             inp.valueChanged.connect(self.update_action_button_text)
+
+    def toggle_30w_params(self):
+        is_visible = self.container_30w.isVisible()
+        self.container_30w.setVisible(not is_visible)
+        if not is_visible:
+            self.btn_toggle_30w.setText("▼ 30W 策略參數設定 (點擊收合)")
+        else:
+            self.btn_toggle_30w.setText("▶ 30W 策略參數設定 (點擊展開)")
 
     def restore_defaults(self):
         reply = QMessageBox.question(self, "恢復預設",
@@ -368,18 +363,17 @@ class SettingsModule(QWidget):
     def handle_action_click(self):
         original_text = self.btn_save_recalc.text()
         self.btn_save_recalc.setEnabled(False)
+        self.btn_force_local.setEnabled(False)
         self.btn_save_recalc.setText("⏳ 執行中...")
 
-        if self.btn_save_recalc.text() == "💾 儲存並重算":
+        if original_text == "💾 儲存並重算":
             self.save_config()
             self.log("✅ 參數已儲存並啟動計算")
         else:
             self.log("🚀 參數未變動，直接執行重算")
 
         self.save_and_recalc()
-
         self.set_inputs_enabled(False)
-        QTimer.singleShot(2000, lambda: self.btn_save_recalc.setEnabled(True))
 
     def check_local_status(self):
         try:
@@ -415,7 +409,6 @@ class SettingsModule(QWidget):
         self.log("📡 檢查雲端中...", True)
         self.btn_check_cloud.setEnabled(False)
         self.runner = ScriptRunner("git", ["fetch", "origin", "main"], use_python=False)
-        # 🔥 修復 TypeError：以 lambda 吸收無用的 exitCode 參數
         self.runner.finished.connect(lambda exitCode, exitStatus: self.read_remote_json())
         self.runner.start_script()
 
@@ -488,7 +481,6 @@ class SettingsModule(QWidget):
                                       ["checkout", "origin/main", "--", "data/daily_data.zip", "data/data_status.json"],
                                       use_python=False)
         self.dl_runner.output_signal.connect(self.log)
-        # 🔥 修復 TypeError
         self.dl_runner.finished.connect(lambda ec, es: self.unzip_data())
         self.dl_runner.start_script()
 
@@ -543,25 +535,23 @@ class SettingsModule(QWidget):
         self.btn_download_zip.setText("🔄 重新檢查雲端")
 
     def run_full_update_local(self):
-        """【工作流 B：本機全面更新】第 1 棒 - 更新 K 線"""
         self.log("🚀 本機全面更新啟動 (1/3): 下載最新 K 線...", True)
         self.btn_force_local.setEnabled(False)
+        self.btn_save_recalc.setEnabled(False)
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setFormat("⏳ 正在更新 K 線資料 (1/3) - %p%")
 
-        # 加入 --skip-check --auto 加速每日更新流程
         self.runner_step1 = ScriptRunner(self.project_root / "scripts" / "init_cache_tw.py", ["--skip-check", "--auto"])
         self.runner_step1.output_signal.connect(self.log)
         self.runner_step1.progress_signal.connect(self.progress.setValue)
 
-        # 🔥 修正中斷問題：使用 lambda 忽略傳來的 exitCode, exitStatus 參數
         self.runner_step1.finished.connect(lambda ec, es: self.run_update_chips_revenue())
         self.runner_step1.start_script()
 
     def run_update_chips_revenue(self):
-        """【新增的管線中繼站】第 2 棒 - 更新籌碼營收底稿"""
         self.log("📊 K線更新完成。開始抓取籌碼與營收 (2/3)...", False)
+        self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setFormat("⏳ 正在產生籌碼營收底稿 (2/3) - %p%")
 
@@ -569,15 +559,12 @@ class SettingsModule(QWidget):
         self.runner_step2.output_signal.connect(self.log)
         self.runner_step2.progress_signal.connect(self.progress.setValue)
 
-        # 🔥 第二棒跑完後，接力呼叫第三棒
         self.runner_step2.finished.connect(lambda ec, es: self.save_and_recalc())
         self.runner_step2.start_script()
 
     def save_and_recalc(self):
-        """【工作流 C：微調重算】第 3 棒 - 計算技術因子"""
         if not self.save_config(): return
 
-        # 防呆機制：缺少籌碼底稿自動補救
         raw_path = self.project_root / "data" / "temp" / "chips_revenue_raw.csv"
         if not raw_path.exists():
             self.log("⚠️ 偵測到缺少籌碼底稿 (chips_revenue_raw.csv)，自動啟動補抓程序...")
@@ -585,6 +572,7 @@ class SettingsModule(QWidget):
             return
 
         self.log("⚙️ 正在計算技術與籌碼因子 (3/3)...", False)
+        self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setFormat("⏳ 正在計算策略因子 (3/3) - %p%")
 
@@ -596,13 +584,15 @@ class SettingsModule(QWidget):
         self.runner_step3.start_script()
 
     def on_recalc_finished(self):
-        """運算完成的收尾動作"""
         self.log("✅ 運算完成！")
         self.progress.setValue(100)
         self.progress.setFormat("✅ 策略快照與數據已全部更新完畢")
         self.check_strategy_time()
         self.check_local_status()
+
         self.btn_force_local.setEnabled(True)
+        self.btn_save_recalc.setEnabled(True)
+        self.update_action_button_text()
 
     def log(self, t, clear=False):
         if clear: self.log_output.clear()
