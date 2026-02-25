@@ -21,6 +21,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 # 測試用的股票清單 (替換為你實際關注的標的)
 TEST_STOCKS = ['3665', '6664', '8358']
 
+
 def load_all_stocks():
     """ 從 stock_list.csv 讀取全部股票 """
     csv_path = Path("data/stock_list.csv")
@@ -36,19 +37,20 @@ def load_all_stocks():
         print(f"❌ 讀取清單失敗: {e}")
         return []
 
+
 def run_update(stock_list, force=False):
     total = len(stock_list)
-    print(f"📋 預計更新 {total} 檔基本面資料...")
+    print(f"📋 預計更新 {total} 檔基本面資料 (含 6 個月法人與資券歷史)...")
 
     for i, sid in enumerate(stock_list):
         sid = str(sid).strip()
         print(f"[{i + 1}/{total}] 處理 {sid} ...", end=" ", flush=True)
 
         file_path = DATA_DIR / f"{sid}.json"
-        existing_data = {"sid": sid}
+        existing_data = {"sid": sid, "last_updated": ""}
 
         # ==========================================
-        # 1. 讀取舊資料 (為了歷史籌碼的累積合併)
+        # 1. 讀取舊資料 (保留未更新的欄位)
         # ==========================================
         if file_path.exists():
             try:
@@ -58,11 +60,13 @@ def run_update(stock_list, force=False):
                 print("⚠️ 讀取舊檔失敗，將重新建立", end=" ")
 
         # ==========================================
-        # 2. 爬取最新資料
+        # 2. 爬取最新資料 (現在包含完整的歷史 List)
         # ==========================================
         try:
             parser = MoneyDJParser(sid)
             # 取得 Parser 整合後的資料
+            # 包含：profitability, yearly_perf, balance_sheet, revenue, cash_flow,
+            #       institutional_investors, margin_trading
             new_data = parser.get_full_analysis()
 
             if not new_data:
@@ -70,48 +74,44 @@ def run_update(stock_list, force=False):
                 continue
 
             # ==========================================
-            # 3. 核心合併邏輯
+            # 3. 核心更新邏輯 (直接覆蓋模式)
             # ==========================================
-            # A/B 類資料 (季報、年報、月營收、資產負債、現金流量)：直接覆蓋最新
-            # 這裡已將 Key 值與 moneydj_parser.py 的輸出對齊
-            for key in ['profitability', 'yearly_perf', 'balance_sheet', 'revenue', 'cash_flow']:
+            # 因為 parser 現在直接回傳完整的歷史列表 (List[Dict])，
+            # 所以我們不需要再做手動 append 或去重複，直接覆蓋即可保持資料最新且完整。
+
+            update_keys = [
+                'last_updated',  # 更新時間
+                'profitability',  # 獲利能力 (季)
+                'yearly_perf',  # 經營績效 (年)
+                'balance_sheet',  # 資產負債 (存貨/合約負債)
+                'revenue',  # 月營收
+                'cash_flow',  # 現金流量
+                'institutional_investors',  # 三大法人 (6個月歷史)
+                'margin_trading'  # 融資融券 (6個月歷史)
+            ]
+
+            data_updated = False
+            for key in update_keys:
+                # 只有當新資料存在且不為空時才更新，避免爬蟲失敗把舊資料洗掉
                 if new_data.get(key):
                     existing_data[key] = new_data[key]
+                    data_updated = True
 
-            # C 類資料 (每日籌碼)：使用「覆蓋式」累積機制
-            if 'chips' in new_data and new_data['chips']:
-                new_chip = new_data['chips']
-                new_date = new_chip.get('data_date')
-
-                if 'chips_history' not in existing_data:
-                    existing_data['chips_history'] = []
-
-                # --- 檢查日期是否已存在 ---
-                # 尋找是否有相同日期的舊紀錄索引
-                existing_index = next((idx for idx, c in enumerate(existing_data['chips_history'])
-                                      if c.get('data_date') == new_date), None)
-
-                if existing_index is not None:
-                    # 如果日期相同（例如晚上重跑修正外資數據），直接覆蓋
-                    existing_data['chips_history'][existing_index] = new_chip
-                    print(f"🔄 籌碼更新({new_date})", end=" ")
-                else:
-                    # 如果是新日期，則新增
-                    existing_data['chips_history'].append(new_chip)
-                    print(f"➕ 籌碼新增({new_date})", end=" ")
-
-                # --- 滾動視窗機制 ---
-                # 保留過去 60 筆 (約一季) 的每日籌碼
-                max_records = 60
-                if len(existing_data['chips_history']) > max_records:
-                    existing_data['chips_history'] = existing_data['chips_history'][-max_records:]
+            # 移除舊版邏輯遺留的 key (如果存在)，保持 JSON 乾淨
+            if 'chips' in existing_data:
+                del existing_data['chips']
+            if 'chips_history' in existing_data:
+                del existing_data['chips_history']
 
             # ==========================================
-            # 4. 寫回存檔 (覆蓋寫入已包含舊歷史的 existing_data)
+            # 4. 寫回存檔
             # ==========================================
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(existing_data, f, indent=2, ensure_ascii=False)
-            print("✅ Saved")
+            if data_updated:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(existing_data, f, indent=2, ensure_ascii=False)
+                print("✅ Saved")
+            else:
+                print("⚠️ 無有效新資料可寫入")
 
         except Exception as e:
             print(f"❌ Error: {e}")
@@ -127,6 +127,7 @@ def run_update(stock_list, force=False):
             pause_time = random.uniform(30.0, 45.0)
             print(f"\n⏳ 已處理 {i + 1} 檔，為防止鎖 IP，啟動長休息 {pause_time:.1f} 秒...\n")
             time.sleep(pause_time)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Update Fundamental Data from MoneyDJ')
