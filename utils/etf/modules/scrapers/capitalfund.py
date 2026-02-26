@@ -49,8 +49,10 @@ class CapitalFundScraper:
         tw_tz = timezone(timedelta(hours=8))
         today = datetime.now(tw_tz)
 
-        # 破譯修正：每一天都查！不再排除六日，因為 API 會把星期五跟連假前的資料藏在假日的查詢結果裡
-        for i in range(lookback_days, -1, -1):
+        # 破譯修正：往未來多查 10 天！
+        # 應付投信 API 遇到連假（如春節 10 天）把盤後資料藏在下一個營業日的陋習
+        # i 從 lookback_days (過去) 一路遞減到 -10 (未來 10 天)
+        for i in range(lookback_days, -11, -1):
             check_date = today - timedelta(days=i)
             missing_dates.append(check_date)
 
