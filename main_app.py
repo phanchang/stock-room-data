@@ -7,21 +7,22 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
                              QMessageBox, QProgressDialog, QSizePolicy)
 from PyQt6.QtCore import Qt, QTimer
 import traceback
+
+
 def exception_hook(exctype, value, tb):
     print("💥 偵測到未捕獲的錯誤:")
     traceback.print_exception(exctype, value, tb)
     sys.exit(1)
+
+
 sys.excepthook = exception_hook
 
-# 設定模組搜尋路徑
 current_dir = Path(__file__).resolve().parent
 if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
-# Import Utils
 from utils.quote_worker import QuoteWorker
 
-# Import 各個功能模組
 from modules.kline_module import KLineModule
 from modules.revenue_module import RevenueModule
 from modules.stock_list_module import StockListModule
@@ -85,17 +86,14 @@ class StockWarRoomV3(QMainWindow):
             QPushButton { background-color: #444; color: white; border: 1px solid #555; padding: 5px; }
         """)
 
-        # 1. 建立共享的 Worker
         self.shared_worker = QuoteWorker(self)
 
-        # 狀態變數
         self.current_stock_id = None
         self.current_stock_name = ""
 
         self.init_ui()
         self.connect_signals()
 
-        # 延遲載入初始資料 (並嘗試選取第一檔)
         QTimer.singleShot(500, self.load_initial_data)
 
     def init_ui(self):
@@ -106,11 +104,9 @@ class StockWarRoomV3(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # --- 側邊選單 ---
         self.side_menu = SideMenu()
         main_layout.addWidget(self.side_menu)
 
-        # --- 右側堆疊頁面 ---
         self.pages = QStackedWidget()
 
         # Page 0: 戰情室
@@ -119,7 +115,6 @@ class StockWarRoomV3(QMainWindow):
         warroom_layout.setContentsMargins(4, 4, 4, 4)
         warroom_layout.setSpacing(4)
 
-        # 建立模組
         self.list_module = StockListModule(shared_worker=self.shared_worker)
         self.kline_module = KLineModule(shared_worker=self.shared_worker)
 
@@ -129,7 +124,6 @@ class StockWarRoomV3(QMainWindow):
         self.eps_module = EPSModule()
         self.ratio_module = RatioModule()
 
-        # 建立 Tab
         self.chips_tabs = self._create_tab_widget()
         self.chips_tabs.addTab(self.inst_module, "三大法人")
         self.chips_tabs.addTab(self.margin_module, "資券變化")
@@ -141,7 +135,6 @@ class StockWarRoomV3(QMainWindow):
         self.fund_tabs.addTab(self.ratio_module, "三率")
         self.fund_tabs.currentChanged.connect(self.on_tab_changed)
 
-        # Layout 設定
         for widget in [self.list_module, self.kline_module, self.chips_tabs, self.fund_tabs]:
             widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
 
@@ -188,8 +181,6 @@ class StockWarRoomV3(QMainWindow):
 
     def connect_signals(self):
         self.side_menu.button_group.idClicked.connect(self.pages.setCurrentIndex)
-
-        # 監聽頁面切換，實現自動重繪
         self.pages.currentChanged.connect(self.on_page_changed)
 
         self.list_module.stock_selected.connect(self.on_stock_changed)
@@ -198,28 +189,17 @@ class StockWarRoomV3(QMainWindow):
         self.strategy_page.request_add_watchlist.connect(self.on_add_watchlist_request)
 
     def on_page_changed(self, index):
-        """當頁面切換回戰情室 (Index 0) 時觸發"""
         if index == 0:
-            # 1. 刷新左側列表的顯示內容 (例如更新後的時間標籤)
             self.list_module.refresh_table()
-
             if self.current_stock_id:
-                # --- 情況 A：已經有選定股票 (例如從「選股」連動過來，或是原本就在看某支) ---
-                # 我們不改變 ID，但強制 K 線圖與分頁重新讀取硬碟裡的最新資料
                 print(f"DEBUG: 保持連動股票 {self.current_stock_id}，並重新載入最新數據")
-
-                # 強制 K 線圖重新讀取檔案 (不更換 ID，只重讀 Data)
                 self.kline_module.load_stock_data(self.current_stock_id, self.current_stock_name)
-
-                # 強制下方的籌碼/基本面分頁也刷新
                 self.update_visible_tabs()
-
             else:
-                # --- 情況 B：目前沒有選定股票 (例如剛啟動程式) ---
                 print("DEBUG: 目前無選定股票，自動選取第一筆")
                 self.auto_select_first_stock()
+
     def on_stock_changed(self, full_stock_id):
-        # 🔥 [防閃退關鍵] 如果股票代號跟上次一樣，就不要重跑，防止無限循環觸發
         if full_stock_id == self.current_stock_id and self.current_stock_id is not None:
             return
         self.current_stock_id = full_stock_id
@@ -258,46 +238,40 @@ class StockWarRoomV3(QMainWindow):
 
     def on_strategy_stock_clicked(self, stock_id_full):
         """當選股分頁雙擊股票時"""
-        # 1. 先設定當前股票 ID (這就是連動的關鍵)
         self.current_stock_id = stock_id_full
-
-        # 2. 找出名稱
         clean_id = stock_id_full.split('_')[0]
+
         stock_name = ""
         if hasattr(self.list_module, 'stock_db'):
             info = self.list_module.stock_db.get(clean_id)
             if info: stock_name = info.get('name', '')
         self.current_stock_name = stock_name
 
-        # 3. 切換到戰情室分頁 (這會觸發上面的 on_page_changed)
-        self.side_menu.button_group.button(0).setChecked(True)
-        self.pages.setCurrentIndex(0)
+        # 🔥 背景靜默更新戰情室與擴充 K 線圖，但不切換分頁，將主控權留在選股畫面
+        if hasattr(self, 'kline_module'):
+            self.kline_module.load_stock_data(stock_id_full, stock_name)
+        self.update_visible_tabs()
+
+        # [移除/註解跳轉邏輯，不再強制切到首頁]
+        # self.side_menu.button_group.button(0).setChecked(True)
+        # self.pages.setCurrentIndex(0)
 
     def on_add_watchlist_request(self, stock_id, group_name):
         self.list_module.add_stock_to_group(stock_id, group_name)
 
     def load_initial_data(self):
-        # 重新整理列表
         self.list_module.refresh_table()
-        # 稍後自動選取第一支，解決「預設要畫第一筆資料」的需求
         QTimer.singleShot(500, self.auto_select_first_stock)
 
     def auto_select_first_stock(self):
-        """
-        實際驅動清單選取第一支股票。
-        原本的 getattr 猜測邏輯已移除，直接呼叫 list_module 的標準介面。
-        """
         try:
-            # 直接檢查 list_module 是否存在，然後要求它選取第一筆
             if hasattr(self, 'list_module') and self.list_module:
                 self.list_module.force_trigger_first_selection()
-                print("DEBUG: 已成功透過 force_trigger_first_selection 選取第一列股票")
             else:
                 print("DEBUG: 找不到 list_module，無法自動選取")
-
         except Exception as e:
-            # 保留你原本的錯誤捕捉邏輯，方便噴錯時 debug
             print(f"💥 自動選取失敗: {e}")
+
     def closeEvent(self, event):
         reply = QMessageBox.question(self, '確認退出', '確定要關閉系統嗎？',
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)

@@ -1,6 +1,6 @@
 import sys
 import json
-import time  # 👉 新增 time 模組
+import time
 import pandas as pd
 from pathlib import Path
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -19,14 +19,15 @@ from PyQt6.QtGui import QColor, QAction, QCursor, QFont
 FULL_COLUMN_SPECS = {
     'sid': {'name': '代號', 'show': True, 'tip': '股票代號', 'type': 'str'},
     'name': {'name': '名稱', 'show': True, 'tip': '股票名稱', 'type': 'str'},
-    'rev_ym': {'name': '營收月', 'show': True, 'tip': '資料所屬月份 (如 11301 代表 2024年1月)', 'type': 'str'},
+    'rev_ym': {'name': '營收月', 'show': True, 'tip': '資料所屬月份', 'type': 'str'},
     'industry': {'name': '產業', 'show': True, 'tip': '所屬產業類別', 'type': 'str'},
     '現價': {'name': '股價', 'show': True, 'tip': '最新收盤價', 'type': 'num'},
+    '漲幅1d': {'name': '今日%', 'show': True, 'tip': '今日漲跌幅', 'type': 'num'},
     '漲幅5d': {'name': '5日%', 'show': False, 'tip': '近5日漲跌幅', 'type': 'num'},
     '漲幅20d': {'name': '月漲幅%', 'show': True, 'tip': '近20日漲跌幅', 'type': 'num'},
     '漲幅60d': {'name': '季漲幅%', 'show': False, 'tip': '近60日漲跌幅', 'type': 'num'},
     'RS強度': {'name': 'RS強度', 'show': True, 'tip': '相對強度 (1-99)', 'type': 'num'},
-    'bb_width': {'name': '布林寬%', 'show': True, 'tip': '布林通道寬度 (愈小愈壓縮)', 'type': 'num'},
+    'bb_width': {'name': '布林寬%', 'show': True, 'tip': '布林通道寬度', 'type': 'num'},
     '量比': {'name': '量比', 'show': True, 'tip': '今日量 / 5日均量', 'type': 'num'},
     't_net_today': {'name': '投今日', 'show': False, 'tip': '投信今日買賣超', 'type': 'num'},
     't_sum_5d': {'name': '投5日', 'show': True, 'tip': '投信5日累計買賣超', 'type': 'num'},
@@ -44,70 +45,135 @@ FULL_COLUMN_SPECS = {
     'm_sum_20d': {'name': '資20日', 'show': False, 'tip': '融資20日累計', 'type': 'num'},
     'rev_yoy': {'name': '月YoY%', 'show': True, 'tip': '最新月營收年增率', 'type': 'num'},
     'rev_cum_yoy': {'name': '累營YoY%', 'show': True, 'tip': '當年累計營收年增率', 'type': 'num'},
-    'eps_q': {'name': 'EPS(累)', 'show': True, 'tip': '累計季 EPS', 'type': 'num'},
-    'eps_date': {'name': 'EPS季別', 'show': True, 'tip': 'EPS數據所屬年度與季別', 'type': 'str'},
+    'fund_eps_cum': {'name': 'EPS(累)', 'show': True, 'tip': '最新年度累計 EPS', 'type': 'num'},
+    'fund_eps_year': {'name': 'EPS年度', 'show': True, 'tip': '最新EPS所屬年度', 'type': 'str'},
     'pe': {'name': 'PE', 'show': True, 'tip': '本益比', 'type': 'num'},
     'pbr': {'name': 'PB', 'show': False, 'tip': '股價淨值比', 'type': 'num'},
     'yield': {'name': '殖利率%', 'show': True, 'tip': '現金殖利率', 'type': 'num'},
     'is_tu_yang': {'name': '土洋對作', 'show': False, 'tip': '1=符合土洋對作訊號', 'type': 'num'},
     '強勢特徵': {'name': '強勢特徵', 'show': True, 'tip': '策略觸發訊號標籤', 'type': 'str'},
-    'str_30w_week_offset': {'name': '訊號週數', 'show': True, 'tip': '0=本週, 1=上週...', 'type': 'num'},
-    'str_st_week_offset': {'name': 'ST買訊(週)', 'show': True, 'tip': '距離最近一次週線SuperTrend買訊週數 (0=本週)',
-                           'type': 'num'}
+    'str_30w_week_offset': {'name': '30W起漲週數(前)', 'show': True, 'tip': '距離30W訊號週數 (0=本週)', 'type': 'num'},
+    'str_st_week_offset': {'name': 'ST買訊(前)', 'show': True, 'tip': '距離最近一次週線買訊週數', 'type': 'num'},
+    'fund_contract_qoq': {'name': '合約季增(%)', 'show': True, 'tip': '合約負債季增率(%) (大於0較佳)', 'type': 'num'},
+    'fund_inventory_qoq': {'name': '庫存季增(%)', 'show': True, 'tip': '庫存季增率(%) (建議 <= 0 代表庫存去化)',
+                           'type': 'num'},
+    'fund_op_cash_flow': {'name': '營業現金流', 'show': False, 'tip': '最新營業現金流 (建議 > 0)', 'type': 'num'},
+
+    # 🔥 加入 5日 欄位，保留 20日
+    'margin_diff_5d': {'name': '融資5日增減(%)', 'show': True, 'tip': '融資使用率 5日增減 (建議 <= 0)', 'type': 'num'},
+    'legal_diff_5d': {'name': '法人5日增減(%)', 'show': True, 'tip': '三大法人持股 5日增減 (建議 >= 0)', 'type': 'num'},
+    'margin_diff_20d': {'name': '融資20日增減(%)', 'show': False, 'tip': '融資使用率 20日增減 (建議 <= 0)',
+                        'type': 'num'},
+    'legal_diff_20d': {'name': '法人20日增減(%)', 'show': False, 'tip': '三大法人持股 20日增減 (建議 >= 0)',
+                       'type': 'num'},
 }
 
 # ==========================================
-# 2. 全數值過濾設定
+# 2. 全數值過濾設定 (加入 Category 分類與5日籌碼)
 # ==========================================
 FULL_FILTER_SPECS = [
-    {'key': '現價', 'label': '股價', 'min': 0, 'max': 5000, 'step': 10, 'suffix': ''},
-    {'key': '漲幅5d', 'label': '5日漲幅(%)', 'min': -50, 'max': 100, 'step': 1.0, 'suffix': '%'},
-    {'key': '漲幅20d', 'label': '月漲幅(%)', 'min': -50, 'max': 200, 'step': 1.0, 'suffix': '%'},
-    {'key': '漲幅60d', 'label': '季漲幅(%)', 'min': -50, 'max': 500, 'step': 5.0, 'suffix': '%'},
-    {'key': 'RS強度', 'label': 'RS強度', 'min': 0, 'max': 99, 'step': 1.0, 'suffix': ''},
-    {'key': 'bb_width', 'label': '布林寬(%)', 'min': 0, 'max': 50, 'step': 0.5, 'suffix': '%'},
-    {'key': '量比', 'label': '量比(倍)', 'min': 0, 'max': 50, 'step': 0.5, 'suffix': ''},
-    {'key': 't_streak', 'label': '投信連買(日)', 'min': 0, 'max': 30, 'step': 1, 'suffix': ''},
-    {'key': 't_net_today', 'label': '投信今日(張)', 'min': -20000, 'max': 20000, 'step': 100, 'suffix': ''},
-    {'key': 't_sum_5d', 'label': '投信5日(張)', 'min': -50000, 'max': 50000, 'step': 100, 'suffix': ''},
-    {'key': 't_sum_10d', 'label': '投信10日(張)', 'min': -50000, 'max': 50000, 'step': 100, 'suffix': ''},
-    {'key': 't_sum_20d', 'label': '投信20日(張)', 'min': -100000, 'max': 100000, 'step': 500, 'suffix': ''},
-    {'key': 'f_streak', 'label': '外資連買(日)', 'min': 0, 'max': 30, 'step': 1, 'suffix': ''},
-    {'key': 'f_net_today', 'label': '外資今日(張)', 'min': -50000, 'max': 50000, 'step': 500, 'suffix': ''},
-    {'key': 'f_sum_5d', 'label': '外資5日(張)', 'min': -100000, 'max': 100000, 'step': 500, 'suffix': ''},
-    {'key': 'f_sum_10d', 'label': '外資10日(張)', 'min': -100000, 'max': 100000, 'step': 500, 'suffix': ''},
-    {'key': 'f_sum_20d', 'label': '外資20日(張)', 'min': -200000, 'max': 200000, 'step': 1000, 'suffix': ''},
-    {'key': 'm_net_today', 'label': '融資今日(張)', 'min': -20000, 'max': 20000, 'step': 100, 'suffix': ''},
-    {'key': 'm_sum_5d', 'label': '融資5日(張)', 'min': -50000, 'max': 50000, 'step': 100, 'suffix': ''},
-    {'key': 'm_sum_10d', 'label': '融資10日(張)', 'min': -50000, 'max': 50000, 'step': 100, 'suffix': ''},
-    {'key': 'rev_yoy', 'label': '月營收年增(%)', 'min': -100, 'max': 1000, 'step': 5.0, 'suffix': '%'},
-    {'key': 'rev_cum_yoy', 'label': '累營年增(%)', 'min': -100, 'max': 1000, 'step': 5.0, 'suffix': '%'},
-    {'key': 'eps_q', 'label': 'EPS(元)', 'min': -10, 'max': 100, 'step': 0.5, 'suffix': ''},
-    {'key': 'pe', 'label': '本益比', 'min': 0, 'max': 200, 'step': 1.0, 'suffix': ''},
-    {'key': 'pbr', 'label': '股價淨值比', 'min': 0, 'max': 20, 'step': 0.1, 'suffix': ''},
-    {'key': 'yield', 'label': '殖利率(%)', 'min': 0, 'max': 20, 'step': 0.5, 'suffix': '%'},
-    {'key': 'str_30w_week_offset', 'label': '訊號週數(前)', 'min': -1, 'max': 52, 'step': 1, 'suffix': '週'},
-    {'key': 'str_st_week_offset', 'label': 'ST買訊(前)', 'min': -1, 'max': 26, 'step': 1, 'suffix': '週'}
+    {'category': '📈 技術面', 'key': '現價', 'label': '股價', 'min': 0, 'max': 5000, 'step': 10, 'suffix': ''},
+    {'category': '📈 技術面', 'key': '漲幅1d', 'label': '今日漲幅(%)', 'min': -20, 'max': 20, 'step': 1.0,
+     'suffix': '%'},
+    {'category': '📈 技術面', 'key': '漲幅5d', 'label': '5日漲幅(%)', 'min': -50, 'max': 100, 'step': 1.0,
+     'suffix': '%'},
+    {'category': '📈 技術面', 'key': '漲幅20d', 'label': '月漲幅(%)', 'min': -50, 'max': 200, 'step': 1.0,
+     'suffix': '%'},
+    {'category': '📈 技術面', 'key': '漲幅60d', 'label': '季漲幅(%)', 'min': -50, 'max': 500, 'step': 5.0,
+     'suffix': '%'},
+    {'category': '📈 技術面', 'key': 'RS強度', 'label': 'RS強度', 'min': 0, 'max': 99, 'step': 1.0, 'suffix': ''},
+    {'category': '📈 技術面', 'key': 'bb_width', 'label': '布林寬(%)', 'min': 0, 'max': 50, 'step': 0.5, 'suffix': '%'},
+    {'category': '📈 技術面', 'key': '量比', 'label': '量比(倍)', 'min': 0, 'max': 50, 'step': 0.5, 'suffix': ''},
+    {'category': '📈 技術面', 'key': 'str_30w_week_offset', 'label': '30W起漲週數(前)', 'min': -1, 'max': 52, 'step': 1,
+     'suffix': '週'},
+    {'category': '📈 技術面', 'key': 'str_st_week_offset', 'label': 'ST買訊(前)', 'min': -1, 'max': 26, 'step': 1,
+     'suffix': '週'},
+
+    {'category': '💰 籌碼面', 'key': 't_streak', 'label': '投信連買(日)', 'min': 0, 'max': 30, 'step': 1, 'suffix': ''},
+    {'category': '💰 籌碼面', 'key': 't_net_today', 'label': '投信今日(張)', 'min': -20000, 'max': 20000, 'step': 100,
+     'suffix': ''},
+    {'category': '💰 籌碼面', 'key': 't_sum_5d', 'label': '投信5日(張)', 'min': -50000, 'max': 50000, 'step': 100,
+     'suffix': ''},
+    {'category': '💰 籌碼面', 'key': 't_sum_20d', 'label': '投信20日(張)', 'min': -100000, 'max': 100000, 'step': 500,
+     'suffix': ''},
+    {'category': '💰 籌碼面', 'key': 'f_streak', 'label': '外資連買(日)', 'min': 0, 'max': 30, 'step': 1, 'suffix': ''},
+    {'category': '💰 籌碼面', 'key': 'f_net_today', 'label': '外資今日(張)', 'min': -50000, 'max': 50000, 'step': 500,
+     'suffix': ''},
+    {'category': '💰 籌碼面', 'key': 'f_sum_5d', 'label': '外資5日(張)', 'min': -100000, 'max': 100000, 'step': 500,
+     'suffix': ''},
+    {'category': '💰 籌碼面', 'key': 'f_sum_20d', 'label': '外資20日(張)', 'min': -200000, 'max': 200000, 'step': 1000,
+     'suffix': ''},
+    {'category': '💰 籌碼面', 'key': 'm_net_today', 'label': '融資今日(張)', 'min': -20000, 'max': 20000, 'step': 100,
+     'suffix': ''},
+    {'category': '💰 籌碼面', 'key': 'm_sum_5d', 'label': '融資5日(張)', 'min': -50000, 'max': 50000, 'step': 100,
+     'suffix': ''},
+
+    # 🔥 加入 5日 濾網
+    {'category': '💰 籌碼面', 'key': 'legal_diff_5d', 'label': '法人5日增(%)', 'min': -100, 'max': 100, 'step': 0.5,
+     'suffix': '%'},
+    {'category': '💰 籌碼面', 'key': 'margin_diff_5d', 'label': '融資5日增(%)', 'min': -100, 'max': 100, 'step': 0.5,
+     'suffix': '%'},
+    {'category': '💰 籌碼面', 'key': 'legal_diff_20d', 'label': '法人20日增(%)', 'min': -100, 'max': 100, 'step': 0.5,
+     'suffix': '%'},
+    {'category': '💰 籌碼面', 'key': 'margin_diff_20d', 'label': '融資20日增(%)', 'min': -100, 'max': 100, 'step': 0.5,
+     'suffix': '%'},
+
+    {'category': '📖 基本面', 'key': 'rev_yoy', 'label': '月營收年增(%)', 'min': -100, 'max': 1000, 'step': 5.0,
+     'suffix': '%'},
+    {'category': '📖 基本面', 'key': 'rev_cum_yoy', 'label': '累營年增(%)', 'min': -100, 'max': 1000, 'step': 5.0,
+     'suffix': '%'},
+    {'category': '📖 基本面', 'key': 'fund_eps_cum', 'label': '累計EPS(元)', 'min': -50, 'max': 200, 'step': 0.5,
+     'suffix': ''},
+    {'category': '📖 基本面', 'key': 'pe', 'label': '本益比', 'min': 0, 'max': 200, 'step': 1.0, 'suffix': ''},
+    {'category': '📖 基本面', 'key': 'pbr', 'label': '股價淨值比', 'min': 0, 'max': 20, 'step': 0.1, 'suffix': ''},
+    {'category': '📖 基本面', 'key': 'yield', 'label': '殖利率(%)', 'min': 0, 'max': 20, 'step': 0.5, 'suffix': '%'},
+    {'category': '📖 基本面', 'key': 'fund_contract_qoq', 'label': '合約季增(%)', 'min': -100, 'max': 500, 'step': 1.0,
+     'suffix': '%'},
+    {'category': '📖 基本面', 'key': 'fund_inventory_qoq', 'label': '庫存季增(%)', 'min': -100, 'max': 500, 'step': 1.0,
+     'suffix': '%'},
+    {'category': '📖 基本面', 'key': 'fund_op_cash_flow', 'label': '營業現金流', 'min': -99999999, 'max': 99999999,
+     'step': 100, 'suffix': ''}
 ]
 
-DEFAULT_ACTIVE_FILTERS = ['str_30w_week_offset', '量比', '漲幅20d']
+# 🔥 預設的 6 個濾網條件 (改為 5日籌碼)
+DEFAULT_ACTIVE_FILTERS = [
+    'str_30w_week_offset', 'str_st_week_offset', 'rev_cum_yoy',
+    'fund_eps_cum', 'legal_diff_5d', 'margin_diff_5d'
+]
 
+# 🔥 重新組織特徵分類 (30W黏貼後突破 移至特殊型態)
 TAG_CATEGORIES = {
-    "🔥 趨勢型態": ["ST轉多", "30W黏貼", "30W甩轎", "主力掃單(ILSS)", "土洋對作", "超強勢", "突破30週", "創季高",
-                   "創月高", "強勢多頭", "波段黑馬", "假跌破"],
-    "📉 整理型態": ["極度壓縮", "波動壓縮", "盤整5日", "盤整10日", "盤整20日", "盤整60日", "Vix反轉"],
-    "💰 籌碼支撐": ["投信認養", "散戶退場", "回測季線", "回測年線"]
+    "📈 趨勢與突破": ["ST轉多", "突破30週", "創季高", "創月高", "強勢多頭", "波段黑馬", "超強勢"],
+    "📉 壓縮與整理": ["極度壓縮", "波動壓縮", "盤整5日", "盤整10日", "盤整20日", "盤整60日"],
+    "💰 籌碼與主力": ["主力掃單(ILSS)", "投信認養", "散戶退場", "土洋對作"],
+    "⚠️ 特殊型態": ["30W黏貼後突破", "30W甩轎", "假跌破", "回測季線", "回測年線", "Vix反轉"]
 }
 
+# 🔥 補齊所有標籤的 Tooltip
 TAG_TOOLTIPS = {
     'ST轉多': '近 4 週內週線 SuperTrend 指標由空翻多，觸發波段買進訊號',
-    '30W黏貼': 'MA30 走平且股價在均線附近 ±12% 震盪',
-    '30W甩轎': 'MA30 向上，股價回測跌破均線並在 10 週內站回',
-    '主力掃單(ILSS)': '[嚴格] MA200上 + 假跌破掃單 + 爆量站回 + 營收增 + 融資減',
-    '假跌破': '舊版策略：昨破月線、今站回 (純技術面)',
-    '極度壓縮': '布林寬度 < 5%，極致籌碼沉澱',
-    '土洋對作': '投信賣、外資買 (籌碼換手)',
-    '超強勢': 'RS 強度 > 90，市場前 10% 強勢股',
+    '突破30週': '股價剛由下往上突破 30 週移動平均線',
+    '創季高': '股價突破近 60 日 (3個月) 以來最高價',
+    '創月高': '股價突破近 30 日 (1個月) 以來最高價',
+    '強勢多頭': '均線呈現完美多頭排列 (MA5 > 10 > 20 > 60)',
+    '波段黑馬': '近 60 日累積漲幅已經超過 30%',
+    '超強勢': 'RS 強度大於 90，屬於全市場前 10% 的強勢股',
+    '30W黏貼後突破': 'MA30 走平且股價在均線附近震盪沉澱後，首度帶量突破起漲',
+    '極度壓縮': '布林通道寬度小於 5%，呈現極致的籌碼沉澱與無波動狀態',
+    '波動壓縮': '布林通道寬度小於 8%，波動率正在收斂',
+    '盤整5日': '布林寬度近 5 日皆處於收斂狀態',
+    '盤整10日': '布林寬度近 10 日皆處於收斂狀態',
+    '盤整20日': '布林寬度近 20 日皆處於收斂狀態',
+    '盤整60日': '布林寬度長達 60 日皆處於收斂狀態 (大底成型)',
+    '主力掃單(ILSS)': '[嚴格] MA200上 + 假跌破掃單 + 爆量站回 + 營收成長 + 融資退場',
+    '投信認養': '投信連續買超天數達到 3 天以上',
+    '散戶退場': '融資今日單日大減超過 200 張',
+    '土洋對作': '投信與外資買賣方向相反 (通常指投信買、外資賣的籌碼換手)',
+    '30W甩轎': 'MA30 趨勢向上，股價回測跌破均線後，在 10 週內迅速站回',
+    '假跌破': '股價昨日跌破月線(MA20)，今日立刻反彈站回月線之上',
+    '回測季線': '股價回測並防守住季線 (MA60) 支撐',
+    '回測年線': '股價回測並防守住年線 (MA200) 支撐',
+    'Vix反轉': '恐慌指數(Vix)飆高後出現極端反轉訊號，代表短線可能見底'
 }
 
 GLOBAL_STYLE = """
@@ -165,7 +231,7 @@ class FilterSelectionDialog(QDialog):
         self.checkboxes = {}
         self.active_keys = active_keys
         self.setStyleSheet(GLOBAL_STYLE)
-        self.resize(500, 600)
+        self.resize(550, 700)
         self.init_ui()
 
     def init_ui(self):
@@ -173,21 +239,40 @@ class FilterSelectionDialog(QDialog):
         lbl = QLabel("請勾選要顯示在主畫面的濾網：")
         lbl.setStyleSheet("color: #AAA; margin-bottom: 10px;")
         layout.addWidget(lbl)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         content = QWidget()
-        grid = QGridLayout(content)
-        row, col = 0, 0
+        v_layout = QVBoxLayout(content)
+
+        categories = {}
         for cfg in self.all_filters:
-            key = cfg['key']
-            chk = QCheckBox(cfg['label'])
-            chk.setChecked(key in self.active_keys)
-            self.checkboxes[key] = chk
-            grid.addWidget(chk, row, col)
-            col += 1
-            if col > 2: col = 0; row += 1
+            cat = cfg.get('category', '其他')
+            if cat not in categories: categories[cat] = []
+            categories[cat].append(cfg)
+
+        for cat, cfgs in categories.items():
+            cat_lbl = QLabel(cat)
+            cat_lbl.setStyleSheet(
+                "color: #00E5FF; font-weight: bold; font-size: 16px; margin-top: 10px; border-bottom: 1px solid #444;")
+            v_layout.addWidget(cat_lbl)
+
+            grid = QGridLayout()
+            row, col = 0, 0
+            for cfg in cfgs:
+                key = cfg['key']
+                chk = QCheckBox(cfg['label'])
+                chk.setChecked(key in self.active_keys)
+                self.checkboxes[key] = chk
+                grid.addWidget(chk, row, col)
+                col += 1
+                if col > 2: col = 0; row += 1
+            v_layout.addLayout(grid)
+
+        v_layout.addStretch()
         scroll.setWidget(content)
         layout.addWidget(scroll)
+
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
@@ -258,28 +343,35 @@ class RangeFilterWidget(QWidget):
         self.setStyleSheet("background: transparent;")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+
         self.lbl_name = QLabel(config['label'])
         self.lbl_name.setStyleSheet("color: #DDD; font-size: 14px; border:none;")
-        self.lbl_name.setFixedWidth(100)
+        # 🔥 修改此處：寬度從 100 增加至 115，避免長文字被蓋住
+        self.lbl_name.setFixedWidth(115)
         layout.addWidget(self.lbl_name)
+
         self.spin_min = QDoubleSpinBox()
         self.setup_spin(self.spin_min, config['min'], config['suffix'])
         self.spin_min.setFixedWidth(80)
         layout.addWidget(self.spin_min)
+
         lbl_tilde = QLabel("~")
         lbl_tilde.setStyleSheet("color:#555; border:none;")
         lbl_tilde.setFixedWidth(10)
         lbl_tilde.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl_tilde)
+
         self.spin_max = QDoubleSpinBox()
         self.setup_spin(self.spin_max, config['max'], config['suffix'])
         self.spin_max.setFixedWidth(80)
         layout.addWidget(self.spin_max)
+
         layout.addStretch()
 
     def setup_spin(self, spin, default_val, suffix):
-        spin.setRange(-999999, 999999)
-        spin.setDecimals(1 if '張' not in self.config.get('label', '') else 0)
+        spin.setRange(-999999999, 999999999)
+        spin.setDecimals(
+            1 if '張' not in self.config.get('label', '') and '流' not in self.config.get('label', '') else 0)
         spin.setSingleStep(self.config['step'])
         spin.setSuffix(suffix)
         spin.setValue(default_val)
@@ -322,27 +414,47 @@ class StrategyTableModel(QAbstractTableModel):
         if not index.isValid(): return None
         col_key = self.visible_cols[index.column()]
         value = self._df.iloc[index.row()][col_key]
+
         if role == Qt.ItemDataRole.UserRole: return value
+
         if role == Qt.ItemDataRole.DisplayRole:
             if isinstance(value, (int, float)):
-                if col_key in ['RS強度', 'pe', 'pbr', '量比', 'eps_q']: return f"{value:.1f}"
+                if col_key == '現價':
+                    fmt_val = f"{value:,.2f}"
+                    if fmt_val.endswith('.00'):
+                        return fmt_val[:-3]
+                    elif fmt_val.endswith('0'):
+                        return fmt_val[:-1]
+                    return fmt_val
+
+                if col_key in ['RS強度', 'pe', 'pbr', '量比', 'fund_eps_cum']: return f"{value:.1f}"
                 if 'rev_now' in col_key: return f"{value:,.0f}"
-                if '漲幅' in col_key or 'yield' in col_key or 'width' in col_key or 'yoy' in col_key: return f"{value:.2f}%"
-                if 'sum' in col_key or 'net' in col_key: return f"{value:,.0f}"
+                if '漲幅' in col_key or 'yield' in col_key or 'width' in col_key or 'yoy' in col_key or 'qoq' in col_key or 'diff' in col_key: return f"{value:.2f}%"
+                if 'sum' in col_key or 'net' in col_key or 'cash_flow' in col_key: return f"{value:,.0f}"
                 if 'streak' in col_key or 'offset' in col_key: return f"{int(value)}"
                 return f"{value:,.2f}"
             return str(value)
+
         if role == Qt.ItemDataRole.ToolTipRole:
             if col_key == '強勢特徵' and isinstance(value, str):
                 tags = [t.strip() for t in value.split(',')]
                 tips = [f"• {t}: {TAG_TOOLTIPS.get(t, '')}" for t in tags]
                 return "\n".join(tips)
             return FULL_COLUMN_SPECS.get(col_key, {}).get('tip', '')
+
         if role == Qt.ItemDataRole.ForegroundRole:
+            if col_key == '現價':
+                pct_1d = self._df.iloc[index.row()].get('漲幅1d', 0)
+                if pct_1d >= 9.5 or pct_1d <= -9.5: return QColor("#FFFFFF")
+                if pct_1d > 0: return QColor("#FF4444")
+                if pct_1d < 0: return QColor("#00CC00")
+                return QColor("#E0E0E0")
+
             if isinstance(value, (int, float)):
-                if '漲幅' in col_key or 'sum' in col_key or '買賣超' in col_key or 'yoy' in col_key or 'eps' in col_key or 'streak' in col_key:
+                if '漲幅' in col_key or 'sum' in col_key or '買賣超' in col_key or 'yoy' in col_key or 'eps' in col_key or 'streak' in col_key or 'qoq' in col_key or 'diff' in col_key or 'cash_flow' in col_key:
                     if value > 0: return QColor("#FF4444")
                     if value < 0: return QColor("#00CC00")
+
             if col_key == '強勢特徵' and value:
                 if 'ST剛轉多' in str(value): return QColor("#FF3333")
                 if '30W' in str(value): return QColor("#00E5FF")
@@ -350,6 +462,14 @@ class StrategyTableModel(QAbstractTableModel):
                 if '土洋' in str(value): return QColor("#FFFF00")
                 return QColor("#E0E0E0")
             return QColor("#E0E0E0")
+
+        if role == Qt.ItemDataRole.BackgroundRole:
+            if col_key == '現價':
+                pct_1d = self._df.iloc[index.row()].get('漲幅1d', 0)
+                if pct_1d >= 9.5: return QColor("#880000")
+                if pct_1d <= -9.5: return QColor("#004400")
+            return None
+
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if isinstance(value, (int, float)) or col_key == '現價':
                 return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
@@ -389,7 +509,6 @@ class StrategyModule(QWidget):
         self.display_df = pd.DataFrame()
         self.watchlist_data = {}
 
-        # 👉 初始化載入時間紀錄
         self.last_load_time = 0
 
         self.settings_dir = Path(__file__).resolve().parent.parent / "data" / "settings"
@@ -418,7 +537,6 @@ class StrategyModule(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # === 左側面板 ===
         control_widget = QWidget()
         control_widget.setFixedWidth(420)
         control_widget.setStyleSheet("background-color: #050505; border-right: 1px solid #222;")
@@ -532,7 +650,6 @@ class StrategyModule(QWidget):
         ctrl_layout.addWidget(self.lbl_status)
         self.chk_tags = {}
 
-        # === 右側表格 ===
         table_widget = QWidget()
         table_layout = QVBoxLayout(table_widget)
         table_layout.setContentsMargins(0, 0, 0, 0)
@@ -673,10 +790,8 @@ class StrategyModule(QWidget):
         self.loader_thread.error_occurred.connect(self.on_load_error)
         self.loader_thread.start()
 
-    # 👉 這裡新增 showEvent 進行背景自動偵測
     def showEvent(self, event):
         super().showEvent(event)
-
         base_path = Path(__file__).resolve().parent.parent
         f_path = base_path / "data" / "strategy_results" / "factor_snapshot.parquet"
         csv_path = base_path / "data" / "strategy_results" / "戰情室今日快照_全中文版.csv"
@@ -691,7 +806,6 @@ class StrategyModule(QWidget):
             print("🔄 偵測到背景資料已更新，自動重新整理選股畫面...")
             self.load_data()
 
-    # 👉 整個檔案確保「只有這一個」on_data_loaded
     def on_data_loaded(self, df):
         self.full_df = df
         self.update_industry_combo()
@@ -699,8 +813,6 @@ class StrategyModule(QWidget):
         self.apply_filters_real()
         self.lbl_status.setText(f"✅ {len(df)} 檔")
         self.btn_reload.setEnabled(True)
-
-        # 紀錄最後讀取檔案的時間
         self.last_load_time = time.time()
 
     def on_load_error(self, msg):
