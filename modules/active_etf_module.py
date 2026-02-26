@@ -20,6 +20,7 @@ plt.style.use('dark_background')
 plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei']
 plt.rcParams['axes.unicode_minus'] = False
 
+
 # --- 數據抓取線程 ---
 
 
@@ -32,19 +33,16 @@ class ETFDataWorker(QThread):
         self.provider = provider
 
     def run(self):
-        # 1. 先定義好本地端與雲端路徑
         local_path = Path(f"data/clean/{self.provider}/{self.etf_id}.csv")
         github_url = f"https://raw.githubusercontent.com/phanchang/stock-room-data/main/data/clean/{self.provider}/{self.etf_id}.csv"
 
         df = pd.DataFrame()
 
         try:
-            # 2. 優先嘗試讀取本地端剛抓好的最新資料
             if local_path.exists():
                 print(f"🏠 [ETF] 讀取本地資料: {local_path}")
                 df = pd.read_csv(local_path)
             else:
-                # 3. 本地沒有，再嘗試從雲端抓取
                 print(f"🚀 [ETF] 讀取雲端資料: {github_url}")
                 response = requests.get(github_url, timeout=10)
                 if response.status_code == 200:
@@ -53,7 +51,6 @@ class ETFDataWorker(QThread):
                 else:
                     print(f"⚠️ [ETF] 雲端無資料或連線失敗，狀態碼: {response.status_code}")
 
-            # 4. 如果有順利拿到資料，進行欄位標準化
             if not df.empty:
                 df.columns = [c.lower().strip() for c in df.columns]
 
@@ -79,6 +76,7 @@ class ETFDataWorker(QThread):
         except Exception as e:
             print(f"❌ [ETF] 解析或連線錯誤: {e}")
             self.data_fetched.emit(pd.DataFrame(), self.etf_id)
+
 
 # --- 主動式 ETF 模組 ---
 class ActiveETFModule(QWidget):
@@ -141,7 +139,6 @@ class ActiveETFModule(QWidget):
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
-        # 🔥 左側標題列
         left_header = QWidget()
         left_header.setFixedHeight(45)
         left_header.setStyleSheet("background: #050505; border-bottom: 1px solid #333;")
@@ -197,18 +194,16 @@ class ActiveETFModule(QWidget):
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(10, 0, 0, 0)
 
-        # 🔥 右側標題列
         right_header = QWidget()
         right_header.setFixedHeight(45)
         right_header.setStyleSheet("background: #050505; border-bottom: 1px solid #333;")
         rh_layout = QHBoxLayout(right_header)
         rh_layout.setContentsMargins(5, 0, 5, 0)
 
-        # 🔥 ETF 資訊顯示
         self.lbl_etf_info = QLabel("")
         self.lbl_etf_info.setStyleSheet("color: #FFFF00; font-weight: bold; font-size: 16px;")
 
-        self.info_label = QLabel(" 💡 移動滑鼠至圖表查看數據")
+        self.info_label = QLabel(" 💡 移動滑鼠查看數據 / 點擊長條圖連動個股")
         self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 13px; color: #888;")
 
         rh_layout.addWidget(self.lbl_etf_info)
@@ -220,6 +215,8 @@ class ActiveETFModule(QWidget):
         self.fig_change = Figure(facecolor='#0E0E0E')
         self.canvas_change = FigureCanvas(self.fig_change)
         self.canvas_change.mpl_connect('motion_notify_event', self.on_bar_hover)
+        # 🔥 新增點擊連動事件
+        self.canvas_change.mpl_connect('button_press_event', self.on_bar_click)
 
         self.fig_trend = Figure(facecolor='#0E0E0E')
         self.canvas_trend = FigureCanvas(self.fig_trend)
@@ -243,9 +240,7 @@ class ActiveETFModule(QWidget):
             provider = self.mapping[etf_id][0]
             etf_name = self.mapping[etf_id][1]
 
-            # 🔥 更新 ETF 資訊
             self.lbl_etf_info.setText(etf_name)
-
             self.load_data(etf_id, provider)
 
     def load_data(self, etf_id, provider):
@@ -325,17 +320,14 @@ class ActiveETFModule(QWidget):
                     return None
 
             merged['action_type'] = merged.apply(classify_action, axis=1)
+            merged['abs_diff'] = merged['share_diff'].abs()
 
-            major_df = merged.dropna(subset=['action_type'])
-            if len(major_df) < 15:
-                merged['abs_diff'] = merged['share_diff'].abs()
-                active_df = merged[merged['abs_diff'] > 0]
-                top_active = active_df.sort_values('abs_diff', ascending=False).head(15)
-                final_df = pd.concat([major_df, top_active]).drop_duplicates(subset=['stock_id'])
-            else:
-                final_df = major_df
+            # 🔥 排序並只取 Top 12
+            active_df = merged[merged['abs_diff'] > 0].copy()
+            active_df = active_df.sort_values('abs_diff', ascending=False).head(12)
 
-            final_df = final_df.sort_values('pct_change', ascending=True)
+            # 再依百分比排序以便畫圖有階梯感
+            final_df = active_df.sort_values('pct_change', ascending=True)
             self.plot_changes(final_df, latest_date)
 
             if not latest_data.empty:
@@ -343,6 +335,7 @@ class ActiveETFModule(QWidget):
                 first_name = str(latest_data.iloc[0]['name'])
                 market = self.get_market_suffix(first_id)
                 self.plot_trend(first_id, first_name, market)
+                self.stock_table.selectRow(0)
 
     def plot_changes(self, df, data_date):
         self.fig_change.clear()
@@ -350,26 +343,51 @@ class ActiveETFModule(QWidget):
         self.bar_data = df.reset_index(drop=True)
 
         if self.bar_data.empty:
-            ax.text(0.5, 0.5, "期間無任何持股變動", ha='center', va='center', color='#555', fontsize=16)
+            ax.text(0.5, 0.5, "期間無明顯持股變動", ha='center', va='center', color='#555', fontsize=16)
             ax.axis('off')
             self.canvas_change.draw()
             return
 
         colors = ['#FF3333' if x >= 0 else '#00FF00' for x in self.bar_data['share_diff']]
         y_pos = np.arange(len(self.bar_data))
-        ax.barh(y_pos, self.bar_data['pct_change'], color=colors, align='center')
+        ax.barh(y_pos, self.bar_data['pct_change'], color=colors, align='center', height=0.6)
+
         ax.set_yticks(y_pos)
         ax.set_yticklabels(self.bar_data['name'], fontsize=11, fontweight='bold', color='#DDD')
         ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=100))
 
+        # 🔥 固定 Y 軸範圍，確保少於 12 檔時長條圖不會被異常拉寬
+        ax.set_ylim(-0.5, 11.5)
+
         date_str = data_date.strftime('%Y-%m-%d')
-        ax.set_title(f" 持股異動戰報 (資料日期: {date_str})", color='white', fontsize=14, fontweight='bold',
+        ax.set_title(f" 資金流向戰報 Top 12 (日期: {date_str})", color='white', fontsize=13, fontweight='bold',
                      loc='left', pad=10)
         ax.tick_params(colors='#AAA', labelsize=10)
         ax.grid(axis='x', color='#333', linestyle=':')
         for spine in ax.spines.values():
             spine.set_visible(False)
         self.canvas_change.draw()
+
+    def on_bar_click(self, event):
+        """處理點擊長條圖連動"""
+        if not event.inaxes or self.bar_data is None: return
+        if event.inaxes != self.fig_change.axes[0]: return
+
+        y_pos = int(round(event.ydata))
+        if 0 <= y_pos < len(self.bar_data):
+            row = self.bar_data.iloc[y_pos]
+            sid = str(row['stock_id'])
+            name = str(row['name'])
+            market = self.get_market_suffix(sid)
+
+            # 更新左側 Table 的選取狀態
+            for i in range(self.stock_table.rowCount()):
+                if self.stock_table.item(i, 0).text() == sid:
+                    self.stock_table.selectRow(i)
+                    break
+
+            self.plot_trend(sid, name, market)
+            self.stock_clicked_signal.emit(f"{sid}_{market}")
 
     def on_table_clicked(self, row, col):
         sid = self.stock_table.item(row, 0).text()
@@ -385,24 +403,18 @@ class ActiveETFModule(QWidget):
 
         price_data = pd.DataFrame()
         price_path = Path(f"data/cache/tw/{stock_id}_{market}.parquet")
-        # 1. 印出路徑與存在狀態，確認到底有沒有找對檔案
-        print(f"🔍 [圖表除錯] 嘗試讀取: {price_path} (檔案存在: {price_path.exists()})")
+
         if price_path.exists():
             try:
                 price_df = pd.read_parquet(price_path)
                 price_df.columns = [c.capitalize() for c in price_df.columns]
-                # 2. 強制將 Parquet 的 index 轉為標準的時間格式，並移除時區，避免比較時報錯
                 price_df.index = pd.to_datetime(price_df.index).tz_localize(None)
 
                 if not trend_data.empty:
                     min_date = trend_data['date'].min()
                     price_data = price_df[price_df.index >= min_date].copy()
-                    print(f"✅ [圖表除錯] 成功篩選出 {len(price_data)} 筆股價資料 (從 {min_date.strftime('%Y-%m-%d')} 開始)")
-            except:
-                # 4. 把被吃掉的錯誤印出來！
+            except Exception as e:
                 print(f"❌ [圖表除錯] 讀取股價 {stock_id} 發生錯誤: {e}")
-        else:
-            print(f"⚠️ [圖表除錯] 找不到實體檔案，可能 market 判斷錯誤 (TW/TWO)")
 
         self.fig_trend.clear()
         ax1 = self.fig_trend.add_subplot(111)
@@ -424,6 +436,7 @@ class ActiveETFModule(QWidget):
             'ax3': ax3
         }
 
+        # 繪製權重與庫存
         l3, = ax3.plot(trend_data['date'], trend_data['shares'], color='#FFFFFF', linewidth=0.8, alpha=0.6,
                        linestyle='-', label='庫存股數(細線)')
         l1, = ax1.plot(trend_data['date'], trend_data['weight'], color='#00E5FF', linewidth=2, marker='o', markersize=4,
@@ -440,6 +453,69 @@ class ActiveETFModule(QWidget):
         if not price_data.empty:
             l2, = ax2.plot(price_data.index, price_data['Close'], color='#FFD700', linewidth=1.5, linestyle='--',
                            alpha=0.9, label='股價(右)')
+
+            # 🔥 1. 計算投信持有成本
+            avg_cost = 0.0
+            total_shares = 0
+            total_cost = 0.0
+
+            for _, row in trend_data.iterrows():
+                d = row['date']
+                shares = row['shares']
+
+                try:
+                    # 抓取當天或前一個交易日價格
+                    p_idx = price_data.index.get_indexer([d], method='ffill')[0]
+                    if p_idx != -1:
+                        price = price_data['Close'].iloc[p_idx]
+                    else:
+                        continue
+                except:
+                    continue
+
+                if shares > total_shares:  # 買進
+                    added = shares - total_shares
+                    total_cost += added * price
+                    total_shares = shares
+                elif shares < total_shares:  # 賣出
+                    if shares == 0:
+                        total_shares = 0
+                        total_cost = 0.0
+                    else:
+                        total_cost = total_cost * (shares / total_shares)
+                        total_shares = shares
+
+            if total_shares > 0:
+                avg_cost = total_cost / total_shares
+
+            # 🔥 2. 標註最後一筆股價 (原點 + 價格)
+            last_date = price_data.index[-1]
+            last_price = price_data['Close'].iloc[-1]
+            ax2.plot(last_date, last_price, marker='o', color='#FFD700', markersize=6)
+
+            bbox_price = dict(boxstyle="round,pad=0.2", fc="#222222", ec="#FFD700", alpha=0.8)
+            ax2.text(last_date, last_price, f" {last_price:.1f}", color='#FFD700',
+                     fontsize=10, fontweight='bold', va='center', ha='left', bbox=bbox_price)
+
+            # 🔥 3. 畫出成本線並作上下限防呆 (Clamping)
+            if avg_cost > 0:
+                ax2.axhline(avg_cost, color='#FF00FF', linestyle=':', linewidth=2, alpha=0.7)
+
+                # 計算文字應擺放的 Y 軸位置，防止超出圖表外
+                ymin, ymax = ax2.get_ylim()
+                # 若尚未設定 ylim，先手動算一下
+                if ymin == 0 and ymax == 1:
+                    ymin = price_data['Close'].min() * 0.95
+                    ymax = price_data['Close'].max() * 1.05
+                    ax2.set_ylim(ymin, ymax)
+
+                text_y = max(ymin + (ymax - ymin) * 0.05, min(ymax - (ymax - ymin) * 0.05, avg_cost))
+
+                bbox_cost = dict(boxstyle="larrow,pad=0.3", fc="#FF00FF", ec="none", alpha=0.3)
+                ax2.text(price_data.index[0], text_y, f"成本: {avg_cost:.1f}",
+                         color='#FFDDFF', fontsize=10, fontweight='bold',
+                         ha='left', va='center', bbox=bbox_cost)
+
         else:
             ax2.text(0.5, 0.5, f"無本地股價 ({stock_id}_{market})", transform=ax2.transAxes, color='#555', ha='center',
                      va='center')
@@ -450,7 +526,7 @@ class ActiveETFModule(QWidget):
         ax3.set_yticks([])
         ax3.spines['right'].set_visible(False)
 
-        ax1.set_title(f" {stock_id} {stock_name} - 權重、股價與庫存趨勢", color='white', fontsize=12, fontweight='bold',
+        ax1.set_title(f" {stock_id} {stock_name} - 權重、股價與成本", color='white', fontsize=12, fontweight='bold',
                       loc='left')
         ax1.tick_params(axis='y', colors='#00E5FF')
         ax1.tick_params(axis='x', colors='#AAA')
