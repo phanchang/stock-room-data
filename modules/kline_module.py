@@ -329,7 +329,7 @@ class KLineModule(QWidget):
         if hasattr(self, 'expanded_dialog') and self.expanded_dialog.isVisible():
             self.expanded_dialog.update_stock_data(
                 self.current_stock_id,
-                self.display_df,
+                self.raw_df,
                 self.current_stock_name
             )
 
