@@ -411,6 +411,7 @@ class SettingsModule(QWidget):
     def run_fallback_kline(self):
         """備援：全市場 K 線抓取"""
         if not self._foolproof_check("備援全市場 K 線"): return
+        self.task_start_time = time.time()  # <--- 加入這行
         self.log("🚀 [備援] 啟動: 本機全市場 K 線更新 (init_cache)...", True)
         self._disable_all_buttons()
         self.progress.setFormat("⏳ 正在更新 K 線資料 - %p%")
@@ -423,6 +424,7 @@ class SettingsModule(QWidget):
     def run_core_pipeline(self):
         """核心流程：先跑深度籌碼 (JSON)，完成後自動觸發策略計算 (Parquet)"""
         if not self._foolproof_check("深度籌碼與策略運算"): return
+        self.task_start_time = time.time()  # <--- 加入這行
         self.log("🚀 [核心] 啟動: 深度籌碼更新 (update_daily_chips.py) (1/2)...", True)
         self._disable_all_buttons()
         self.progress.setFormat("⏳ 抓取深度籌碼中 (1/2) - %p%")
@@ -431,11 +433,14 @@ class SettingsModule(QWidget):
         self.runner_daily.output_signal.connect(self.log)
         self.runner_daily.progress_signal.connect(self.progress.setValue)
         # 連動：當 daily chips 跑完，自動觸發 calc_factors
-        self.runner_daily.finished.connect(self._proceed_to_calc_factors)
+        self.runner_daily.finished.connect(self._proceed_to_cfalc_factors)
         self.runner_daily.start_script()
 
     def _proceed_to_calc_factors(self):
         """核心流程下半部：讀取最新 JSON 產生策略快照"""
+        # --- 加入這段顯示第一階段時間 ---
+        if hasattr(self, 'task_start_time'):
+            self._log_duration(self.task_start_time, "第一階段(抓取資料)耗時")
         if not self.save_config(): return
         self.log("⚙️ 啟動: 融合深度籌碼與策略運算 (calc_snapshot_factors.py) (2/2)...", False)
         self.progress.setFormat("⏳ 計算策略因子 (2/2) - %p%")
@@ -447,20 +452,23 @@ class SettingsModule(QWidget):
         self.runner_calc.start_script()
 
     def run_pipeline_broad_snapshot(self):
-        """廣度快照 (暫留選項)"""
+        """廣度快照：抓取籌碼 -> 自動計算策略"""
         if not self._foolproof_check("廣度籌碼快照"): return
+        self.task_start_time = time.time()  # <--- 加入這行
         self.log("📊 [廣度] 啟動: 抓取籌碼與營收大表 (update_chips_revenue.py)...", True)
         self._disable_all_buttons()
-        self.progress.setFormat("⏳ 產生全市場大表中 - %p%")
+        self.progress.setFormat("⏳ 產生全市場大表中 (1/2) - %p%")
         self.runner_snapshot = ScriptRunner(self.project_root / "scripts" / "update_chips_revenue.py")
         self.runner_snapshot.output_signal.connect(self.log)
         self.runner_snapshot.progress_signal.connect(self.progress.setValue)
-        self.runner_snapshot.finished.connect(self.on_pipeline_finished)
+        self.runner_snapshot.finished.connect(self._proceed_to_calc_factors)
+
         self.runner_snapshot.start_script()
 
     def run_pipeline_financials(self):
         """基本面更新"""
         if not self._foolproof_check("抓取營收與季報"): return
+        self.task_start_time = time.time()  # <--- 加入這行
         self.log("🏦 [附加] 啟動: 基本面財報與營收更新 (update_financials.py)...", True)
         self._disable_all_buttons()
         self.progress.setFormat("⏳ 抓取月營收與季報中 - %p%")
@@ -483,6 +491,9 @@ class SettingsModule(QWidget):
 
     def on_pipeline_finished(self):
         self.log("✅ 執行完畢！")
+        # --- 加入這段顯示總時間 ---
+        if hasattr(self, 'task_start_time'):
+            self._log_duration(self.task_start_time, "總執行耗時")
         self.progress.setValue(100)
         self.progress.setFormat("✅ 作業結束")
 
@@ -496,13 +507,13 @@ class SettingsModule(QWidget):
         self.check_strategy_time()
         self.run_status_probe()
 
-        # ==========================================
-
+     # ==========================================
     # 雲端處理
     # ==========================================
     def check_cloud_status(self):
         self.log("📡 檢查雲端中...", True)
         self.btn_check_cloud.setEnabled(False)
+        self.progress.setRange(0, 0)  # <--- 加入這一行：開啟忙碌模式
         self.runner_fetch = ScriptRunner("git", ["fetch", "origin", "main"], use_python=False)
         self.runner_fetch.finished.connect(lambda exitCode, exitStatus: self.read_remote_json())
         self.runner_fetch.start_script()
@@ -513,6 +524,8 @@ class SettingsModule(QWidget):
         self.status_runner.start_script()
 
     def parse_remote_status(self, text):
+        self.progress.setRange(0, 100)  # <--- 加入這一行：還原為百分比模式
+        self.progress.setValue(100)  # <--- 設為 100%
         self.btn_check_cloud.setEnabled(True)
         try:
             match = re.search(r'\{.*\}', text, re.DOTALL)
@@ -529,6 +542,7 @@ class SettingsModule(QWidget):
         zip_path = self.project_root / "data" / "daily_data.zip"
         self.btn_download_zip.setEnabled(False)
         self.log("📡 啟動雲端數據下載...", True)
+        self.progress.setRange(0, 0)  # <--- 加入這一行：開啟忙碌模式
         if zip_path.exists():
             self.unzip_data()
             return
@@ -558,6 +572,8 @@ class SettingsModule(QWidget):
 
         self.btn_download_zip.setEnabled(True)
         self.btn_download_zip.setText("🔄 重新檢查雲端")
+        self.progress.setRange(0, 100)  # <--- 加入這一行：還原
+        self.progress.setValue(100)  # <--- 設為 100%
         self.run_status_probe()
 
     # ==========================================
@@ -589,6 +605,7 @@ class SettingsModule(QWidget):
             self.set_inputs_enabled(False)
 
     def handle_action_click(self):
+        self.task_start_time = time.time()  # <--- 加入這行
         txt = self.btn_save_recalc.text()
         self._disable_all_buttons()
         self.btn_save_recalc.setText("⏳ 執行中...")
@@ -631,6 +648,12 @@ class SettingsModule(QWidget):
             cfg = default_cfg
         for key, inp in self.inputs.items():
             if key in cfg: inp.setValue(cfg[key])
+
+    def _log_duration(self, start_time, label="執行耗時"):
+        if start_time is None: return
+        elapsed = time.time() - start_time
+        m, s = divmod(elapsed, 60)
+        self.log(f"⏱️ {label}: {int(m)}分 {int(s)}秒")
 
     def save_config(self):
         data = {"30w_strategy": {k: inp.value() for k, inp in self.inputs.items()}}
