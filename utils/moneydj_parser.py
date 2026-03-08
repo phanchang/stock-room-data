@@ -90,7 +90,7 @@ class MoneyDJParser:
     # ==========================================
     # 1. 獲利能力 (季報) - ZCE
     # ==========================================
-    def get_profitability_quarterly(self, limit=4):
+    def get_profitability_quarterly(self, limit=12):
         url = f"{self.BASE_URL}/zce/zce_{self.sid}.djhtm"
         soup = self._get_soup(url)
         if not soup: return []
@@ -156,7 +156,7 @@ class MoneyDJParser:
     # ==========================================
     # 3. 資產負債表 - ZCPA (矩陣式)
     # ==========================================
-    def get_balance_sheet(self, limit=5):
+    def get_balance_sheet(self, limit=8):
         url = f"{self.BASE_URL}/zcp/zcpa/zcpa_{self.sid}.djhtm"
         soup = self._get_soup(url)
         if not soup: return []
@@ -191,7 +191,7 @@ class MoneyDJParser:
     # ==========================================
     # 4. 月營收 - ZCH
     # ==========================================
-    def get_monthly_revenue(self, limit=6):
+    def get_monthly_revenue(self, limit=24):
         url = f"{self.BASE_URL}/zch/zch_{self.sid}.djhtm"
         soup = self._get_soup(url)
         if not soup: return []
@@ -216,7 +216,7 @@ class MoneyDJParser:
     # ==========================================
     # 5. 現金流量表 - ZC3 (矩陣式)
     # ==========================================
-    def get_cash_flow(self, limit=5):
+    def get_cash_flow(self, limit=8):
         url = f"{self.BASE_URL}/zc3/zc3_{self.sid}.djhtm"
         soup = self._get_soup(url)
         if not soup: return []

@@ -9,15 +9,16 @@ from datetime import datetime
 
 import pandas as pd
 
+# 🎨 1. 介面與元件引用
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QGridLayout, QDoubleSpinBox,
                              QSpinBox, QScrollArea, QMessageBox, QProgressBar,
-                             QTextEdit, QFrame, QApplication)
+                             QTextEdit, QFrame, QApplication, QComboBox)
 
 from PyQt6.QtCore import Qt, pyqtSignal, QProcess, QProcessEnvironment
 
 # ==========================================
-# 🎨 1. 介面基礎樣式
+# 🎨 2. 介面基礎樣式 (含 Tooltip 修復)
 # ==========================================
 STYLES = """
     QWidget { font-family: "Segoe UI", "Microsoft JhengHei"; background-color: #121212; color: #E0E0E0; }
@@ -41,6 +42,15 @@ STYLES = """
     }
     QProgressBar::chunk { background-color: #00E5FF; border-radius: 5px; }
     QTextEdit { background-color: #1E1E1E; border: 1px solid #3E3E42; border-radius: 6px; font-family: Consolas; color: #CCC; font-size: 14px; }
+
+    QToolTip { 
+        color: #FFFFFF; 
+        background-color: #2D2D30; 
+        border: 1px solid #00E5FF; 
+        border-radius: 4px;
+        padding: 5px;
+        font-size: 14px;
+    }
 """
 
 BTN_ACTION = """
@@ -215,7 +225,7 @@ class SettingsModule(QWidget):
         content_layout.addWidget(card_status)
 
         # ==========================================
-        # 卡片 3: 第二步：本機策略核心排程
+        # 卡片 3: 第二步：本機策略核心排程 (修正版)
         # ==========================================
         card_pipeline = QFrame()
         card_pipeline.setObjectName("Card")
@@ -226,30 +236,53 @@ class SettingsModule(QWidget):
             self._create_label("說明: 每日 K 線就緒後，請執行【核心排程】更新個股深度籌碼並自動產出最終策略大表。", "Desc"))
         l_pipe.addSpacing(10)
 
-        pipe_layout = QHBoxLayout()
-
-        # 核心：深度籌碼 + 策略運算連動
+        # 1. 核心排程 (Core) - 最重要
         self.btn_pipe_core = QPushButton("🚀 [核心排程] 深度籌碼與策略大表運算\n(daily_chips ➔ calc_factors)")
         self.btn_pipe_core.setStyleSheet(BTN_ACTION)
-        self.btn_pipe_core.setToolTip("耗時約40分。依序執行：1. 抓取JSON個股深度籌碼 ➔ 2. 結合最新K線產出策略大表")
+        self.btn_pipe_core.setToolTip("耗時約15~20分。\n依序執行：\n1. 抓取JSON個股深度籌碼\n2. 結合最新K線產出策略大表")
         self.btn_pipe_core.clicked.connect(self.run_core_pipeline)
+        l_pipe.addWidget(self.btn_pipe_core)
 
-        # 廣度大表 (暫留為可選項)
-        self.btn_pipe_broad = QPushButton("📊 [可選] 全市場廣度籌碼快照\n(update_chips_revenue)")
+        # 2. 廣度大表 (Broad/Optional) - 次要
+        self.btn_pipe_broad = QPushButton("📊 [可選] 全市場廣度籌碼快照 (update_chips_revenue)")
         self.btn_pipe_broad.setStyleSheet(BTN_CHECK)
-        self.btn_pipe_broad.setToolTip("供全市場1700檔掃描用。若策略僅依賴白名單深度籌碼，此步驟可忽略。")
+        self.btn_pipe_broad.setToolTip("供全市場1700檔掃描用。\n若策略僅依賴白名單深度籌碼，此步驟可忽略。")
         self.btn_pipe_broad.clicked.connect(self.run_pipeline_broad_snapshot)
+        l_pipe.addWidget(self.btn_pipe_broad)
 
-        # 基本面
-        self.btn_pipe_finance = QPushButton("🏦 [附加] 抓取營收與季報\n(update_financials)")
+        # 3. 基本面 (Finance) - 左右佈局
+        finance_layout = QHBoxLayout()
+        finance_layout.setSpacing(10)  # 左右間距
+
+        # 左邊：下拉選單 (含三種模式)
+        self.combo_finance_mode = QComboBox()
+        self.combo_finance_mode.addItems([
+            "⚡ 僅更新月營收 (快)",
+            "🔥 更新營收+財報 (慢)",
+            "📄 僅更新財報 (慢)"
+        ])
+        self.combo_finance_mode.setStyleSheet("""
+            QComboBox { 
+                background-color: #2D2D30; color: #EEE; border: 1px solid #555; 
+                padding: 10px; font-size: 16px; border-radius: 6px; font-weight: bold;
+            }
+            QComboBox::drop-down { border: 0px; }
+            QComboBox QAbstractItemView {
+                background-color: #2D2D30; color: #EEE; selection-background-color: #0066CC;
+            }
+        """)
+
+        # 右邊：執行按鈕
+        self.btn_pipe_finance = QPushButton("🏦 執行基本面更新")
         self.btn_pipe_finance.setStyleSheet(BTN_RESET)
-        self.btn_pipe_finance.setToolTip("財報季或每月初使用，更新基本面數據。")
+        self.btn_pipe_finance.setToolTip(
+            "依據左側選單執行：\n⚡ 僅營收: 每月10號用 (約5分)\n🔥 營收+財報: 財報季用 (約30分)\n📄 僅財報: 同上，適合只需更新季報時\n\n⚠️ 更新後會自動執行運算，確保數據進入大表")
         self.btn_pipe_finance.clicked.connect(self.run_pipeline_financials)
 
-        pipe_layout.addWidget(self.btn_pipe_core)
-        pipe_layout.addWidget(self.btn_pipe_broad)
-        pipe_layout.addWidget(self.btn_pipe_finance)
-        l_pipe.addLayout(pipe_layout)
+        finance_layout.addWidget(self.combo_finance_mode, 4)  # 佔 40%
+        finance_layout.addWidget(self.btn_pipe_finance, 6)  # 佔 60%
+        l_pipe.addLayout(finance_layout)
+
         content_layout.addWidget(card_pipeline)
 
         # ==========================================
@@ -411,7 +444,7 @@ class SettingsModule(QWidget):
     def run_fallback_kline(self):
         """備援：全市場 K 線抓取"""
         if not self._foolproof_check("備援全市場 K 線"): return
-        self.task_start_time = time.time()  # <--- 加入這行
+        self.task_start_time = time.time()
         self.log("🚀 [備援] 啟動: 本機全市場 K 線更新 (init_cache)...", True)
         self._disable_all_buttons()
         self.progress.setFormat("⏳ 正在更新 K 線資料 - %p%")
@@ -424,7 +457,7 @@ class SettingsModule(QWidget):
     def run_core_pipeline(self):
         """核心流程：先跑深度籌碼 (JSON)，完成後自動觸發策略計算 (Parquet)"""
         if not self._foolproof_check("深度籌碼與策略運算"): return
-        self.task_start_time = time.time()  # <--- 加入這行
+        self.task_start_time = time.time()
         self.log("🚀 [核心] 啟動: 深度籌碼更新 (update_daily_chips.py) (1/2)...", True)
         self._disable_all_buttons()
         self.progress.setFormat("⏳ 抓取深度籌碼中 (1/2) - %p%")
@@ -433,12 +466,11 @@ class SettingsModule(QWidget):
         self.runner_daily.output_signal.connect(self.log)
         self.runner_daily.progress_signal.connect(self.progress.setValue)
         # 連動：當 daily chips 跑完，自動觸發 calc_factors
-        self.runner_daily.finished.connect(self._proceed_to_cfalc_factors)
+        self.runner_daily.finished.connect(self._proceed_to_calc_factors)
         self.runner_daily.start_script()
 
     def _proceed_to_calc_factors(self):
         """核心流程下半部：讀取最新 JSON 產生策略快照"""
-        # --- 加入這段顯示第一階段時間 ---
         if hasattr(self, 'task_start_time'):
             self._log_duration(self.task_start_time, "第一階段(抓取資料)耗時")
         if not self.save_config(): return
@@ -454,7 +486,7 @@ class SettingsModule(QWidget):
     def run_pipeline_broad_snapshot(self):
         """廣度快照：抓取籌碼 -> 自動計算策略"""
         if not self._foolproof_check("廣度籌碼快照"): return
-        self.task_start_time = time.time()  # <--- 加入這行
+        self.task_start_time = time.time()
         self.log("📊 [廣度] 啟動: 抓取籌碼與營收大表 (update_chips_revenue.py)...", True)
         self._disable_all_buttons()
         self.progress.setFormat("⏳ 產生全市場大表中 (1/2) - %p%")
@@ -466,16 +498,31 @@ class SettingsModule(QWidget):
         self.runner_snapshot.start_script()
 
     def run_pipeline_financials(self):
-        """基本面更新"""
-        if not self._foolproof_check("抓取營收與季報"): return
-        self.task_start_time = time.time()  # <--- 加入這行
-        self.log("🏦 [附加] 啟動: 基本面財報與營收更新 (update_financials.py)...", True)
+        """基本面更新：根據下拉選單決定模式"""
+        # 0: 營收, 1: 全財報, 2: 僅財報
+        mode_idx = self.combo_finance_mode.currentIndex()
+
+        # 顯示名稱對照
+        mode_names = ["僅更新月營收", "更新營收與財報", "僅更新財報"]
+        mode_name = mode_names[mode_idx]
+
+        if not self._foolproof_check(f"基本面更新 ({mode_name})"): return
+
+        self.task_start_time = time.time()
+        self.log(f"🏦 [附加] 啟動: {mode_name} (update_financials.py)...", True)
         self._disable_all_buttons()
-        self.progress.setFormat("⏳ 抓取月營收與季報中 - %p%")
-        self.runner_finance = ScriptRunner(self.project_root / "scripts" / "update_financials.py")
+        self.progress.setFormat("⏳ 抓取資料中 - %p%")
+
+        # 參數邏輯：索引 1 和 2 都呼叫 --full (全開模式)
+        args = []
+        if mode_idx >= 1:
+            args = ["--full"]
+
+        self.runner_finance = ScriptRunner(self.project_root / "scripts" / "update_financials.py", args)
         self.runner_finance.output_signal.connect(self.log)
         self.runner_finance.progress_signal.connect(self.progress.setValue)
-        self.runner_finance.finished.connect(self.on_pipeline_finished)
+        # 🔥🔥🔥 修正：這裡必須連動到 _proceed_to_calc_factors 才能進大表
+        self.runner_finance.finished.connect(self._proceed_to_calc_factors)
         self.runner_finance.start_script()
 
     def _disable_all_buttons(self):
@@ -491,7 +538,6 @@ class SettingsModule(QWidget):
 
     def on_pipeline_finished(self):
         self.log("✅ 執行完畢！")
-        # --- 加入這段顯示總時間 ---
         if hasattr(self, 'task_start_time'):
             self._log_duration(self.task_start_time, "總執行耗時")
         self.progress.setValue(100)
@@ -507,13 +553,13 @@ class SettingsModule(QWidget):
         self.check_strategy_time()
         self.run_status_probe()
 
-     # ==========================================
+    # ==========================================
     # 雲端處理
     # ==========================================
     def check_cloud_status(self):
         self.log("📡 檢查雲端中...", True)
         self.btn_check_cloud.setEnabled(False)
-        self.progress.setRange(0, 0)  # <--- 加入這一行：開啟忙碌模式
+        self.progress.setRange(0, 0)
         self.runner_fetch = ScriptRunner("git", ["fetch", "origin", "main"], use_python=False)
         self.runner_fetch.finished.connect(lambda exitCode, exitStatus: self.read_remote_json())
         self.runner_fetch.start_script()
@@ -524,8 +570,8 @@ class SettingsModule(QWidget):
         self.status_runner.start_script()
 
     def parse_remote_status(self, text):
-        self.progress.setRange(0, 100)  # <--- 加入這一行：還原為百分比模式
-        self.progress.setValue(100)  # <--- 設為 100%
+        self.progress.setRange(0, 100)
+        self.progress.setValue(100)
         self.btn_check_cloud.setEnabled(True)
         try:
             match = re.search(r'\{.*\}', text, re.DOTALL)
@@ -542,7 +588,7 @@ class SettingsModule(QWidget):
         zip_path = self.project_root / "data" / "daily_data.zip"
         self.btn_download_zip.setEnabled(False)
         self.log("📡 啟動雲端數據下載...", True)
-        self.progress.setRange(0, 0)  # <--- 加入這一行：開啟忙碌模式
+        self.progress.setRange(0, 0)
         if zip_path.exists():
             self.unzip_data()
             return
@@ -572,8 +618,8 @@ class SettingsModule(QWidget):
 
         self.btn_download_zip.setEnabled(True)
         self.btn_download_zip.setText("🔄 重新檢查雲端")
-        self.progress.setRange(0, 100)  # <--- 加入這一行：還原
-        self.progress.setValue(100)  # <--- 設為 100%
+        self.progress.setRange(0, 100)
+        self.progress.setValue(100)
         self.run_status_probe()
 
     # ==========================================
@@ -605,7 +651,7 @@ class SettingsModule(QWidget):
             self.set_inputs_enabled(False)
 
     def handle_action_click(self):
-        self.task_start_time = time.time()  # <--- 加入這行
+        self.task_start_time = time.time()
         txt = self.btn_save_recalc.text()
         self._disable_all_buttons()
         self.btn_save_recalc.setText("⏳ 執行中...")
@@ -621,8 +667,6 @@ class SettingsModule(QWidget):
         self.runner_recalc_only.progress_signal.connect(self.progress.setValue)
         self.runner_recalc_only.finished.connect(self.on_pipeline_finished)
         self.runner_recalc_only.start_script()
-
-        self.set_inputs_enabled(False)
 
     def check_strategy_time(self):
         if self.strategy_result_path.exists():
