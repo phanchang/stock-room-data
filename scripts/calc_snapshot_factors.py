@@ -372,34 +372,55 @@ def main():
 
     def get_strong_tags(row):
         tags = []
+
+        # --- 1. 趨勢與突破 ---
         st_week = row.get('str_st_week_offset', -1)
         if st_week == 0:
             tags.append('ST轉多(本週)')
         elif 0 < st_week <= 4:
             tags.append(f'ST轉多({int(st_week)}週前)')
 
-        offset = row.get('str_30w_week_offset', -1)
-        suffix = "(本週)" if offset == 0 else (f"({int(offset)}週前)" if offset > 0 else "")
+        if row.get('str_break_30w', 0) == 1: tags.append('突破30週')
+        if row.get('str_high_60', 0) == 1: tags.append('創季高')
+        if row.get('str_high_30', 0) == 1: tags.append('創月高')
+        if row.get('str_uptrend', 0) == 1: tags.append('強勢多頭')
+        if row.get('漲幅60d', 0) > 30: tags.append('波段黑馬')
+        if row.get('RS強度', 0) > 90: tags.append('超強勢')
 
-        if row.get('str_30w_adh', 0) == 1: tags.append(f"30W黏貼突破{suffix}")
-        if row.get('str_30w_shk', 0) == 1: tags.append(f"30W甩轎{suffix}")
+        # --- 2. 壓縮與整理 ---
+        bb_width = row.get('bb_width', 100)
+        if bb_width < 5.0:
+            tags.append('極度壓縮')
+        elif bb_width < 8.0:
+            tags.append('波動壓縮')
 
-        if row.get('str_consol_60', 0) == 1: tags.append('盤整60日')
+        if row.get('str_consol_5', 0) == 1: tags.append('盤整5日')
+        if row.get('str_consol_10', 0) == 1: tags.append('盤整10日')
         if row.get('str_consol_20', 0) == 1: tags.append('盤整20日')
-        if row.get('bb_width', 100) < 5.0: tags.append('極度壓縮')
+        if row.get('str_consol_60', 0) == 1: tags.append('盤整60日')
 
+        # --- 3. 籌碼與主力 ---
         if row.get('str_ilss_sweep', 0) == 1 and row.get('rev_cum_yoy', 0) > 0 and (
                 row.get('m_net_today', 0) < 0 or row.get('m_sum_5d', 0) < 0):
             tags.append('主力掃單(ILSS)')
-        if row.get('str_fake_breakdown', 0) == 1: tags.append('假跌破')
-        if row.get('RS強度', 0) > 90: tags.append('超強勢')
-        if row.get('漲幅60d', 0) > 30: tags.append('波段黑馬')
-        if row.get('str_uptrend', 0) == 1: tags.append('強勢多頭')
-        if row.get('is_tu_yang', 0) == 1: tags.append('土洋對作')
         if row.get('t_streak', 0) >= 3: tags.append('投信認養')
+        if row.get('m_net_today', 0) <= -200: tags.append('散戶退場')  # 根據 UI Tooltip：單日大減200張
+        if row.get('is_tu_yang', 0) == 1: tags.append('土洋對作')
 
-        # 籌碼過濾：法人波段吸籌 + 短線點火
+        # 隱藏擴充：籌碼過濾 法人波段吸籌 + 短線點火
         if row.get('legal_diff_20d', 0) > 1.5 and row.get('t_net_today', 0) > 0: tags.append('波段吸籌發動')
+
+        # --- 4. 特殊型態 (修復遺失的標籤) ---
+        offset = row.get('str_30w_week_offset', -1)
+        suffix = "(本週)" if offset == 0 else (f"({int(offset)}週前)" if offset > 0 else "")
+
+        if row.get('str_30w_adh', 0) == 1: tags.append(f"30W黏貼後突破{suffix}")  # 修正字眼對齊UI
+        if row.get('str_30w_shk', 0) == 1: tags.append(f"30W甩轎{suffix}")
+
+        if row.get('str_fake_breakdown', 0) == 1: tags.append('假跌破')
+        if row.get('str_ma55_sup', 0) == 1: tags.append('回測季線')  # 🌟 修復
+        if row.get('str_ma200_sup', 0) == 1: tags.append('回測年線')  # 🌟 修復
+        if row.get('str_vix_rev', 0) == 1: tags.append('Vix反轉')  # 🌟 修復
 
         return ','.join(tags)
 
