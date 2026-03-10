@@ -16,7 +16,7 @@ data/*
 # --- 【關鍵修正】例外放行區 (用 ! 來反向追蹤) ---
 # 告訴 Git：「data 下的這些資料夾我要留著，不要忽略！」
 !data/raw/
-!data/clean/
+#!data/clean/
 !data/stock_list.csv
 
 # (選擇性) 如果 goodinfo 你也想保留，就把下面這行前面的 # 拿掉
