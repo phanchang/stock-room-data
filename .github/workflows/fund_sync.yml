@@ -35,8 +35,8 @@ jobs:
           git config --local user.name "github-actions[bot]"
           
           # 🔥 修正 1: 加上 -f 強制加入，無視 .gitignore
-          git add -f data/raw/
-          git add -f data/clean/
+          git add -f data/raw/ || true
+          git add -f data/clean/ || true
           
           # 檢查是否有變更
           if [ -n "$(git status --porcelain)" ]; then
