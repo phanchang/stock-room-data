@@ -3,8 +3,9 @@ import numpy as np
 from pathlib import Path
 import sys
 import warnings
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
+import requests
 from unittest.mock import MagicMock
 
 # ==========================================
@@ -34,7 +35,65 @@ except ImportError as e:
 
 
 # ==========================================
-# 核心邏輯 - 技術面 (維持不變)
+# 工具函數：極速抓取全市場估值 (PE / PB / 殖利率)
+# ==========================================
+def parse_val(v):
+    try:
+        return float(str(v).replace(',', '').replace('%', '').strip())
+    except:
+        return 0.0
+
+
+def fetch_market_valuation():
+    """向證交所與櫃買中心抓取最新交易日的本益比、殖利率"""
+    print("🔍 正在同步全市場本益比與殖利率...")
+    vd = {}
+
+    # 找尋最近的 5 個工作天，嘗試抓取直到成功
+    days, offset = [], 0
+    while len(days) < 5 and offset < 15:
+        dt = datetime.now() - timedelta(days=offset)
+        if dt.weekday() < 5: days.append(dt)
+        offset += 1
+
+    for dt in days:
+        d_str = dt.strftime('%Y%m%d')
+        d_roc = f"{dt.year - 1911}/{dt.month:02d}/{dt.day:02d}"
+        found_data = False
+
+        # 上市 (TWSE)
+        try:
+            url = f"https://www.twse.com.tw/rwd/zh/afterTrading/BWIBBU_d?date={d_str}&selectType=ALL&response=json"
+            res = requests.get(url, timeout=5, verify=False).json()
+            if res.get('stat') == 'OK' and 'data' in res:
+                f = res['fields']
+                iy, ipe, ipb = f.index("殖利率(%)"), f.index("本益比"), f.index("股價淨值比")
+                for r in res['data']:
+                    vd[r[0].strip()] = {'yield': parse_val(r[iy]), 'pe': parse_val(r[ipe]), 'pbr': parse_val(r[ipb])}
+                found_data = True
+        except:
+            pass
+
+        # 上櫃 (TPEx)
+        try:
+            url = f"https://www.tpex.org.tw/web/stock/aftertrading/peratio_analysis/pera_result.php?l=zh-tw&o=json&d={d_roc}"
+            res = requests.get(url, timeout=5, verify=False).json()
+            raw = res['tables'][0]['data'] if 'tables' in res else []
+            if raw:
+                for r in raw:
+                    vd[r[0].strip()] = {'pe': parse_val(r[2]), 'yield': parse_val(r[5]), 'pbr': parse_val(r[6])}
+                found_data = True
+        except:
+            pass
+
+        if found_data:
+            break  # 只要有一天成功抓到就跳出
+
+    return vd
+
+
+# ==========================================
+# 核心邏輯 - 技術面
 # ==========================================
 def calculate_advanced_factors(df, sid=None):
     if df is None or len(df) == 0:
@@ -158,7 +217,7 @@ def calculate_advanced_factors(df, sid=None):
 
 
 # ==========================================
-# 深度 JSON 特徵轉換 (籌碼完全來自 JSON，補齊10/20日)
+# 深度 JSON 特徵轉換
 # ==========================================
 def calculate_json_factors(sid_str):
     json_path = project_root / 'data' / 'fundamentals' / f"{sid_str}.json"
@@ -169,13 +228,11 @@ def calculate_json_factors(sid_str):
         'eps_qoq': 0.0, 'eps_yoy': 0.0, 'eps_cum_yoy': 0.0,
         'margin_diff_5d': 0.0, 'legal_diff_5d': 0.0,
         'margin_diff_20d': 0.0, 'legal_diff_20d': 0.0,
-        # 🔥 完整補齊所有天數
         't_net_today': 0.0, 't_sum_5d': 0.0, 't_sum_10d': 0.0, 't_sum_20d': 0.0, 't_streak': 0, 't_sell_days_10': 0,
         'f_net_today': 0.0, 'f_sum_5d': 0.0, 'f_sum_10d': 0.0, 'f_sum_20d': 0.0, 'f_streak': 0, 'f_buy_days_10': 0,
         'f_sum_3d': 0.0,
         'm_net_today': 0.0, 'm_sum_5d': 0.0, 'm_sum_10d': 0.0, 'm_sum_20d': 0.0, 'is_tu_yang': 0,
-        'fund_contract_qoq': 0.0, 'fund_inventory_qoq': 0.0, 'fund_op_cash_flow': 0.0,
-        'pe': 0.0, 'yield': 0.0, 'pbr': 0.0
+        'fund_contract_qoq': 0.0, 'fund_inventory_qoq': 0.0, 'fund_op_cash_flow': 0.0
     }
 
     if not json_path.exists(): return res
@@ -207,10 +264,7 @@ def calculate_json_factors(sid_str):
     if len(cf) > 0:
         res['fund_op_cash_flow'] = float(cf[0].get('op_cash_flow', 0) or 0)
 
-    # 3. 估值 (PE, PBR, Yield) - 從最近一日籌碼裡面若有可以掛在這，或是假設您從其他地方餵入
-    # 此處預留，如果你有把本益比寫入JSON，可在此解析
-
-    # 4. EPS
+    # 3. EPS
     prof = jdata.get('profitability', [])
     if len(prof) > 0:
         try:
@@ -246,9 +300,7 @@ def calculate_json_factors(sid_str):
         except:
             pass
 
-    # =========================================================
-    # 🚀 5. 籌碼運算：完美對齊 5日、10日、20日 (解決停資斷層)
-    # =========================================================
+    # 4. 籌碼運算
     inst_data = jdata.get('institutional_investors', [])
     margin_data = jdata.get('margin_trading', [])
 
@@ -277,7 +329,6 @@ def calculate_json_factors(sid_str):
                     break
             return count
 
-        # 填入加總
         res['t_net_today'] = get_sum(df_inst, d_1, 'invest_trust_buy_sell')
         res['f_net_today'] = get_sum(df_inst, d_1, 'foreign_buy_sell')
         res['m_net_today'] = get_sum(df_margin, d_1, 'fin_change')
@@ -370,7 +421,7 @@ def get_strong_tags(row):
 
 
 def main():
-    print(f"[System] 因子運算啟動 (V8.0 - 終極 JSON 脫鉤版) | {datetime.now():%H:%M:%S}")
+    print(f"[System] 因子運算啟動 (V8.3 - 完美填補估值版) | {datetime.now():%H:%M:%S}")
 
     try:
         cache = CacheManager()
@@ -378,22 +429,33 @@ def main():
         print(f"[Error] CacheManager 初始化失敗: {e}")
         return
 
-    # 🚀 1. 徹底切斷舊 csv 依賴，直接讀取白名單
+    # 🚀 1. 抓取全市場估值 (解決 PE/PB/殖利率 空白問題)
+    valuation_dict = fetch_market_valuation()
+
+    # 🚀 2. 直接讀取本地白名單
     white_list_path = project_root / 'data' / 'stock_list.csv'
     if not white_list_path.exists():
         print("[Error] 找不到 stock_list.csv 白名單")
         return
 
-    white_df = pd.read_csv(white_list_path, dtype={'stock_id': str})
-    stock_dict = white_df.set_index('stock_id')[['stock_name', 'industry']].to_dict('index')
-    target_sids = list(stock_dict.keys())
+    try:
+        white_df = pd.read_csv(white_list_path, dtype=str)
+    except:
+        white_df = pd.read_csv(white_list_path, dtype=str, sep='\t')
 
+    stock_dict = {}
+    for _, row in white_df.iterrows():
+        sid = str(row.get('stock_id', '')).strip()
+        name = str(row.get('name', '未知')).strip()
+        industry = str(row.get('industry', '未分類')).strip()
+        if sid: stock_dict[sid] = {'name': name, 'industry': industry}
+
+    target_sids = list(stock_dict.keys())
     total = len(target_sids)
     print(f"📊 預計計算股票數量: {total}")
 
     final_list = []
 
-    # 🚀 2. 迴圈處理每檔股票 (結合 YFinance 與 JSON)
     for i, sid in enumerate(target_sids):
         if i % 20 == 0 or i == total - 1:
             print(f"PROGRESS: {int((i + 1) / total * 100)}")
@@ -408,13 +470,16 @@ def main():
             json_factors = calculate_json_factors(sid)
 
             if tech_factors is not None:
-                # 合併基本資料、技術面、籌碼面
+                # 取得估值資料，如果沒抓到就給 0
+                val_data = valuation_dict.get(sid, {'pe': 0.0, 'pbr': 0.0, 'yield': 0.0})
+
                 merged = {
                     'sid': sid,
-                    'name': stock_dict[sid]['stock_name'],
+                    'name': stock_dict[sid]['name'],
                     'industry': stock_dict[sid]['industry'],
                     **tech_factors,
-                    **json_factors
+                    **json_factors,
+                    **val_data  # 🔥 貼上本益比、殖利率
                 }
                 final_list.append(merged)
         except Exception as e:
@@ -435,7 +500,6 @@ def main():
 
     final_df['強勢特徵'] = final_df.apply(get_strong_tags, axis=1)
 
-    # 🚀 3. 輸出存檔
     chinese_map = {
         'sid': '股票代號', 'name': '股票名稱', 'industry': '產業別',
         'rev_ym': '最新營收月', 'rev_yoy': '營收YoY(%)', 'rev_cum_yoy': '累計營收YoY(%)',

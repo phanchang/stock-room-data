@@ -14,8 +14,9 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QSpinBox, QScrollArea, QMessageBox, QProgressBar,
                              QTextEdit, QFrame, QComboBox)
 
-from PyQt6.QtCore import Qt, pyqtSignal, QProcess, QProcessEnvironment
+from PyQt6.QtCore import Qt, pyqtSignal, QProcess, QProcessEnvironment, QThread
 
+#不要刪掉舊的設定，尤其是hint的顯示
 STYLES = """
     QWidget { font-family: "Segoe UI", "Microsoft JhengHei"; background-color: #121212; color: #E0E0E0; }
     QFrame#Card { background-color: #1E1E1E; border-radius: 12px; border: 1px solid #3E3E42; }
@@ -38,6 +39,16 @@ STYLES = """
     }
     QProgressBar::chunk { background-color: #00E5FF; border-radius: 5px; }
     QTextEdit { background-color: #1E1E1E; border: 1px solid #3E3E42; border-radius: 6px; font-family: Consolas; color: #CCC; font-size: 14px; }
+
+    /* 這裡把 Tooltip 補回來，強制白字 + 灰黑底 + 藍邊框 */
+    QToolTip { 
+        color: #FFFFFF; 
+        background-color: #2D2D30; 
+        border: 1px solid #00E5FF; 
+        border-radius: 4px;
+        padding: 6px;
+        font-size: 14px;
+    }
 """
 
 BTN_ACTION = """
@@ -98,6 +109,37 @@ class ScriptRunner(QProcess):
         except:
             pass
 
+class UnzipWorker(QThread):
+    log_signal = pyqtSignal(str)
+    progress_signal = pyqtSignal(int)
+    finished_signal = pyqtSignal(bool)
+
+    def __init__(self, zip_path, extract_target):
+        super().__init__()
+        self.zip_path = zip_path
+        self.extract_target = extract_target
+
+    def run(self):
+        try:
+            self.log_signal.emit("🔓 正在解壓縮並套用數據內容 (背景處理中)...")
+            with zipfile.ZipFile(self.zip_path, 'r') as z:
+                members = z.infolist()
+                total = len(members)
+                # 逐一解壓縮以計算進度
+                for i, member in enumerate(members):
+                    z.extract(member, self.extract_target)
+                    # 每完成 1% 就回報一次進度，避免發送過多訊號
+                    if i % max(1, total // 100) == 0:
+                        self.progress_signal.emit(int((i / total) * 100))
+
+            time.sleep(0.5)  # 稍微等待確保檔案釋放
+            os.remove(self.zip_path)
+            self.log_signal.emit("✅ 數據套用成功，暫存包已清理。")
+            self.progress_signal.emit(100)
+            self.finished_signal.emit(True)
+        except Exception as e:
+            self.log_signal.emit(f"❌ 解壓縮失敗: {e}")
+            self.finished_signal.emit(False)
 
 class SettingsModule(QWidget):
     def __init__(self, parent=None):
@@ -520,25 +562,44 @@ class SettingsModule(QWidget):
         self.dl_runner.start_script()
 
     def unzip_data(self):
-        self.log("🔓 正在解壓縮並套用數據內容...")
         zip_path = self.project_root / "data" / "daily_data.zip"
         extract_target = self.project_root / "data"
 
-        if zip_path.exists():
-            try:
-                with zipfile.ZipFile(zip_path, 'r') as z: z.extractall(extract_target)
-                time.sleep(0.2)
-                os.remove(zip_path)
-                self.log("✅ 數據套用成功，暫存包已清理。")
-            except Exception as e:
-                self.log(f"❌ 解壓縮失敗: {e}")
-        else:
+        if not zip_path.exists():
             self.log("❌ 找不到 ZIP 檔案。")
+            self.btn_download_zip.setEnabled(True)
+            self.btn_download_zip.setText("🔄 重新檢查雲端")
+            return
+
+        # 鎖定介面並準備進度條
+        self._disable_all_buttons()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setFormat("🔓 解壓縮中 - %p%")
+
+        # 啟動背景解壓縮執行緒
+        self.unzip_thread = UnzipWorker(zip_path, extract_target)
+        self.unzip_thread.log_signal.connect(self.log)
+        self.unzip_thread.progress_signal.connect(self.progress.setValue)
+        self.unzip_thread.finished_signal.connect(self._on_unzip_finished)
+        self.unzip_thread.start()
+
+    def _on_unzip_finished(self, success):
+        # 解壓縮完成後恢復介面狀態
+        self.btn_check_cloud.setEnabled(True)
+        self.btn_fallback_kline.setEnabled(True)
+        self.btn_pipe_core.setEnabled(True)
+        self.btn_pipe_finance.setEnabled(True)
+        self.btn_save_recalc.setEnabled(True)
 
         self.btn_download_zip.setEnabled(True)
         self.btn_download_zip.setText("🔄 重新檢查雲端")
-        self.progress.setRange(0, 100)
-        self.progress.setValue(100)
+
+        if success:
+            self.progress.setFormat("✅ 作業結束")
+        else:
+            self.progress.setFormat("❌ 解壓縮發生錯誤")
+
         self.run_status_probe()
 
     def set_inputs_enabled(self, enabled):

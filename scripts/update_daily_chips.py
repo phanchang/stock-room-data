@@ -43,24 +43,30 @@ def load_all_stocks():
 
 def is_updated_today(file_path):
     """
-    檢查檔案是否在「今天下午 3 點後」或「今天之內」已經更新過。
-    若是，則跳過抓取，這是節省時間的關鍵。
+    檢查檔案是否已經更新過 (分段式智慧判斷)：
+    1. 早上 (00~15點): 只要今天有更新過就跳過。
+    2. 下午 (15~21點): 法人公布，檔案必須是今天 15:00 後更新的才跳過。
+    3. 晚上 (21點後): 融資券公布，檔案必須是今天 21:00 後更新的才跳過。
     """
     if not file_path.exists():
         return False
 
     mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
 
-    # 如果是同一天
-    if mtime.date() == NOW.date():
-        # 如果現在已經收盤(15:00後)，且檔案也是15:00後更新的 -> 跳過
-        if IS_AFTER_MARKET and mtime.hour >= 15:
-            return True
-        # 如果現在是盤中或早上，但檔案已經是今天更新的 -> 勉強算跳過(避免重複跑)
-        if not IS_AFTER_MARKET:
-            return True
+    # 如果連日期都不是今天，絕對不能跳過 (一定要更新)
+    if mtime.date() != NOW.date():
+        return False
 
-    return False
+    # 已經是同一天的情況下，根據「現在的時間」進行分段檢查
+    if NOW.hour >= 21:
+        # 晚上 9 點後 (資券公布期)：檔案必須是晚上 9 點後才更新的
+        return mtime.hour >= 21
+    elif NOW.hour >= 15:
+        # 下午 3 點後 (法人公布期)：檔案必須是下午 3 點後才更新的
+        return mtime.hour >= 15
+    else:
+        # 早上盤中 (看昨天資料)：只要今天是同一天更新的都算過關
+        return True
 
 
 def process_stock(sid):
@@ -120,7 +126,6 @@ def process_stock(sid):
 
 def run_daily_update(stock_list, workers=12, chunk_size=20):
     total = len(stock_list)
-    # workers 提升到 12，chunk 縮小到 20 以便更頻繁回報進度與插入休息
     print(f"📊 啟動【每日籌碼更新】極速版 (Workers: {workers})，目標 {total} 檔...")
     start_time = time.time()
 
@@ -128,14 +133,14 @@ def run_daily_update(stock_list, workers=12, chunk_size=20):
     fail_count = 0
     skip_count = 0
 
-    # 將總清單切割成多個批次 (Chunks)
     chunks = [stock_list[i:i + chunk_size] for i in range(0, total, chunk_size)]
 
     for chunk_idx, chunk in enumerate(chunks):
-        # UI 進度回報 (Format: PROGRESS: 0~100)
         current_progress = int((chunk_idx * chunk_size) / total * 100)
         print(f"PROGRESS: {current_progress}")
         print(f"📦 批次 {chunk_idx + 1}/{len(chunks)} 處理中...", flush=True)
+
+        batch_did_network_request = False  # 追蹤這個批次是否有發送真實網路請求
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_sid = {executor.submit(process_stock, sid): sid for sid in chunk}
@@ -146,15 +151,16 @@ def run_daily_update(stock_list, workers=12, chunk_size=20):
                     skip_count += 1
                 elif is_success:
                     success_count += 1
+                    batch_did_network_request = True  # 有成功抓取代表有發送請求
                 else:
                     fail_count += 1
+                    batch_did_network_request = True  # 失敗通常也是因為發了請求被擋
 
-                # 只印出錯誤或特定訊息，避免 Log 刷太快
                 if not is_success or "Skipped" not in msg:
                     print(f"[{success_count + skip_count + fail_count}/{total}] {sid} {msg}")
 
-        # ⚡ 速度優化：批次間的休息時間縮短 (3~6秒)，保持連線活躍但不過度
-        if chunk_idx < len(chunks) - 1:
+        # 🚀 終極優化：如果這個批次全部都是 Skipped，就不要傻傻等待 3~6 秒！
+        if chunk_idx < len(chunks) - 1 and batch_did_network_request:
             time.sleep(random.uniform(3.0, 6.0))
 
     elapsed = time.time() - start_time
