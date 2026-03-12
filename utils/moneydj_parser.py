@@ -192,26 +192,44 @@ class MoneyDJParser:
     # 4. 月營收 - ZCH
     # ==========================================
     def get_monthly_revenue(self, limit=24):
-        url = f"{self.BASE_URL}/zch/zch_{self.sid}.djhtm"
-        soup = self._get_soup(url)
-        if not soup: return []
+        urls_to_try = [
+            f"{self.BASE_URL}/zch/zcha_{self.sid}.djhtm",  # 合併營收
+            f"{self.BASE_URL}/zch/zch_{self.sid}.djhtm"  # 個體營收 (金融股最新資料通常在這裡)
+        ]
 
-        results = []
-        for tr in soup.find_all("tr"):
-            tds = tr.find_all("td")
-            if len(tds) >= 7:
-                date_str = tds[0].get_text(strip=True)
-                if '/' in date_str and len(date_str) >= 5 and date_str[0].isdigit():
-                    try:
-                        results.append({
-                            "month": date_str,
-                            "rev_yoy": self._clean_val(tds[4].get_text()),
-                            "rev_cum_yoy": self._clean_val(tds[6].get_text())
-                        })
-                    except:
-                        continue
-                    if len(results) >= limit: break
-        return results
+        best_results = []
+        best_month = ""
+
+        for url in urls_to_try:
+            soup = self._get_soup(url)
+            if not soup: continue
+
+            current_results = []
+            for tr in soup.find_all("tr"):
+                tds = tr.find_all(["td", "th"])
+                if len(tds) >= 7:
+                    date_str = tds[0].get_text(strip=True)
+                    #if '/' in date_str and len(date_str) >= 5 and date_str[0].isdigit():
+                    if re.match(r'^\d{2,3}/\d{2}$', date_str):
+                        try:
+                            current_results.append({
+                                "month": date_str,
+                                "rev_yoy": self._clean_val(tds[4].get_text()),
+                                "rev_cum_yoy": self._clean_val(tds[6].get_text())
+                            })
+                        except:
+                            continue
+                        if len(current_results) >= limit: break
+
+            # 💡 核心修正：比對哪一個網址的資料最新！
+            if current_results:
+                current_latest_month = current_results[0]["month"]
+                # 例如 "115/02" > "115/01"，我們只保留最新的那份資料
+                if current_latest_month > best_month:
+                    best_month = current_latest_month
+                    best_results = current_results
+
+        return best_results
 
     # ==========================================
     # 5. 現金流量表 - ZC3 (矩陣式)
