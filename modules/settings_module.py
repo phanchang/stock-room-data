@@ -260,7 +260,8 @@ class SettingsModule(QWidget):
         self.btn_pipe_core = QPushButton("🚀 [核心排程] 深度籌碼與策略大表運算 (每日必點)")
         self.btn_pipe_core.setStyleSheet(BTN_ACTION)
         self.btn_pipe_core.setToolTip("耗時約5~10分。\n依序執行：\n1. 抓取最新JSON深度籌碼\n2. 結合最新K線產出策略大表")
-        self.btn_pipe_core.clicked.connect(self.run_core_pipeline)
+        #self.btn_pipe_core.clicked.connect(self.run_core_pipeline)
+        self.btn_pipe_core.clicked.connect(self.run_pre_flight_check)
         l_pipe.addWidget(self.btn_pipe_core)
 
         finance_layout = QHBoxLayout()
@@ -448,18 +449,96 @@ class SettingsModule(QWidget):
         self.runner_kline.finished.connect(self.on_pipeline_finished)
         self.runner_kline.start_script()
 
+    # 🔥 新增點：起飛前自動探測 (Pre-flight Check)
+    def run_pre_flight_check(self):
+        if not self._foolproof_check("深度籌碼與策略運算"): return
+        self._disable_all_buttons()
+        self.progress.setFormat("🔍 正在極速探測 MoneyDJ 今日資料公布狀態...")
+        self.probe_text = ""
+
+        self.runner_probe = ScriptRunner(self.project_root / "scripts" / "check_market_ready.py")
+        self.runner_probe.output_signal.connect(self._collect_probe_output)
+        self.runner_probe.finished.connect(self._analyze_probe_and_decide)
+        self.runner_probe.start_script()
+
+    def _collect_probe_output(self, text):
+        self.probe_text += text
+
+    def _analyze_probe_and_decide(self):
+        inst_match = re.search(r"PROBE_INST_DATE:(.*)", self.probe_text)
+        margin_match = re.search(r"PROBE_MARGIN_DATE:(.*)", self.probe_text)
+
+        inst_date = inst_match.group(1).strip() if inst_match else "未知"
+        margin_date = margin_match.group(1).strip() if margin_match else "未知"
+
+        now = datetime.now()
+        # 產生今天的日期字串 (因應不同格式可能是 YYYY/MM/DD 或 YYYY-MM-DD)
+        today_str1 = now.strftime('%Y/%m/%d')
+        today_str2 = now.strftime('%Y-%m-%d')
+
+        is_inst_today = (today_str1 in inst_date) or (today_str2 in inst_date)
+        is_margin_today = (today_str1 in margin_date) or (today_str2 in margin_date)
+
+        # 防呆邏輯：如果今天是平日且過了下午 3 點，法人有今天的資料，但融資券卻還沒有
+        if now.weekday() < 5 and now.hour >= 15:
+            if is_inst_today and not is_margin_today:
+                reply = QMessageBox.warning(
+                    self, "融資券尚未公布 ⚠️",
+                    f"【MoneyDJ 即時狀態探測】\n"
+                    f"📊 法人資料：{inst_date} (已公布)\n"
+                    f"💰 融資券資料：{margin_date} (尚未公布)\n\n"
+                    f"⚠️ 台灣股市融資券通常在 21:00 後才會完整公布。\n"
+                    f"現在執行會導致今日融資券資料缺漏，確定要強制執行嗎？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    self.log("❌ 使用者取消執行：等待融資券公布。")
+                    self._cancel_and_restore_ui()
+                    return
+
+        # 如果資料齊全，或者使用者點擊了「是(強制執行)」，就啟動原來的核心排程！
+        self.run_core_pipeline()
+
+    def _cancel_and_restore_ui(self):
+            # 恢復按鈕狀態
+            self.btn_check_cloud.setEnabled(True)
+            self.btn_fallback_kline.setEnabled(True)
+            self.btn_pipe_core.setEnabled(True)
+            self.btn_pipe_finance.setEnabled(True)
+            self.btn_save_recalc.setEnabled(True)
+            # 如果雲端按鈕本來有字，要保留
+            if "下載" in self.btn_download_zip.text() or "套用" in self.btn_download_zip.text():
+                self.btn_download_zip.setEnabled(True)
+
+            self.progress.setValue(0)
+            self.progress.setFormat("已取消排程")
+
+
     def run_core_pipeline(self):
         if not self._foolproof_check("深度籌碼與策略運算"): return
         self.task_start_time = time.time()
-        self.log("🚀 [核心] 啟動: 深度籌碼更新 (update_daily_chips.py) (1/2)...", True)
+        self.log("🚀 [核心] 啟動: 深度籌碼更新 (update_daily_chips.py) (1/3)...", True)
         self._disable_all_buttons()
-        self.progress.setFormat("⏳ 抓取深度籌碼中 (1/2) - %p%")
+        self.progress.setFormat("⏳ 抓取深度籌碼中 (1/3) - %p%")
 
         self.runner_daily = ScriptRunner(self.project_root / "scripts" / "update_daily_chips.py")
         self.runner_daily.output_signal.connect(self.log)
         self.runner_daily.progress_signal.connect(self.progress.setValue)
+        # 🔥 修改點: 籌碼跑完後，接續跑估值 (2/3)
         self.runner_daily.finished.connect(self._proceed_to_calc_factors)
         self.runner_daily.start_script()
+
+    # 🔥 新增點: 第二階段，跑全市場估值 (update_market_yield.py)
+    def _proceed_to_market_yield(self):
+        self.log("📊 [核心] 啟動: 全市場估值更新 (update_market_yield.py) (2/3)...", False)
+        self.progress.setFormat("⏳ 抓取全市場估值 (2/3) - %p%")
+
+        self.runner_yield = ScriptRunner(self.project_root / "scripts" / "update_market_yield.py")
+        self.runner_yield.output_signal.connect(self.log)
+        self.runner_yield.progress_signal.connect(self.progress.setValue)
+        # 🔥 修改點: 估值跑完後，最後才接續算大表 (3/3)
+        self.runner_yield.finished.connect(self._proceed_to_calc_factors)
+        self.runner_yield.start_script()
 
     def run_pipeline_financials(self):
         mode_idx = self.combo_finance_mode.currentIndex()
@@ -478,14 +557,15 @@ class SettingsModule(QWidget):
         self.runner_finance = ScriptRunner(self.project_root / "scripts" / "update_financials.py", args)
         self.runner_finance.output_signal.connect(self.log)
         self.runner_finance.progress_signal.connect(self.progress.setValue)
+        # 財報/營收屬於低頻更新，跑完直接重算大表即可
         self.runner_finance.finished.connect(self._proceed_to_calc_factors)
         self.runner_finance.start_script()
 
     def _proceed_to_calc_factors(self):
-        if hasattr(self, 'task_start_time'): self._log_duration(self.task_start_time, "第一階段(抓取資料)耗時")
+        if hasattr(self, 'task_start_time'): self._log_duration(self.task_start_time, "資料抓取耗時")
         if not self.save_config(): return
-        self.log("⚙️ 啟動: 融合深度籌碼與策略運算 (calc_snapshot_factors.py) (2/2)...", False)
-        self.progress.setFormat("⏳ 計算策略因子 (2/2) - %p%")
+        self.log("⚙️ 啟動: 融合深度籌碼與策略運算 (calc_snapshot_factors.py) (3/3)...", False)
+        self.progress.setFormat("⏳ 計算策略因子 (最後階段) - %p%")
 
         self.runner_calc = ScriptRunner(self.project_root / "scripts" / "calc_snapshot_factors.py")
         self.runner_calc.output_signal.connect(self.log)

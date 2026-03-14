@@ -1,16 +1,15 @@
+# 檔案路徑: scripts/calc_snapshot_factors.py
 import pandas as pd
 import numpy as np
 from pathlib import Path
 import sys
+import os
 import warnings
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
-import requests
 from unittest.mock import MagicMock
+from dotenv import load_dotenv
 
-# ==========================================
-# 🔧 1. 系統路徑強制修正
-# ==========================================
 sys.stdout.reconfigure(encoding='utf-8')
 warnings.filterwarnings('ignore')
 
@@ -19,6 +18,8 @@ project_root = current_file.parent.parent
 
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+
+load_dotenv(project_root / '.env')
 
 try:
     import yfinance
@@ -33,67 +34,8 @@ except ImportError as e:
     print(f"[Error] 匯入 utils 模組失敗: {e}")
     sys.exit(1)
 
-
 # ==========================================
-# 工具函數：極速抓取全市場估值 (PE / PB / 殖利率)
-# ==========================================
-def parse_val(v):
-    try:
-        return float(str(v).replace(',', '').replace('%', '').strip())
-    except:
-        return 0.0
-
-
-def fetch_market_valuation():
-    """向證交所與櫃買中心抓取最新交易日的本益比、殖利率"""
-    print("🔍 正在同步全市場本益比與殖利率...")
-    vd = {}
-
-    # 找尋最近的 5 個工作天，嘗試抓取直到成功
-    days, offset = [], 0
-    while len(days) < 5 and offset < 15:
-        dt = datetime.now() - timedelta(days=offset)
-        if dt.weekday() < 5: days.append(dt)
-        offset += 1
-
-    for dt in days:
-        d_str = dt.strftime('%Y%m%d')
-        d_roc = f"{dt.year - 1911}/{dt.month:02d}/{dt.day:02d}"
-        found_data = False
-
-        # 上市 (TWSE)
-        try:
-            url = f"https://www.twse.com.tw/rwd/zh/afterTrading/BWIBBU_d?date={d_str}&selectType=ALL&response=json"
-            res = requests.get(url, timeout=5, verify=False).json()
-            if res.get('stat') == 'OK' and 'data' in res:
-                f = res['fields']
-                iy, ipe, ipb = f.index("殖利率(%)"), f.index("本益比"), f.index("股價淨值比")
-                for r in res['data']:
-                    vd[r[0].strip()] = {'yield': parse_val(r[iy]), 'pe': parse_val(r[ipe]), 'pbr': parse_val(r[ipb])}
-                found_data = True
-        except:
-            pass
-
-        # 上櫃 (TPEx)
-        try:
-            url = f"https://www.tpex.org.tw/web/stock/aftertrading/peratio_analysis/pera_result.php?l=zh-tw&o=json&d={d_roc}"
-            res = requests.get(url, timeout=5, verify=False).json()
-            raw = res['tables'][0]['data'] if 'tables' in res else []
-            if raw:
-                for r in raw:
-                    vd[r[0].strip()] = {'pe': parse_val(r[2]), 'yield': parse_val(r[5]), 'pbr': parse_val(r[6])}
-                found_data = True
-        except:
-            pass
-
-        if found_data:
-            break  # 只要有一天成功抓到就跳出
-
-    return vd
-
-
-# ==========================================
-# 核心邏輯 - 技術面
+# 核心邏輯 - 技術面 (維持你原本的完美邏輯，無任何刪減)
 # ==========================================
 def calculate_advanced_factors(df, sid=None):
     if df is None or len(df) == 0:
@@ -134,45 +76,36 @@ def calculate_advanced_factors(df, sid=None):
         bb_width_series = (4 * std20) / ma20 * 100
         factors['bb_width'] = round(bb_width_series.iloc[-1], 2) if not pd.isna(bb_width_series.iloc[-1]) else 0
 
-        factors['str_consol_5'] = int(bb_width_series.rolling(5).max().iloc[-1] < 10) if len(
-            bb_width_series) >= 5 else 0
-        factors['str_consol_10'] = int(bb_width_series.rolling(10).max().iloc[-1] < 12) if len(
-            bb_width_series) >= 10 else 0
-        factors['str_consol_20'] = int(bb_width_series.rolling(20).max().iloc[-1] < 15) if len(
-            bb_width_series) >= 20 else 0
+        factors['str_consol_5'] = int(bb_width_series.rolling(5).max().iloc[-1] < 10) if len(bb_width_series) >= 5 else 0
+        factors['str_consol_10'] = int(bb_width_series.rolling(10).max().iloc[-1] < 12) if len(bb_width_series) >= 10 else 0
+        factors['str_consol_20'] = int(bb_width_series.rolling(20).max().iloc[-1] < 15) if len(bb_width_series) >= 20 else 0
 
         try:
-            if (df['Close'].iloc[-2] < ma20.iloc[-2] and df['Close'].iloc[-1] > ma20.iloc[-1] and df['Close'].iloc[-1] >
-                    df['Open'].iloc[-1]):
+            if (df['Close'].iloc[-2] < ma20.iloc[-2] and df['Close'].iloc[-1] > ma20.iloc[-1] and df['Close'].iloc[-1] > df['Open'].iloc[-1]):
                 factors['str_fake_breakdown'] = 1
         except:
             pass
 
     if len(df) >= 61:
         factors['漲幅60d'] = round(df['Close'].pct_change(60).iloc[-1] * 100, 2)
-        factors['str_consol_60'] = int(bb_width_series.rolling(60).max().iloc[-1] < 18) if len(
-            bb_width_series) >= 60 else 0
+        factors['str_consol_60'] = int(bb_width_series.rolling(60).max().iloc[-1] < 18) if len(bb_width_series) >= 60 else 0
 
     if len(df) >= 200:
-        def check_recent(series):
-            return int(series.tail(3).any())
+        def check_recent(series): return int(series.tail(3).any())
 
         try:
             ma20 = df['Close'].rolling(20).mean()
             ma200 = df['Close'].rolling(200).mean()
             high_60 = df['High'].rolling(60).max()
-            if (last_close_daily > ma200.iloc[-1]) and (ma200.iloc[-1] > ma200.iloc[-5]) and (
-                    df['High'].tail(15) >= high_60.tail(15)).any():
+            if (last_close_daily > ma200.iloc[-1]) and (ma200.iloc[-1] > ma200.iloc[-5]) and (df['High'].tail(15) >= high_60.tail(15)).any():
                 low_20d = df['Low'].rolling(20).min().shift(1)
                 for i in range(3):
                     idx = -1 - i
                     s_level = min(low_20d.iloc[idx], ma20.iloc[idx]) if idx > -len(df) else 0
                     if s_level == 0: continue
                     break_depth = (s_level - df['Low'].iloc[idx]) / s_level
-                    if (df['Low'].iloc[idx] < s_level) and (0.005 < break_depth < 0.08) and (
-                            df['Volume'].iloc[idx] > (1.2 * df['Volume'].iloc[idx - 5:idx].mean())):
-                        if (last_close_daily > s_level) and (last_close_daily > df['Open'].iloc[-1]) and (
-                                last_close_daily > df['High'].iloc[idx]):
+                    if (df['Low'].iloc[idx] < s_level) and (0.005 < break_depth < 0.08) and (df['Volume'].iloc[idx] > (1.2 * df['Volume'].iloc[idx - 5:idx].mean())):
+                        if (last_close_daily > s_level) and (last_close_daily > df['Open'].iloc[-1]) and (last_close_daily > df['High'].iloc[idx]):
                             factors['str_ilss_sweep'] = 1
                             break
         except:
@@ -207,17 +140,15 @@ def calculate_advanced_factors(df, sid=None):
                         factors['str_30w_week_offset'] = offset
                         factors['str_30w_adh'] = 1 if sig in [1, 3] else 0
                         factors['str_30w_shk'] = 1 if sig in [2, 3] else 0
-                        factors[
-                            'str_30w_info'] = f"({res_30w['Adh_Info'].iloc[idx] if sig in [1, 3] else res_30w['Shk_Info'].iloc[idx]})"
+                        factors['str_30w_info'] = f"({res_30w['Adh_Info'].iloc[idx] if sig in [1, 3] else res_30w['Shk_Info'].iloc[idx]})"
                         break
         except:
             pass
 
     return factors
 
-
 # ==========================================
-# 深度 JSON 特徵轉換
+# 深度 JSON 特徵轉換 (維持你原本的邏輯)
 # ==========================================
 def calculate_json_factors(sid_str):
     json_path = project_root / 'data' / 'fundamentals' / f"{sid_str}.json"
@@ -258,11 +189,9 @@ def calculate_json_factors(sid_str):
             if cl_1 > 0: res['fund_contract_qoq'] = round(((cl_0 - cl_1) / cl_1) * 100, 2)
             inv_0, inv_1 = float(bs[0].get('inventory', 0) or 0), float(bs[1].get('inventory', 0) or 0)
             if inv_1 > 0: res['fund_inventory_qoq'] = round(((inv_0 - inv_1) / inv_1) * 100, 2)
-        except:
-            pass
+        except: pass
     cf = jdata.get('cash_flow', [])
-    if len(cf) > 0:
-        res['fund_op_cash_flow'] = float(cf[0].get('op_cash_flow', 0) or 0)
+    if len(cf) > 0: res['fund_op_cash_flow'] = float(cf[0].get('op_cash_flow', 0) or 0)
 
     # 3. EPS
     prof = jdata.get('profitability', [])
@@ -284,21 +213,15 @@ def calculate_json_factors(sid_str):
                     if q_str == last_y_q_str: eps_last_y = val
                     try:
                         y, q = int(q_str.split('.')[0]), int(q_str.split('.')[1].replace('Q', ''))
-                        if y == latest_y and q <= latest_q:
-                            sum_this += val
-                        elif y == latest_y - 1 and q <= latest_q:
-                            sum_last += val
-                    except:
-                        pass
+                        if y == latest_y and q <= latest_q: sum_this += val
+                        elif y == latest_y - 1 and q <= latest_q: sum_last += val
+                    except: pass
 
                 res['fund_eps_cum'] = round(sum_this, 2)
-                if eps_prev is not None and eps_prev != 0: res['eps_qoq'] = round(
-                    ((res['eps_latest_val'] - eps_prev) / abs(eps_prev)) * 100, 2)
-                if eps_last_y is not None and eps_last_y != 0: res['eps_yoy'] = round(
-                    ((res['eps_latest_val'] - eps_last_y) / abs(eps_last_y)) * 100, 2)
+                if eps_prev is not None and eps_prev != 0: res['eps_qoq'] = round(((res['eps_latest_val'] - eps_prev) / abs(eps_prev)) * 100, 2)
+                if eps_last_y is not None and eps_last_y != 0: res['eps_yoy'] = round(((res['eps_latest_val'] - eps_last_y) / abs(eps_last_y)) * 100, 2)
                 if sum_last != 0: res['eps_cum_yoy'] = round(((sum_this - sum_last) / abs(sum_last)) * 100, 2)
-        except:
-            pass
+        except: pass
 
     # 4. 籌碼運算
     inst_data = jdata.get('institutional_investors', [])
@@ -309,51 +232,37 @@ def calculate_json_factors(sid_str):
         df_inst = pd.DataFrame(inst_data).set_index('date')
         df_margin = pd.DataFrame(margin_data).set_index('date') if margin_data else pd.DataFrame()
 
-        d_1, d_3, d_5, d_10, d_20 = market_dates[:1], market_dates[:3], market_dates[:5], market_dates[
-            :10], market_dates[:20]
+        d_1, d_3, d_5, d_10, d_20 = market_dates[:1], market_dates[:3], market_dates[:5], market_dates[:10], market_dates[:20]
 
-        def get_sum(df, dates, col):
-            return df.reindex(dates)[col].fillna(0).sum() if not df.empty and col in df.columns else 0.0
-
+        def get_sum(df, dates, col): return df.reindex(dates)[col].fillna(0).sum() if not df.empty and col in df.columns else 0.0
         def get_streak(df, col):
             if df.empty or col not in df.columns: return 0
             series = df.reindex(market_dates)[col].fillna(0).values
             if len(series) == 0 or series[0] == 0: return 0
             count, is_buying = 0, (series[0] > 0)
             for v in series:
-                if is_buying and v > 0:
-                    count += 1
-                elif not is_buying and v < 0:
-                    count -= 1
-                else:
-                    break
+                if is_buying and v > 0: count += 1
+                elif not is_buying and v < 0: count -= 1
+                else: break
             return count
 
         res['t_net_today'] = get_sum(df_inst, d_1, 'invest_trust_buy_sell')
         res['f_net_today'] = get_sum(df_inst, d_1, 'foreign_buy_sell')
         res['m_net_today'] = get_sum(df_margin, d_1, 'fin_change')
 
-        res['t_sum_5d'], res['t_sum_10d'], res['t_sum_20d'] = get_sum(df_inst, d_5, 'invest_trust_buy_sell'), get_sum(
-            df_inst, d_10, 'invest_trust_buy_sell'), get_sum(df_inst, d_20, 'invest_trust_buy_sell')
-        res['f_sum_5d'], res['f_sum_10d'], res['f_sum_20d'] = get_sum(df_inst, d_5, 'foreign_buy_sell'), get_sum(
-            df_inst, d_10, 'foreign_buy_sell'), get_sum(df_inst, d_20, 'foreign_buy_sell')
-        res['m_sum_5d'], res['m_sum_10d'], res['m_sum_20d'] = get_sum(df_margin, d_5, 'fin_change'), get_sum(df_margin,
-                                                                                                             d_10,
-                                                                                                             'fin_change'), get_sum(
-            df_margin, d_20, 'fin_change')
+        res['t_sum_5d'], res['t_sum_10d'], res['t_sum_20d'] = get_sum(df_inst, d_5, 'invest_trust_buy_sell'), get_sum(df_inst, d_10, 'invest_trust_buy_sell'), get_sum(df_inst, d_20, 'invest_trust_buy_sell')
+        res['f_sum_5d'], res['f_sum_10d'], res['f_sum_20d'] = get_sum(df_inst, d_5, 'foreign_buy_sell'), get_sum(df_inst, d_10, 'foreign_buy_sell'), get_sum(df_inst, d_20, 'foreign_buy_sell')
+        res['m_sum_5d'], res['m_sum_10d'], res['m_sum_20d'] = get_sum(df_margin, d_5, 'fin_change'), get_sum(df_margin, d_10, 'fin_change'), get_sum(df_margin, d_20, 'fin_change')
         res['f_sum_3d'] = get_sum(df_inst, d_3, 'foreign_buy_sell')
 
-        res['t_streak'], res['f_streak'] = get_streak(df_inst, 'invest_trust_buy_sell'), get_streak(df_inst,
-                                                                                                    'foreign_buy_sell')
+        res['t_streak'], res['f_streak'] = get_streak(df_inst, 'invest_trust_buy_sell'), get_streak(df_inst, 'foreign_buy_sell')
 
         inst_10d = df_inst.reindex(d_10).fillna(0)
         res['f_buy_days_10'] = (inst_10d['foreign_buy_sell'] > 0).sum()
         res['t_sell_days_10'] = (inst_10d['invest_trust_buy_sell'] < 0).sum()
 
         cond_consistency = (res['f_buy_days_10'] >= 7) and (res['t_sell_days_10'] >= 7)
-        res['is_tu_yang'] = 1 if (
-                    cond_consistency and res['f_sum_10d'] > 0 and res['t_sum_10d'] < 0 and res['f_sum_10d'] > abs(
-                res['t_sum_10d']) and res['f_sum_3d'] > 0) else 0
+        res['is_tu_yang'] = 1 if (cond_consistency and res['f_sum_10d'] > 0 and res['t_sum_10d'] < 0 and res['f_sum_10d'] > abs(res['t_sum_10d']) and res['f_sum_3d'] > 0) else 0
 
         def get_val(df, date, col):
             if df.empty or col not in df.columns: return 0.0
@@ -362,26 +271,20 @@ def calculate_json_factors(sid_str):
 
         if len(market_dates) >= 5:
             d0, d5 = market_dates[0], market_dates[4]
-            res['legal_diff_5d'] = round(
-                get_val(df_inst, d0, 'total_legal_pct') - get_val(df_inst, d5, 'total_legal_pct'), 2)
+            res['legal_diff_5d'] = round(get_val(df_inst, d0, 'total_legal_pct') - get_val(df_inst, d5, 'total_legal_pct'), 2)
             res['margin_diff_5d'] = round(get_val(df_margin, d0, 'fin_usage') - get_val(df_margin, d5, 'fin_usage'), 2)
         if len(market_dates) >= 20:
             d0, d20 = market_dates[0], market_dates[19]
-            res['legal_diff_20d'] = round(
-                get_val(df_inst, d0, 'total_legal_pct') - get_val(df_inst, d20, 'total_legal_pct'), 2)
-            res['margin_diff_20d'] = round(get_val(df_margin, d0, 'fin_usage') - get_val(df_margin, d20, 'fin_usage'),
-                                           2)
+            res['legal_diff_20d'] = round(get_val(df_inst, d0, 'total_legal_pct') - get_val(df_inst, d20, 'total_legal_pct'), 2)
+            res['margin_diff_20d'] = round(get_val(df_margin, d0, 'fin_usage') - get_val(df_margin, d20, 'fin_usage'), 2)
 
     return res
-
 
 def get_strong_tags(row):
     tags = []
     st_week = row.get('str_st_week_offset', -1)
-    if st_week == 0:
-        tags.append('ST轉多(本週)')
-    elif 0 < st_week <= 4:
-        tags.append(f'ST轉多({int(st_week)}週前)')
+    if st_week == 0: tags.append('ST轉多(本週)')
+    elif 0 < st_week <= 4: tags.append(f'ST轉多({int(st_week)}週前)')
 
     if row.get('str_break_30w', 0) == 1: tags.append('突破30週')
     if row.get('str_high_60', 0) == 1: tags.append('創季高')
@@ -391,18 +294,15 @@ def get_strong_tags(row):
     if row.get('RS強度', 0) > 90: tags.append('超強勢')
 
     bb_width = row.get('bb_width', 100)
-    if bb_width < 5.0:
-        tags.append('極度壓縮')
-    elif bb_width < 8.0:
-        tags.append('波動壓縮')
+    if bb_width < 5.0: tags.append('極度壓縮')
+    elif bb_width < 8.0: tags.append('波動壓縮')
 
     if row.get('str_consol_5', 0) == 1: tags.append('盤整5日')
     if row.get('str_consol_10', 0) == 1: tags.append('盤整10日')
     if row.get('str_consol_20', 0) == 1: tags.append('盤整20日')
     if row.get('str_consol_60', 0) == 1: tags.append('盤整60日')
 
-    if row.get('str_ilss_sweep', 0) == 1 and row.get('rev_cum_yoy', 0) > 0 and (
-            row.get('m_net_today', 0) < 0 or row.get('m_sum_5d', 0) < 0): tags.append('主力掃單(ILSS)')
+    if row.get('str_ilss_sweep', 0) == 1 and row.get('rev_cum_yoy', 0) > 0 and (row.get('m_net_today', 0) < 0 or row.get('m_sum_5d', 0) < 0): tags.append('主力掃單(ILSS)')
     if row.get('t_streak', 0) >= 3: tags.append('投信認養')
     if row.get('m_net_today', 0) <= -200: tags.append('散戶退場')
     if row.get('is_tu_yang', 0) == 1: tags.append('土洋對作')
@@ -419,29 +319,37 @@ def get_strong_tags(row):
 
     return ','.join(tags)
 
-
 def main():
-    print(f"[System] 因子運算啟動 (V8.3 - 完美填補估值版) | {datetime.now():%H:%M:%S}")
+    print(f"[System] 因子運算啟動 (V8.4 - 抽離連線，純記憶體運算版) | {datetime.now():%H:%M:%S}")
 
+    print("⏳ 正在將 K 線資料載入記憶體 (CacheManager)，這可能需要數十秒...")
     try:
         cache = CacheManager()
+        print("✅ K 線資料載入完成！")
     except Exception as e:
         print(f"[Error] CacheManager 初始化失敗: {e}")
         return
 
-    # 🚀 1. 抓取全市場估值 (解決 PE/PB/殖利率 空白問題)
-    valuation_dict = fetch_market_valuation()
+    # 🔥 關鍵修改：直接從本地檔案讀取，不對外連線
+    valuation_dict = {}
+    yield_path = project_root / 'data' / 'market_yield.json'
+    if yield_path.exists():
+        try:
+            with open(yield_path, 'r', encoding='utf-8') as f:
+                valuation_dict = json.load(f)
+            print(f"✅ 成功載入本地估值資料: {len(valuation_dict)} 檔")
+        except Exception as e:
+            print(f"⚠️ 讀取 market_yield.json 失敗: {e}")
+    else:
+        print("⚠️ 找不到 market_yield.json 暫存檔，將以預設值 0 填補 PE/PB/殖利率。")
 
-    # 🚀 2. 直接讀取本地白名單
     white_list_path = project_root / 'data' / 'stock_list.csv'
     if not white_list_path.exists():
         print("[Error] 找不到 stock_list.csv 白名單")
         return
 
-    try:
-        white_df = pd.read_csv(white_list_path, dtype=str)
-    except:
-        white_df = pd.read_csv(white_list_path, dtype=str, sep='\t')
+    try: white_df = pd.read_csv(white_list_path, dtype=str)
+    except: white_df = pd.read_csv(white_list_path, dtype=str, sep='\t')
 
     stock_dict = {}
     for _, row in white_df.iterrows():
@@ -452,15 +360,16 @@ def main():
 
     target_sids = list(stock_dict.keys())
     total = len(target_sids)
-    print(f"📊 預計計算股票數量: {total}")
+    print(f"📊 預計計算股票數量: {total} 檔")
+    print("-" * 40)
 
     final_list = []
 
     for i, sid in enumerate(target_sids):
-        if i % 20 == 0 or i == total - 1:
-            print(f"PROGRESS: {int((i + 1) / total * 100)}")
-            print(f"   Processing: {i}/{total} ({sid})...", end='\r')
-            sys.stdout.flush()
+        if i % 50 == 0 or i == total - 1:
+            pct = int((i + 1) / total * 100)
+            print(f"PROGRESS: {pct}")
+            print(f"   ⏳ 正在計算因子: {i + 1}/{total} (目前處理至 {sid})...")
 
         try:
             df = cache.load(f"{sid}.TW")
@@ -470,7 +379,6 @@ def main():
             json_factors = calculate_json_factors(sid)
 
             if tech_factors is not None:
-                # 取得估值資料，如果沒抓到就給 0
                 val_data = valuation_dict.get(sid, {'pe': 0.0, 'pbr': 0.0, 'yield': 0.0})
 
                 merged = {
@@ -479,18 +387,17 @@ def main():
                     'industry': stock_dict[sid]['industry'],
                     **tech_factors,
                     **json_factors,
-                    **val_data  # 🔥 貼上本益比、殖利率
+                    **val_data
                 }
                 final_list.append(merged)
-        except Exception as e:
+        except Exception:
             continue
 
-    print(f"\n[System] 運算完成，共產出 {len(final_list)} 檔大表。")
+    print("-" * 40)
+    print(f"[System] 運算完成，共產出 {len(final_list)} 檔大表。")
     print("PROGRESS: 100")
 
-    if not final_list:
-        print("[Warning] 無任何因子產出")
-        return
+    if not final_list: return
 
     final_df = pd.DataFrame(final_list)
 
@@ -531,7 +438,6 @@ def main():
     final_df.to_parquet(strategy_dir / 'factor_snapshot.parquet')
     output_df.to_csv(strategy_dir / '戰情室今日快照_全中文版.csv', encoding='utf-8-sig', index=False)
     print(f"[System] 存檔完成: {strategy_dir}")
-
 
 if __name__ == "__main__":
     main()
