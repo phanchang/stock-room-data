@@ -282,7 +282,18 @@ class SettingsModule(QWidget):
         finance_layout.addWidget(self.combo_finance_mode, 4)
         finance_layout.addWidget(self.btn_pipe_finance, 6)
         l_pipe.addLayout(finance_layout)
+        concept_layout = QHBoxLayout()
+        self.btn_pipe_concepts = QPushButton("🏷️ 更新題材概念股")
+        self.btn_pipe_concepts.setStyleSheet(BTN_RESET)
+        self.btn_pipe_concepts.clicked.connect(self.run_pipeline_concepts)
 
+        self.btn_pipe_mdj_ind = QPushButton("🏭 更新 MDJ 細產業")
+        self.btn_pipe_mdj_ind.setStyleSheet(BTN_RESET)
+        self.btn_pipe_mdj_ind.clicked.connect(self.run_pipeline_mdj_ind)
+
+        concept_layout.addWidget(self.btn_pipe_concepts)
+        concept_layout.addWidget(self.btn_pipe_mdj_ind)
+        l_pipe.addLayout(concept_layout)
         content_layout.addWidget(card_pipeline)
 
         # ----------------- 卡片 4: 策略參數 -----------------
@@ -424,6 +435,19 @@ class SettingsModule(QWidget):
         is_weekday = now.weekday() < 5
         self.market_ready = not (is_weekday and 8 <= now.hour < 14)
 
+    def run_pipeline_mdj_ind(self):
+        if not self._foolproof_check("MDJ 細產業更新"): return
+        self.task_start_time = time.time()
+        self.log("🏭 [附加] 啟動: 兩層式產業分類抓取 (update_industries.py)...", True)
+        self._disable_all_buttons()
+        self.progress.setFormat("⏳ 抓取 MDJ 產業分類中 - %p%")
+
+        self.runner_mdj_ind = ScriptRunner(self.project_root / "scripts" / "update_industries.py")
+        self.runner_mdj_ind.output_signal.connect(self.log)
+        self.runner_mdj_ind.progress_signal.connect(self.progress.setValue)
+        self.runner_mdj_ind.finished.connect(self._proceed_to_calc_factors)
+        self.runner_mdj_ind.start_script()
+
     def _foolproof_check(self, task_name):
         if not self.market_ready:
             reply = QMessageBox.warning(
@@ -513,7 +537,6 @@ class SettingsModule(QWidget):
             self.progress.setValue(0)
             self.progress.setFormat("已取消排程")
 
-
     def run_core_pipeline(self):
         if not self._foolproof_check("深度籌碼與策略運算"): return
         self.task_start_time = time.time()
@@ -524,8 +547,9 @@ class SettingsModule(QWidget):
         self.runner_daily = ScriptRunner(self.project_root / "scripts" / "update_daily_chips.py")
         self.runner_daily.output_signal.connect(self.log)
         self.runner_daily.progress_signal.connect(self.progress.setValue)
-        # 🔥 修改點: 籌碼跑完後，接續跑估值 (2/3)
-        self.runner_daily.finished.connect(self._proceed_to_calc_factors)
+
+        # 🔥 修正點: 籌碼跑完後，確實接續跑估值 (2/3)
+        self.runner_daily.finished.connect(self._proceed_to_market_yield)  # <--- 這裡改對了
         self.runner_daily.start_script()
 
     # 🔥 新增點: 第二階段，跑全市場估值 (update_market_yield.py)
@@ -561,6 +585,22 @@ class SettingsModule(QWidget):
         self.runner_finance.finished.connect(self._proceed_to_calc_factors)
         self.runner_finance.start_script()
 
+    def run_pipeline_concepts(self):
+        if not self._foolproof_check("概念股分類更新"): return
+
+        self.task_start_time = time.time()
+        self.log("🏷️ [附加] 啟動: 概念股族群抓取 (update_concepts.py)...", True)
+        self._disable_all_buttons()
+        self.btn_pipe_concepts.setEnabled(False)  # 記得把新按鈕也 disabled
+        self.progress.setFormat("⏳ 抓取概念股分類中 - %p%")
+
+        self.runner_concepts = ScriptRunner(self.project_root / "scripts" / "update_concepts.py")
+        self.runner_concepts.output_signal.connect(self.log)
+        self.runner_concepts.progress_signal.connect(self.progress.setValue)
+        # 跑完直接重算大表，讓新標籤生效
+        self.runner_concepts.finished.connect(self._proceed_to_calc_factors)
+        self.runner_concepts.start_script()
+
     def _proceed_to_calc_factors(self):
         if hasattr(self, 'task_start_time'): self._log_duration(self.task_start_time, "資料抓取耗時")
         if not self.save_config(): return
@@ -580,6 +620,11 @@ class SettingsModule(QWidget):
         self.btn_pipe_core.setEnabled(False)
         self.btn_pipe_finance.setEnabled(False)
         self.btn_save_recalc.setEnabled(False)
+
+        # 👇 確保這兩顆新按鈕在運算時不能被亂按 👇
+        self.btn_pipe_concepts.setEnabled(False)
+        self.btn_pipe_mdj_ind.setEnabled(False)
+
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
 
@@ -594,6 +639,10 @@ class SettingsModule(QWidget):
         self.btn_pipe_core.setEnabled(True)
         self.btn_pipe_finance.setEnabled(True)
         self.btn_save_recalc.setEnabled(True)
+
+        # 👇 運算結束後，這兩顆也要恢復成可以點擊的狀態 👇
+        self.btn_pipe_concepts.setEnabled(True)
+        self.btn_pipe_mdj_ind.setEnabled(True)
 
         self.check_strategy_time()
         self.run_status_probe()

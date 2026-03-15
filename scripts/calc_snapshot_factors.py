@@ -343,6 +343,33 @@ def main():
     else:
         print("⚠️ 找不到 market_yield.json 暫存檔，將以預設值 0 填補 PE/PB/殖利率。")
 
+    # 👇 新增：讀取概念股標籤 👇
+    concept_dict = {}
+    concept_path = project_root / 'data' / 'concept_tags.csv'
+    if concept_path.exists():
+        try:
+            concept_df = pd.read_csv(concept_path, dtype=str)
+            for _, row in concept_df.iterrows():
+                concept_dict[str(row['sid']).strip()] = str(row['sub_concepts'])
+            print(f"✅ 成功載入概念股標籤: {len(concept_dict)} 檔")
+        except Exception as e:
+            print(f"⚠️ 讀取 concept_tags.csv 失敗: {e}")
+
+    # 👇 新增：讀取 MDJ 細產業標籤 👇
+    dj_dict = {}
+    dj_path = project_root / 'data' / 'dj_industry.csv'
+    if dj_path.exists():
+        try:
+            dj_df = pd.read_csv(dj_path, dtype=str)
+            for _, row in dj_df.iterrows():
+                dj_dict[str(row['sid']).strip()] = {
+                    'dj_main_ind': str(row['dj_main_ind']).strip(),
+                    'dj_sub_ind': str(row['dj_sub_ind']).strip()
+                }
+            print(f"✅ 成功載入 MDJ 細產業標籤: {len(dj_dict)} 檔")
+        except Exception as e:
+            print(f"⚠️ 讀取 dj_industry.csv 失敗: {e}")
+
     white_list_path = project_root / 'data' / 'stock_list.csv'
     if not white_list_path.exists():
         print("[Error] 找不到 stock_list.csv 白名單")
@@ -385,6 +412,9 @@ def main():
                     'sid': sid,
                     'name': stock_dict[sid]['name'],
                     'industry': stock_dict[sid]['industry'],
+                    'sub_concepts': concept_dict.get(sid, ""),                 # 🌟 合併概念股
+                    'dj_main_ind': dj_dict.get(sid, {}).get('dj_main_ind', ""),# 🌟 合併 MDJ 主業
+                    'dj_sub_ind': dj_dict.get(sid, {}).get('dj_sub_ind', ""),  # 🌟 合併 MDJ 細產業
                     **tech_factors,
                     **json_factors,
                     **val_data
@@ -409,11 +439,14 @@ def main():
 
     chinese_map = {
         'sid': '股票代號', 'name': '股票名稱', 'industry': '產業別',
+        'sub_concepts': '概念股標籤',       # 🌟 中文化標籤
+        'dj_main_ind': 'MDJ主產業',         # 🌟 中文化標籤
+        'dj_sub_ind': 'MDJ細產業',          # 🌟 中文化標籤
         'rev_ym': '最新營收月', 'rev_yoy': '營收YoY(%)', 'rev_cum_yoy': '累計營收YoY(%)',
         'fund_eps_year': 'EPS年度', 'fund_eps_cum': '最新EPS(累)', 'eps_latest_q': '最新EPS季',
         'eps_latest_val': '單季EPS(元)', 'eps_qoq': 'EPS季增率_QoQ(%)', 'eps_yoy': 'EPS年增率_YoY(%)',
         'eps_cum_yoy': '累計EPS_YoY(%)',
-        'legal_diff_5d': '法人5日增減(%)', 'margin_diff_5d': '融資5日增減(%)',
+        'legal_diff_5d': '法人5日增減(%)', 'margin_diff_5d': '融落5日增減(%)',
         'legal_diff_20d': '法人20日增減(%)', 'margin_diff_20d': '融資20日增減(%)',
         't_net_today': '投信買賣超(今)', 't_sum_5d': '投信買賣超(5日)', 't_sum_10d': '投信買賣超(10日)',
         't_sum_20d': '投信買賣超(20日)', 't_streak': '投信連買天數',
