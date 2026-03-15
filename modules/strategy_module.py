@@ -9,18 +9,22 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QAbstractItemView, QMenu, QMessageBox, QSplitter,
                              QScrollArea, QFrame, QDialog, QGridLayout,
                              QDialogButtonBox, QRadioButton, QButtonGroup, QToolButton,
-                             QSizePolicy, QInputDialog, QLineEdit, QListWidget, QListWidgetItem)
+                             QSizePolicy, QInputDialog, QLineEdit, QListWidget, QListWidgetItem,
+                             QCompleter)
 from PyQt6.QtCore import Qt, pyqtSignal, QAbstractTableModel, QSortFilterProxyModel, QThread, QTimer, QSize
 from PyQt6.QtGui import QColor, QAction, QCursor, QFont
+from modules.stock_insight_dashboard import StockInsightDashboard
 
 # ==========================================
 # 1. 全欄位設定
 # ==========================================
 FULL_COLUMN_SPECS = {
+    'insight': {'name': '詳', 'show': True, 'tip': '個股深度決策導覽', 'type': 'str'},
     'sid': {'name': '代號', 'show': True, 'tip': '股票代號', 'type': 'str'},
     'name': {'name': '名稱', 'show': True, 'tip': '股票名稱', 'type': 'str'},
     'rev_ym': {'name': '營收月', 'show': True, 'tip': '資料所屬月份', 'type': 'str'},
     'industry': {'name': '產業', 'show': True, 'tip': '所屬產業類別', 'type': 'str'},
+    'sub_concepts': {'name': '族群', 'show': True, 'tip': '所屬概念股與次產業族群', 'type': 'str'},
     '現價': {'name': '股價', 'show': True, 'tip': '最新收盤價', 'type': 'num'},
     '漲幅1d': {'name': '今日%', 'show': True, 'tip': '今日漲跌幅', 'type': 'num'},
     '漲幅5d': {'name': '5日%', 'show': False, 'tip': '近5日漲跌幅', 'type': 'num'},
@@ -66,6 +70,9 @@ FULL_COLUMN_SPECS = {
                         'type': 'num'},
     'legal_diff_20d': {'name': '法人20日增減(%)', 'show': False, 'tip': '三大法人持股 20日增減 (建議 >= 0)',
                        'type': 'num'},
+
+    'dj_main_ind': {'name': '主業', 'show': False, 'tip': 'MoneyDJ 主產業分類', 'type': 'str'},
+    'dj_sub_ind': {'name': '細產業', 'show': True, 'tip': 'MoneyDJ 細產業分類', 'type': 'str'},
 }
 
 # ==========================================
@@ -231,45 +238,28 @@ class FilterSelectionDialog(QDialog):
         self.checkboxes = {}
         self.active_keys = active_keys
         self.setStyleSheet(GLOBAL_STYLE)
-        self.resize(550, 700)
+        self.resize(350, 500)
         self.init_ui()
 
     def init_ui(self):
         layout = QVBoxLayout(self)
-        lbl = QLabel("請勾選要顯示在主畫面的濾網：")
-        lbl.setStyleSheet("color: #AAA; margin-bottom: 10px;")
+        lbl = QLabel("請勾選要顯示的數值過濾器：")
+        lbl.setStyleSheet("color: #00E5FF; font-weight: bold;")
         layout.addWidget(lbl)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("background: transparent; border: none;")
         content = QWidget()
-        v_layout = QVBoxLayout(content)
+        vbox = QVBoxLayout(content)
 
-        categories = {}
         for cfg in self.all_filters:
-            cat = cfg.get('category', '其他')
-            if cat not in categories: categories[cat] = []
-            categories[cat].append(cfg)
+            chk = QCheckBox(f"[{cfg['category']}] {cfg['label']}")
+            chk.setChecked(cfg['key'] in self.active_keys)
+            self.checkboxes[cfg['key']] = chk
+            vbox.addWidget(chk)
 
-        for cat, cfgs in categories.items():
-            cat_lbl = QLabel(cat)
-            cat_lbl.setStyleSheet(
-                "color: #00E5FF; font-weight: bold; font-size: 16px; margin-top: 10px; border-bottom: 1px solid #444;")
-            v_layout.addWidget(cat_lbl)
-
-            grid = QGridLayout()
-            row, col = 0, 0
-            for cfg in cfgs:
-                key = cfg['key']
-                chk = QCheckBox(cfg['label'])
-                chk.setChecked(key in self.active_keys)
-                self.checkboxes[key] = chk
-                grid.addWidget(chk, row, col)
-                col += 1
-                if col > 2: col = 0; row += 1
-            v_layout.addLayout(grid)
-
-        v_layout.addStretch()
+        vbox.addStretch()
         scroll.setWidget(content)
         layout.addWidget(scroll)
 
@@ -413,6 +403,10 @@ class StrategyTableModel(QAbstractTableModel):
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid(): return None
         col_key = self.visible_cols[index.column()]
+
+        if col_key == 'insight' and role == Qt.ItemDataRole.DisplayRole:
+            return "🔍"
+
         value = self._df.iloc[index.row()][col_key]
 
         if role == Qt.ItemDataRole.UserRole: return value
@@ -576,13 +570,90 @@ class StrategyModule(QWidget):
         header_layout.addWidget(self.btn_cols)
         ctrl_layout.addWidget(header_widget)
 
-        lbl_ind = QLabel("📂 類別與自選")
+        # 👇 替換開始 (雙層佈局與智慧搜尋選單) 👇
+
+        # 🌟 下拉選單按鈕的專屬樣式
+        editable_combo_style = """
+                    QComboBox { background: #111; color: #FFF; border: 1px solid #444; padding: 4px; font-size: 14px; }
+                    QComboBox::drop-down { border-left: 1px solid #444; width: 24px; background: #222; }
+                    QComboBox::drop-down:hover { background: #333; }
+                    QComboBox::down-arrow { width: 0px; height: 0px; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 6px solid #00E5FF; }
+                    QComboBox QAbstractItemView { background: #111; color: #FFF; selection-background-color: #00E5FF; selection-color: #000; outline: none; }
+                """
+
+        # 🌟 智慧搜尋下拉清單 (Completer) 的專屬樣式，讓它在暗黑模式下超明顯
+        completer_style = """
+                    QListView { background-color: #1A1A1A; color: #00E5FF; border: 1px solid #00E5FF; font-size: 15px; font-weight: bold; }
+                    QListView::item { padding: 8px; }
+                    QListView::item:selected { background-color: #0066CC; color: #FFF; }
+                """
+
+        # 第一層：基本/自選 & 概念題材
+        row1_layout = QHBoxLayout()
+
+        v_ind = QVBoxLayout();
+        v_ind.setSpacing(2)
+        lbl_ind = QLabel("📂 基本/自選");
         lbl_ind.setProperty("class", "category-label")
-        ctrl_layout.addWidget(lbl_ind)
         self.combo_industry = QComboBox()
         self.combo_industry.addItem("全部")
         self.combo_industry.currentIndexChanged.connect(self.apply_filters_debounce)
-        ctrl_layout.addWidget(self.combo_industry)
+        v_ind.addWidget(lbl_ind);
+        v_ind.addWidget(self.combo_industry)
+
+        v_con = QVBoxLayout();
+        v_con.setSpacing(2)
+        lbl_con = QLabel("🏷️ 概念題材 (打字自動篩選)");
+        lbl_con.setProperty("class", "category-label")
+        self.combo_concept = QComboBox()
+        self.combo_concept.addItem("全部")
+        self.combo_concept.setEditable(True)
+        self.combo_concept.setStyleSheet(editable_combo_style)
+        self.combo_concept.lineEdit().setPlaceholderText("下拉選擇，或輸入關鍵字...")
+
+        # 💡 設定概念題材的自動完成器 (打字即時篩選選單)
+        comp_con = self.combo_concept.completer()
+        comp_con.setFilterMode(Qt.MatchFlag.MatchContains)
+        comp_con.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        comp_con.popup().setStyleSheet(completer_style)
+
+        self.combo_concept.activated.connect(self.apply_filters_debounce)
+        self.combo_concept.lineEdit().returnPressed.connect(self.apply_filters_debounce)
+        # 💡 魔法在這裡：讓使用者按下 Enter 後，強制彈出篩選後的選單！
+        self.combo_concept.lineEdit().returnPressed.connect(comp_con.complete)
+
+        v_con.addWidget(lbl_con);
+        v_con.addWidget(self.combo_concept)
+        row1_layout.addLayout(v_ind)
+        row1_layout.addLayout(v_con)
+        ctrl_layout.addLayout(row1_layout)
+
+        # 第二層：MDJ 產業細分 (獨立一行)
+        v_dj = QVBoxLayout();
+        v_dj.setSpacing(2)
+        lbl_dj = QLabel("🏭 產業細分 (打字自動篩選)");
+        lbl_dj.setProperty("class", "category-label")
+        self.combo_dj_ind = QComboBox()
+        self.combo_dj_ind.addItem("全部")
+        self.combo_dj_ind.setEditable(True)
+        self.combo_dj_ind.setStyleSheet(editable_combo_style)
+        self.combo_dj_ind.lineEdit().setPlaceholderText("下拉選擇，或輸入主業/細產業...")
+
+        # 💡 設定產業細分的自動完成器
+        comp_dj = self.combo_dj_ind.completer()
+        comp_dj.setFilterMode(Qt.MatchFlag.MatchContains)
+        comp_dj.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        comp_dj.popup().setStyleSheet(completer_style)
+
+        self.combo_dj_ind.activated.connect(self.apply_filters_debounce)
+        self.combo_dj_ind.lineEdit().returnPressed.connect(self.apply_filters_debounce)
+        # 💡 魔法在這裡：按下 Enter 強制彈出篩選後的選單！
+        self.combo_dj_ind.lineEdit().returnPressed.connect(comp_dj.complete)
+
+        v_dj.addWidget(lbl_dj);
+        v_dj.addWidget(self.combo_dj_ind)
+        ctrl_layout.addLayout(v_dj)
+        # 👆 替換結束 👆
 
         filter_header_box = QHBoxLayout()
         lbl_val = QLabel("📊 數值過濾")
@@ -674,6 +745,7 @@ class StrategyModule(QWidget):
         self.proxy_model.setSourceModel(self.model)
         self.table_view.setModel(self.proxy_model)
         self.table_view.doubleClicked.connect(self.on_table_double_clicked)
+        self.table_view.clicked.connect(self.on_table_clicked)
         self.table_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table_view.customContextMenuRequested.connect(self.open_context_menu)
         self.table_view.selectionModel().currentChanged.connect(self.on_current_row_changed)
@@ -836,6 +908,62 @@ class StrategyModule(QWidget):
         if curr in items: self.combo_industry.setCurrentText(curr)
         self.combo_industry.blockSignals(False)
 
+        # 👇 新增：動態產生概念股下拉選單 👇
+        concept_items = ["全部"]
+        if 'sub_concepts' in self.full_df.columns:
+            all_tags = set()
+            for tags in self.full_df['sub_concepts'].dropna():
+                if tags:
+                    # 分割逗號並去除空白
+                    for t in str(tags).split(','):
+                        if t.strip(): all_tags.add(t.strip())
+            concept_items.extend(sorted(list(all_tags)))
+
+            # 👇 替換概念與產業下拉選單的更新邏輯 👇
+            curr_concept = self.combo_concept.currentText()
+            self.combo_concept.blockSignals(True)
+            self.combo_concept.clear()
+            self.combo_concept.addItems(concept_items)
+            # 就算打的字不完全等於選單項目，也要保留在搜尋框內
+            if curr_concept: self.combo_concept.setCurrentText(curr_concept)
+            self.combo_concept.blockSignals(False)
+
+            # 動態產生 MDJ 細產業選單
+            dj_items = ["全部"]
+            if 'dj_sub_ind' in self.full_df.columns and 'dj_main_ind' in self.full_df.columns:
+                dj_set = set()
+                for _, row in self.full_df[['dj_main_ind', 'dj_sub_ind']].dropna().iterrows():
+                    m_ind = row['dj_main_ind']
+                    for sub in str(row['dj_sub_ind']).split(','):
+                        if sub.strip():
+                            dj_set.add(f"[{m_ind}] {sub.strip()}")
+                dj_items.extend(sorted(list(dj_set)))
+
+            curr_dj = self.combo_dj_ind.currentText()
+            self.combo_dj_ind.blockSignals(True)
+            self.combo_dj_ind.clear()
+            self.combo_dj_ind.addItems(dj_items)
+            # 保留使用者輸入的產業搜尋字
+            if curr_dj: self.combo_dj_ind.setCurrentText(curr_dj)
+            self.combo_dj_ind.blockSignals(False)
+        # 👇 新增：動態產生 MDJ 細產業選單 (格式: [主業] 細產業) 👇
+        dj_items = ["全部"]
+        if 'dj_sub_ind' in self.full_df.columns and 'dj_main_ind' in self.full_df.columns:
+            dj_set = set()
+            for _, row in self.full_df[['dj_main_ind', 'dj_sub_ind']].dropna().iterrows():
+                m_ind = row['dj_main_ind']
+                for sub in str(row['dj_sub_ind']).split(','):
+                    if sub.strip():
+                        dj_set.add(f"[{m_ind}] {sub.strip()}")
+            dj_items.extend(sorted(list(dj_set)))
+
+        curr_dj = self.combo_dj_ind.currentText()
+        self.combo_dj_ind.blockSignals(True)
+        self.combo_dj_ind.clear()
+        self.combo_dj_ind.addItems(dj_items)
+        if curr_dj in dj_items: self.combo_dj_ind.setCurrentText(curr_dj)
+        self.combo_dj_ind.blockSignals(False)
+
     def clear_layout(self, layout):
         if layout is None: return
         while layout.count():
@@ -876,6 +1004,8 @@ class StrategyModule(QWidget):
 
     def reset_filters(self):
         self.combo_industry.setCurrentIndex(0)
+        self.combo_concept.setCurrentIndex(0)  # <-- 清除概念題材
+        self.combo_dj_ind.setCurrentIndex(0)   # <-- 清除產業細分
         self.txt_search.clear()
         for w in self.dynamic_filters: w.reset()
         for chk in self.chk_tags.values(): chk.setChecked(False)
@@ -893,11 +1023,17 @@ class StrategyModule(QWidget):
         if self.full_df.empty: return
         df = self.full_df.copy()
 
+        # 1. 處理上方搜尋框 (全域搜尋)
         search_txt = self.txt_search.text().strip()
         if search_txt:
             mask = df['sid'].str.contains(search_txt) | df['name'].str.contains(search_txt)
+            if 'sub_concepts' in df.columns:
+                mask = mask | df['sub_concepts'].fillna('').str.contains(search_txt)
+            if 'dj_sub_ind' in df.columns:
+                mask = mask | df['dj_sub_ind'].fillna('').str.contains(search_txt)
             df = df[mask]
 
+        # 2. 處理 📂 基本/自選 過濾
         ind = self.combo_industry.currentText()
         if ind.startswith("[自選] "):
             group_name = ind.replace("[自選] ", "")
@@ -908,6 +1044,25 @@ class StrategyModule(QWidget):
         elif ind != "全部":
             df = df[df['industry'] == ind]
 
+        # 3. 處理 🏷️ 概念題材過濾 (支援手打字)
+        concept_txt = self.combo_concept.currentText().strip()
+        if concept_txt != "全部" and concept_txt != "" and 'sub_concepts' in df.columns:
+            df = df[df['sub_concepts'].fillna('').str.contains(concept_txt, regex=False)]
+
+        # 4. 處理 🏭 MDJ 產業細分過濾 (智慧雙重比對)
+        dj_txt = self.combo_dj_ind.currentText().strip()
+        if dj_txt != "全部" and dj_txt != "" and 'dj_sub_ind' in df.columns and 'dj_main_ind' in df.columns:
+            if "] " in dj_txt:
+                # 情況 A：使用者用滑鼠點選完整的分類，例如 "[半導體] IC設計"
+                target_sub = dj_txt.split("] ")[-1]
+                df = df[df['dj_sub_ind'].fillna('').str.contains(target_sub, regex=False)]
+            else:
+                # 情況 B：使用者自己打關鍵字，例如 "半導體" 或 "車用" (主業跟細產業都找)
+                mask_dj = df['dj_main_ind'].fillna('').str.contains(dj_txt, regex=False) | \
+                          df['dj_sub_ind'].fillna('').str.contains(dj_txt, regex=False)
+                df = df[mask_dj]
+
+        # 5. 處理數值滑桿過濾 (SpinBoxes)
         is_dirty = False
         for w in self.dynamic_filters:
             if w.is_modified(): is_dirty = True
@@ -918,8 +1073,9 @@ class StrategyModule(QWidget):
             if min_val != default_min: df = df[df[key] >= min_val]
             if max_val != default_max: df = df[df[key] <= max_val]
 
+        # 6. 處理按鈕亮燈狀態與強勢特徵標籤 (Checkboxes)
         is_tag_dirty = any(chk.isChecked() for chk in self.chk_tags.values())
-        if is_dirty or is_tag_dirty or ind != "全部" or search_txt:
+        if is_dirty or is_tag_dirty or ind != "全部" or search_txt or (concept_txt != "全部" and concept_txt != "") or (dj_txt != "全部" and dj_txt != ""):
             self.btn_reset.setStyleSheet("color: #FF5555; font-weight: bold; border: 1px solid #FF5555;")
         else:
             self.btn_reset.setStyleSheet("color: #666; font-weight: bold;")
@@ -933,17 +1089,26 @@ class StrategyModule(QWidget):
                 pattern = "|".join([str(t) for t in selected_tags])
                 df = df[df['強勢特徵'].str.contains(pattern, regex=True)]
 
+        # 7. 整理最終顯示的 DataFrame
+        df['insight'] = ''
         visible_cols = []
+
+        if 'insight' in FULL_COLUMN_SPECS and FULL_COLUMN_SPECS['insight'].get('show', True):
+            visible_cols.append('insight')
+
         for key in self.column_order:
+            if key == 'insight': continue
             if key in FULL_COLUMN_SPECS and FULL_COLUMN_SPECS[key]['show']:
                 if key in df.columns:
                     visible_cols.append(key)
 
         self.display_df = df[visible_cols].copy()
 
+        # 8. 預設排序邏輯
         if '漲幅20d' in self.display_df.columns and self.proxy_model.sortColumn() == -1:
             self.display_df = self.display_df.sort_values('漲幅20d', ascending=False)
 
+        # 9. 更新畫面與表格寬度
         self.model.update_data(self.display_df, visible_cols)
         self.proxy_model.invalidate()
         self.lbl_status.setText(f"篩選結果: {len(self.display_df)} 檔")
@@ -959,6 +1124,30 @@ class StrategyModule(QWidget):
                 header.resizeSection(i, 100)
             else:
                 header.resizeSection(i, 80)
+
+        # 10. 將焦點選回代號，保留鍵盤跳轉功能
+        if 'sid' in visible_cols and len(self.display_df) > 0:
+            self.table_view.setCurrentIndex(self.model.index(0, visible_cols.index('sid')))
+
+    def on_table_clicked(self, index):
+        """當單擊表格時，判斷是否點擊了放大鏡欄位"""
+        col_idx = index.column()
+        visible_cols = self.model.visible_cols
+        col_key = visible_cols[col_idx]
+
+        if col_key == 'insight':
+            src_idx = self.proxy_model.mapToSource(index)
+            row_data = self.display_df.iloc[src_idx.row()]
+            sid = str(row_data['sid'])
+
+            try:
+                # 直接使用，不再從內部 import
+                dlg = StockInsightDashboard(sid, row_data, self.full_df, self)
+                dlg.exec()
+            except Exception as e:
+                print(f"[Insight Log] 彈出視窗失敗: {e}")
+                import traceback
+                traceback.print_exc()
 
     def on_table_double_clicked(self, index):
         src_idx = self.proxy_model.mapToSource(index)

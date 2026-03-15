@@ -20,6 +20,9 @@ class LLMWorker(QThread):
         super().__init__()
         self.prompt = prompt
         self.api_key = os.getenv("GEMINI_API_KEY")
+        # 讀取 .env 中的 Proxy 設定 (支援大小寫)
+        self.http_proxy = os.getenv("HTTP_PROXY", os.getenv("http_proxy"))
+        self.https_proxy = os.getenv("HTTPS_PROXY", os.getenv("https_proxy"))
 
     def run(self):
         if not self.api_key:
@@ -27,8 +30,18 @@ class LLMWorker(QThread):
             return
 
         try:
+            # 1. 將 Proxy 寫入環境變數，讓底層 requests/httpx 能夠抓取
+            if self.http_proxy:
+                os.environ['http_proxy'] = self.http_proxy
+                os.environ['HTTP_PROXY'] = self.http_proxy
+            if self.https_proxy:
+                os.environ['https_proxy'] = self.https_proxy
+                os.environ['HTTPS_PROXY'] = self.https_proxy
+
             import google.generativeai as genai
-            genai.configure(api_key=self.api_key)
+
+            # 2. 設定 API 金鑰，並強制使用 REST 協定 (繞過企業內網常見的 gRPC 阻擋問題)
+            genai.configure(api_key=self.api_key, transport='rest')
 
             # 獲取你帳號目前所有支援文字生成的模型
             valid_models = [
@@ -64,14 +77,14 @@ class LLMWorker(QThread):
 
                 except Exception as e:
                     # 如果是被鎖額度或找不到，就印出失敗並繼續迴圈
-                    print(f"❌ 失敗 (額度為0或無權限)")
+                    print(f"❌ 失敗 (額度為0或無權限): {e}")
                     continue
 
             # 如果跑完幾十個模型全部失敗
             self.error.emit(
-                "❌ 所有模型均無免費額度。\n\n"
-                "Google 系統判定你這個 Google 帳號完全不享有免費 API 權限。\n"
-                "💡 最終解法：請登出目前的 Google 帳號，使用一個全新的、從未申請過 API 的「個人 @gmail.com」重新申請一把金鑰，即可 100% 解決！"
+                "❌ 所有模型均無免費額度或連線失敗。\n\n"
+                "Google 系統判定你這個 Google 帳號完全不享有免費 API 權限，或是 Proxy 阻擋了所有連線。\n"
+                "💡 最終解法：請登出目前的 Google 帳號，使用一個全新的「個人 @gmail.com」重新申請 API 金鑰。"
             )
 
         except Exception as e:
