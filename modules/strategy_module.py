@@ -1143,7 +1143,7 @@ class StrategyModule(QWidget):
             try:
                 # 直接使用，不再從內部 import
                 dlg = StockInsightDashboard(sid, row_data, self.full_df, self)
-                dlg.exec()
+                dlg.show()
             except Exception as e:
                 print(f"[Insight Log] 彈出視窗失敗: {e}")
                 import traceback
