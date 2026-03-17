@@ -129,19 +129,15 @@ class UnzipWorker(QThread):
                 for i, member in enumerate(members):
                     target_path = self.extract_target / member.filename
 
-                    # 💡 核心優化：如果遇到 JSON 基本面資料，且本機已存在，執行 Smart Merge，保護營收不被洗掉
                     if "fundamentals" in member.filename and member.filename.endswith(".json") and target_path.exists():
                         try:
                             with z.open(member) as zf:
                                 self._smart_merge_json(target_path, zf)
                         except Exception as e:
-                            # 萬一合併失敗，至少保護本機檔案不被覆蓋
                             pass
                     else:
-                        # 其他檔案 (如 K線 cache) 正常解壓縮覆蓋
                         z.extract(member, self.extract_target)
 
-                    # 每完成 1% 就回報一次進度
                     if i % max(1, total // 100) == 0:
                         self.progress_signal.emit(int((i / total) * 100))
 
@@ -155,7 +151,6 @@ class UnzipWorker(QThread):
             self.finished_signal.emit(False)
 
     def _smart_merge_json(self, local_path, zf):
-        """ 讀取本機與 ZIP 內的 JSON，進行智慧合併，保護本機低頻資料 """
         try:
             with open(local_path, 'r', encoding='utf-8') as f:
                 local_data = json.load(f)
@@ -169,13 +164,11 @@ class UnzipWorker(QThread):
 
         merged_data = zip_data.copy()
 
-        # 🛡️ 保護低頻資料：營收、財報、現金流、資產負債表 (本機有就用本機的)
         protected_keys = ['revenue', 'profitability', 'balance_sheet', 'cash_flow']
         for key in protected_keys:
             if key in local_data and local_data[key]:
                 merged_data[key] = local_data[key]
 
-        # 🛡️ 籌碼資料防退版：比較本機與雲端的日期，永遠保留較新的
         def get_date(data, key):
             items = data.get(key, [])
             return items[0].get("date", "1970-01-01") if items else "1970-01-01"
@@ -262,7 +255,7 @@ class SettingsModule(QWidget):
         l_kline.addLayout(kline_btn_layout)
         content_layout.addWidget(card_kline)
 
-        # ----------------- 卡片 2: 狀態對齊 (🔥 優化版) -----------------
+        # ----------------- 卡片 2: 狀態對齊 -----------------
         card_status = QFrame()
         card_status.setObjectName("Card")
         l_status = QVBoxLayout(card_status)
@@ -313,11 +306,25 @@ class SettingsModule(QWidget):
             self._create_label("說明: 每日 K 線就緒後，請執行【核心排程】更新個股深度籌碼並自動產出最終策略大表。", "Desc"))
         l_pipe.addSpacing(10)
 
-        self.btn_pipe_core = QPushButton("🚀 [核心排程] 深度籌碼與策略大表運算 (每日必點)")
+        chips_layout = QHBoxLayout()
+        chips_layout.setSpacing(10)
+        self.combo_chips_mode = QComboBox()
+        self.combo_chips_mode.addItems(
+            ["🔄 完整更新 (耗時, 預設)", "📊 僅抓三大法人 (下午 17:00 後)", "💰 僅抓信用資券 (晚上 21:30 後)"])
+        self.combo_chips_mode.setStyleSheet("""
+            QComboBox { background-color: #2D2D30; color: #EEE; border: 1px solid #555; padding: 10px; font-size: 16px; border-radius: 6px; font-weight: bold;}
+            QComboBox::drop-down { border: 0px; }
+            QComboBox QAbstractItemView { background-color: #2D2D30; color: #EEE; selection-background-color: #0066CC; }
+        """)
+
+        self.btn_pipe_core = QPushButton("🚀 [核心排程] 深度籌碼與策略運算")
         self.btn_pipe_core.setStyleSheet(BTN_ACTION)
-        self.btn_pipe_core.setToolTip("耗時約5~10分。\n依序執行：\n1. 抓取最新JSON深度籌碼\n2. 結合最新K線產出策略大表")
+        self.btn_pipe_core.setToolTip("依據左側選單執行籌碼抓取，隨後產出策略大表。")
         self.btn_pipe_core.clicked.connect(self.run_pre_flight_check)
-        l_pipe.addWidget(self.btn_pipe_core)
+
+        chips_layout.addWidget(self.combo_chips_mode, 4)
+        chips_layout.addWidget(self.btn_pipe_core, 6)
+        l_pipe.addLayout(chips_layout)
 
         finance_layout = QHBoxLayout()
         finance_layout.setSpacing(10)
@@ -337,6 +344,8 @@ class SettingsModule(QWidget):
         finance_layout.addWidget(self.combo_finance_mode, 4)
         finance_layout.addWidget(self.btn_pipe_finance, 6)
         l_pipe.addLayout(finance_layout)
+
+        # 🔥 這裡把概念與產業按鈕加回來了！
         concept_layout = QHBoxLayout()
         self.btn_pipe_concepts = QPushButton("🏷️ 更新題材概念股")
         self.btn_pipe_concepts.setStyleSheet(BTN_RESET)
@@ -431,7 +440,7 @@ class SettingsModule(QWidget):
             inp.valueChanged.connect(self.update_action_button_text)
 
     # ==========================================
-    # 狀態與防呆探測 (🔥 優化版)
+    # 狀態與防呆探測
     # ==========================================
     def run_status_probe(self):
         kline_date = "無資料"
@@ -479,7 +488,6 @@ class SettingsModule(QWidget):
         self.lbl_margin_date.setText(margin_date)
         self.lbl_fund_status.setText(fund_date)
 
-        # 💡 智慧判斷邏輯
         if kline_date == inst_date == margin_date and kline_date != "無資料":
             self.lbl_align_status.setText("🟢 系統資料已完全對齊 (K線/法人/資券)")
             self.lbl_align_status.setObjectName("Success")
@@ -567,7 +575,9 @@ class SettingsModule(QWidget):
         is_margin_today = (today_str1 in margin_date) or (today_str2 in margin_date)
 
         if now.weekday() < 5 and now.hour >= 15:
-            if is_inst_today and not is_margin_today:
+            # 🔥 如果使用者選擇 "僅抓三大法人"，就不需要警告資券還沒公布
+            mode_idx = self.combo_chips_mode.currentIndex()
+            if mode_idx != 1 and is_inst_today and not is_margin_today:
                 reply = QMessageBox.warning(
                     self, "融資券尚未公布 ⚠️",
                     f"【MoneyDJ 即時狀態探測】\n"
@@ -599,11 +609,22 @@ class SettingsModule(QWidget):
     def run_core_pipeline(self):
         if not self._foolproof_check("深度籌碼與策略運算"): return
         self.task_start_time = time.time()
-        self.log("🚀 [核心] 啟動: 深度籌碼更新 (update_daily_chips.py) (1/3)...", True)
+
+        mode_idx = self.combo_chips_mode.currentIndex()
+        args = []
+        mode_log = "完整更新"
+        if mode_idx == 1:
+            args = ["--mode", "inst"]
+            mode_log = "僅抓三大法人"
+        elif mode_idx == 2:
+            args = ["--mode", "margin"]
+            mode_log = "僅抓信用資券"
+
+        self.log(f"🚀 [核心] 啟動: 深度籌碼更新 ({mode_log}) (1/3)...", True)
         self._disable_all_buttons()
         self.progress.setFormat("⏳ 抓取深度籌碼中 (1/3) - %p%")
 
-        self.runner_daily = ScriptRunner(self.project_root / "scripts" / "update_daily_chips.py")
+        self.runner_daily = ScriptRunner(self.project_root / "scripts" / "update_daily_chips.py", args)
         self.runner_daily.output_signal.connect(self.log)
         self.runner_daily.progress_signal.connect(self.progress.setValue)
         self.runner_daily.finished.connect(self._proceed_to_market_yield)
@@ -763,12 +784,13 @@ class SettingsModule(QWidget):
         self.unzip_thread.start()
 
     def _on_unzip_finished(self, success):
-        # 恢復按鈕狀態
         self.btn_check_cloud.setEnabled(True)
         self.btn_fallback_kline.setEnabled(True)
         self.btn_pipe_core.setEnabled(True)
         self.btn_pipe_finance.setEnabled(True)
         self.btn_save_recalc.setEnabled(True)
+        self.btn_pipe_concepts.setEnabled(True)
+        self.btn_pipe_mdj_ind.setEnabled(True)
 
         self.btn_download_zip.setEnabled(True)
         self.btn_download_zip.setText("🔄 重新檢查雲端")
@@ -777,9 +799,7 @@ class SettingsModule(QWidget):
             self.log("✅ 雲端 K 線套用完成！正在結合本機基本面自動重算大表...")
             self.progress.setFormat("✅ K線就緒，自動結合本機營收重算中...")
             self.run_status_probe()
-
-            # 🔥 魔法在這裡：解壓縮成功後，直接自動觸發「重算策略因子」
-            # 這樣就會把新 K 線與你本機保護好的營收完美融合！
+            # 🔥 自動結合最新K線與本機基本面重算大表
             self.handle_action_click()
         else:
             self.progress.setFormat("❌ 解壓縮發生錯誤")

@@ -19,10 +19,9 @@ from utils.moneydj_parser import MoneyDJParser
 DATA_DIR = Path(PROJECT_ROOT) / "data" / "fundamentals"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# 判斷今日盤後時間 (下午 3 點後算今日資料已產出)
 NOW = datetime.now()
-IS_AFTER_MARKET = NOW.hour >= 15
 TODAY_STR = NOW.strftime('%Y-%m-%d')
+TODAY_STR_SLASH = NOW.strftime('%Y/%m/%d')  # 容許不同日期格式比對
 
 
 def load_all_stocks():
@@ -41,44 +40,56 @@ def load_all_stocks():
         return []
 
 
-def is_updated_today(file_path):
+def is_updated_today(file_path, mode):
     """
-    檢查檔案是否已經更新過 (分段式智慧判斷)：
-    1. 早上 (00~15點): 只要今天有更新過就跳過。
-    2. 下午 (15~21點): 法人公布，檔案必須是今天 15:00 後更新的才跳過。
-    3. 晚上 (21點後): 融資券公布，檔案必須是今天 21:00 後更新的才跳過。
+    檢查指定 mode 的資料，今天是否已經更新過。
+    如果 JSON 裡面的該欄位最新日期是今天，就跳過。
     """
     if not file_path.exists():
         return False
 
-    mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
 
-    # 如果連日期都不是今天，絕對不能跳過 (一定要更新)
-    if mtime.date() != NOW.date():
+        if mode in ['inst', 'all']:
+            inst = data.get("institutional_investors", [])
+            if inst:
+                latest_date = inst[0].get("date", "")
+                if TODAY_STR in latest_date or TODAY_STR_SLASH in latest_date:
+                    if mode == 'inst': return True
+            elif mode == 'inst':
+                return False
+
+        if mode in ['margin', 'all']:
+            margin = data.get("margin_trading", [])
+            if margin:
+                latest_date = margin[0].get("date", "")
+                if TODAY_STR in latest_date or TODAY_STR_SLASH in latest_date:
+                    if mode == 'margin': return True
+                    # 如果是 all，必須兩者都是今天才算 True
+                    inst = data.get("institutional_investors", [])
+                    if inst:
+                        inst_date = inst[0].get("date", "")
+                        return (TODAY_STR in inst_date or TODAY_STR_SLASH in inst_date)
+            return False
+
+    except Exception:
         return False
 
-    # 已經是同一天的情況下，根據「現在的時間」進行分段檢查
-    if NOW.hour >= 21:
-        # 晚上 9 點後 (資券公布期)：檔案必須是晚上 9 點後才更新的
-        return mtime.hour >= 21
-    elif NOW.hour >= 15:
-        # 下午 3 點後 (法人公布期)：檔案必須是下午 3 點後才更新的
-        return mtime.hour >= 15
-    else:
-        # 早上盤中 (看昨天資料)：只要今天是同一天更新的都算過關
-        return True
+    return False
 
 
-def process_stock(sid):
-    """ 單一股票的處理邏輯 """
+def process_stock(sid, mode):
+    """ 單一股票的處理邏輯，加入 mode 分流與資料保護 """
     sid = str(sid).strip()
     file_path = DATA_DIR / f"{sid}.json"
 
-    # 🔥 極速優化：如果今天已經更新過，直接跳過 (Smart Skip)
-    if is_updated_today(file_path):
-        return sid, True, "⏩ Skipped (Already Updated Today)"
+    # 🔥 Smart Skip: 若指定的 mode 今天已更新過，直接跳過
+    if is_updated_today(file_path, mode):
+        return sid, True, f"⏩ Skipped ({mode} Already Updated Today)"
 
-    # 讀取舊資料
+    # 讀取舊資料 (為了保護不需要更新的欄位)
     if file_path.exists():
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -89,44 +100,38 @@ def process_stock(sid):
         existing_data = {"sid": sid}
 
     try:
-        # 建立解析器 (這裡假設 MoneyDJParser 內部每次請求會 new session，若能共用 session 會更快)
         parser = MoneyDJParser(sid)
 
-        # 抓取資料
+        # ⚠️ 注意: 這裡不修改 parser 核心邏輯，依然呼叫原本的方法
+        # 但在存檔時，我們會根據 mode 決定要拿新資料還是保留舊資料
         new_data = parser.get_daily_chips(months=6)
 
-        if not new_data['institutional_investors'] and not new_data['margin_trading']:
-            # 失敗時稍作休息，避免是 IP 被暫時阻擋
+        if not new_data.get('institutional_investors') and not new_data.get('margin_trading'):
             time.sleep(1)
             return sid, False, "⚠️ No Data"
 
-        existing_data['last_updated'] = new_data['last_updated']
-        existing_data['institutional_investors'] = new_data['institutional_investors']
-        existing_data['margin_trading'] = new_data['margin_trading']
+        existing_data['last_updated'] = new_data.get('last_updated', str(NOW))
 
-        # 清理舊欄位
-        #existing_data.pop('chips', None)
-        #existing_data.pop('chips_history', None)
-        # 更新它負責的欄位
-        existing_data['last_updated'] = new_data['last_updated']
-        existing_data['institutional_investors'] = new_data['institutional_investors']
-        existing_data['margin_trading'] = new_data['margin_trading']
+        # 🎯 核心分流存檔邏輯 (保護不需要更新的資料)
+        if mode in ['inst', 'all']:
+            existing_data['institutional_investors'] = new_data.get('institutional_investors', [])
+
+        if mode in ['margin', 'all']:
+            existing_data['margin_trading'] = new_data.get('margin_trading', [])
 
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(existing_data, f, indent=2, ensure_ascii=False)
 
-        # ⚡ 速度優化：縮短單檔等待時間 (0.2 ~ 0.5s)
-        # 依靠多執行緒 + 批次休息來控制頻率，而不是單檔長睡眠
         time.sleep(random.uniform(0.2, 0.5))
-        return sid, True, "✅ Saved"
+        return sid, True, f"✅ Saved ({mode})"
 
     except Exception as e:
         return sid, False, f"❌ Error: {e}"
 
 
-def run_daily_update(stock_list, workers=12, chunk_size=20):
+def run_daily_update(stock_list, workers=12, chunk_size=20, mode='all'):
     total = len(stock_list)
-    print(f"📊 啟動【每日籌碼更新】極速版 (Workers: {workers})，目標 {total} 檔...")
+    print(f"📊 啟動【每日籌碼更新】極速版 (Workers: {workers}, Mode: {mode})，目標 {total} 檔...")
     start_time = time.time()
 
     success_count = 0
@@ -140,10 +145,11 @@ def run_daily_update(stock_list, workers=12, chunk_size=20):
         print(f"PROGRESS: {current_progress}")
         print(f"📦 批次 {chunk_idx + 1}/{len(chunks)} 處理中...", flush=True)
 
-        batch_did_network_request = False  # 追蹤這個批次是否有發送真實網路請求
+        batch_did_network_request = False
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_sid = {executor.submit(process_stock, sid): sid for sid in chunk}
+            # 將 mode 參數傳遞給 process_stock
+            future_to_sid = {executor.submit(process_stock, sid, mode): sid for sid in chunk}
 
             for future in as_completed(future_to_sid):
                 sid, is_success, msg = future.result()
@@ -151,15 +157,14 @@ def run_daily_update(stock_list, workers=12, chunk_size=20):
                     skip_count += 1
                 elif is_success:
                     success_count += 1
-                    batch_did_network_request = True  # 有成功抓取代表有發送請求
+                    batch_did_network_request = True
                 else:
                     fail_count += 1
-                    batch_did_network_request = True  # 失敗通常也是因為發了請求被擋
+                    batch_did_network_request = True
 
                 if not is_success or "Skipped" not in msg:
                     print(f"[{success_count + skip_count + fail_count}/{total}] {sid} {msg}")
 
-        # 🚀 終極優化：如果這個批次全部都是 Skipped，就不要傻傻等待 3~6 秒！
         if chunk_idx < len(chunks) - 1 and batch_did_network_request:
             time.sleep(random.uniform(3.0, 6.0))
 
@@ -175,9 +180,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Update Daily Chips from MoneyDJ (Fast Mode)')
     parser.add_argument('--start', type=int, default=0, help='起始索引')
     parser.add_argument('--end', type=int, default=None, help='結束索引')
-    # 預設參數調優：workers=12 (平衡速度與被擋風險), chunk=20
     parser.add_argument('--workers', type=int, default=12, help='執行緒數量')
     parser.add_argument('--chunk', type=int, default=20, help='每個批次的數量')
+
+    # 🔥 新增模式選擇參數
+    parser.add_argument('--mode', type=str, choices=['all', 'inst', 'margin'], default='all',
+                        help='更新模式：all(全更新), inst(僅三大法人), margin(僅資券)')
     args = parser.parse_args()
 
     target_list = load_all_stocks()
@@ -192,6 +200,6 @@ if __name__ == "__main__":
     print(f"🔧 範圍模式：索引 {start_idx} 到 {end_idx}，共 {len(sliced_list)} 檔")
 
     if len(sliced_list) > 0:
-        run_daily_update(sliced_list, workers=args.workers, chunk_size=args.chunk)
+        run_daily_update(sliced_list, workers=args.workers, chunk_size=args.chunk, mode=args.mode)
     else:
         print("⚠️ 範圍內沒有任何股票可以執行")
