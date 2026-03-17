@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 
 from PyQt6.QtCore import Qt, pyqtSignal, QProcess, QProcessEnvironment, QThread
 
-#不要刪掉舊的設定，尤其是hint的顯示
 STYLES = """
     QWidget { font-family: "Segoe UI", "Microsoft JhengHei"; background-color: #121212; color: #E0E0E0; }
     QFrame#Card { background-color: #1E1E1E; border-radius: 12px; border: 1px solid #3E3E42; }
@@ -40,7 +39,6 @@ STYLES = """
     QProgressBar::chunk { background-color: #00E5FF; border-radius: 5px; }
     QTextEdit { background-color: #1E1E1E; border: 1px solid #3E3E42; border-radius: 6px; font-family: Consolas; color: #CCC; font-size: 14px; }
 
-    /* 這裡把 Tooltip 補回來，強制白字 + 灰黑底 + 藍邊框 */
     QToolTip { 
         color: #FFFFFF; 
         background-color: #2D2D30; 
@@ -76,6 +74,7 @@ BTN_TOGGLE = """
     QPushButton:hover { background-color: #333337; border: 1px solid #00E5FF; color: #FFFFFF; }
 """
 
+
 class ScriptRunner(QProcess):
     output_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(int)
@@ -109,6 +108,7 @@ class ScriptRunner(QProcess):
         except:
             pass
 
+
 class UnzipWorker(QThread):
     log_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(int)
@@ -117,29 +117,78 @@ class UnzipWorker(QThread):
     def __init__(self, zip_path, extract_target):
         super().__init__()
         self.zip_path = zip_path
-        self.extract_target = extract_target
+        self.extract_target = Path(extract_target)
 
     def run(self):
         try:
-            self.log_signal.emit("🔓 正在解壓縮並套用數據內容 (背景處理中)...")
+            self.log_signal.emit("🔓 正在解壓縮並執行智慧合併 (背景處理中)...")
             with zipfile.ZipFile(self.zip_path, 'r') as z:
                 members = z.infolist()
                 total = len(members)
-                # 逐一解壓縮以計算進度
+
                 for i, member in enumerate(members):
-                    z.extract(member, self.extract_target)
-                    # 每完成 1% 就回報一次進度，避免發送過多訊號
+                    target_path = self.extract_target / member.filename
+
+                    # 💡 核心優化：如果遇到 JSON 基本面資料，且本機已存在，執行 Smart Merge，保護營收不被洗掉
+                    if "fundamentals" in member.filename and member.filename.endswith(".json") and target_path.exists():
+                        try:
+                            with z.open(member) as zf:
+                                self._smart_merge_json(target_path, zf)
+                        except Exception as e:
+                            # 萬一合併失敗，至少保護本機檔案不被覆蓋
+                            pass
+                    else:
+                        # 其他檔案 (如 K線 cache) 正常解壓縮覆蓋
+                        z.extract(member, self.extract_target)
+
+                    # 每完成 1% 就回報一次進度
                     if i % max(1, total // 100) == 0:
                         self.progress_signal.emit(int((i / total) * 100))
 
-            time.sleep(0.5)  # 稍微等待確保檔案釋放
+            time.sleep(0.5)
             os.remove(self.zip_path)
-            self.log_signal.emit("✅ 數據套用成功，暫存包已清理。")
+            self.log_signal.emit("✅ 雲端資料套用成功 (已保留本機營收/財報狀態)。")
             self.progress_signal.emit(100)
             self.finished_signal.emit(True)
         except Exception as e:
             self.log_signal.emit(f"❌ 解壓縮失敗: {e}")
             self.finished_signal.emit(False)
+
+    def _smart_merge_json(self, local_path, zf):
+        """ 讀取本機與 ZIP 內的 JSON，進行智慧合併，保護本機低頻資料 """
+        try:
+            with open(local_path, 'r', encoding='utf-8') as f:
+                local_data = json.load(f)
+        except:
+            local_data = {}
+
+        try:
+            zip_data = json.loads(zf.read().decode('utf-8'))
+        except:
+            zip_data = {}
+
+        merged_data = zip_data.copy()
+
+        # 🛡️ 保護低頻資料：營收、財報、現金流、資產負債表 (本機有就用本機的)
+        protected_keys = ['revenue', 'profitability', 'balance_sheet', 'cash_flow']
+        for key in protected_keys:
+            if key in local_data and local_data[key]:
+                merged_data[key] = local_data[key]
+
+        # 🛡️ 籌碼資料防退版：比較本機與雲端的日期，永遠保留較新的
+        def get_date(data, key):
+            items = data.get(key, [])
+            return items[0].get("date", "1970-01-01") if items else "1970-01-01"
+
+        if get_date(local_data, "institutional_investors") >= get_date(zip_data, "institutional_investors"):
+            merged_data["institutional_investors"] = local_data.get("institutional_investors", [])
+
+        if get_date(local_data, "margin_trading") >= get_date(zip_data, "margin_trading"):
+            merged_data["margin_trading"] = local_data.get("margin_trading", [])
+
+        with open(local_path, 'w', encoding='utf-8') as f:
+            json.dump(merged_data, f, indent=2, ensure_ascii=False)
+
 
 class SettingsModule(QWidget):
     def __init__(self, parent=None):
@@ -186,7 +235,8 @@ class SettingsModule(QWidget):
         l_kline = QVBoxLayout(card_kline)
         l_kline.setContentsMargins(20, 20, 20, 20)
         l_kline.addWidget(self._create_label("☁️ 第一步：取得最新 K 線資料", "CardTitle"))
-        l_kline.addWidget(self._create_label("說明: 雲端 Actions 已於每日下午打包好 K 線。點擊下載 ZIP 瞬間套用；若雲端異常才用本機備援。", "Desc"))
+        l_kline.addWidget(self._create_label(
+            "說明: 雲端 Actions 已於每日下午打包好 K 線。點擊下載 ZIP 瞬間套用；若雲端異常才用本機備援。", "Desc"))
 
         kline_btn_layout = QHBoxLayout()
         self.lbl_cloud_time = self._create_label("雲端狀態: 尚未檢查", "Value")
@@ -212,7 +262,7 @@ class SettingsModule(QWidget):
         l_kline.addLayout(kline_btn_layout)
         content_layout.addWidget(card_kline)
 
-        # ----------------- 卡片 2: 狀態對齊 -----------------
+        # ----------------- 卡片 2: 狀態對齊 (🔥 優化版) -----------------
         card_status = QFrame()
         card_status.setObjectName("Card")
         l_status = QVBoxLayout(card_status)
@@ -221,13 +271,19 @@ class SettingsModule(QWidget):
         l_status.addSpacing(10)
 
         h1 = QHBoxLayout()
-        h1.addWidget(self._create_label("K 線最新日期:", "Label"))
+        h1.addWidget(self._create_label("K 線最新:", "Label"))
         self.lbl_kline_date = self._create_label("--", "Value")
         h1.addWidget(self.lbl_kline_date)
-        h1.addSpacing(40)
-        h1.addWidget(self._create_label("籌碼最新日期:", "Label"))
-        self.lbl_chips_date = self._create_label("--", "Value")
-        h1.addWidget(self.lbl_chips_date)
+        h1.addSpacing(20)
+
+        h1.addWidget(self._create_label("法人最新:", "Label"))
+        self.lbl_inst_date = self._create_label("--", "Value")
+        h1.addWidget(self.lbl_inst_date)
+        h1.addSpacing(20)
+
+        h1.addWidget(self._create_label("資券最新:", "Label"))
+        self.lbl_margin_date = self._create_label("--", "Value")
+        h1.addWidget(self.lbl_margin_date)
         h1.addStretch()
         l_status.addLayout(h1)
 
@@ -238,7 +294,6 @@ class SettingsModule(QWidget):
         h2.addStretch()
         l_status.addLayout(h2)
 
-        # 🚀 補回漏掉的基本面狀態列
         h3 = QHBoxLayout()
         h3.addWidget(self._create_label("基本面最新狀態:", "Label"))
         self.lbl_fund_status = self._create_label("--", "Desc")
@@ -254,13 +309,13 @@ class SettingsModule(QWidget):
         l_pipe = QVBoxLayout(card_pipeline)
         l_pipe.setContentsMargins(20, 20, 20, 20)
         l_pipe.addWidget(self._create_label("💻 第二步：本機盤後策略運算排程", "CardTitle"))
-        l_pipe.addWidget(self._create_label("說明: 每日 K 線就緒後，請執行【核心排程】更新個股深度籌碼並自動產出最終策略大表。", "Desc"))
+        l_pipe.addWidget(
+            self._create_label("說明: 每日 K 線就緒後，請執行【核心排程】更新個股深度籌碼並自動產出最終策略大表。", "Desc"))
         l_pipe.addSpacing(10)
 
         self.btn_pipe_core = QPushButton("🚀 [核心排程] 深度籌碼與策略大表運算 (每日必點)")
         self.btn_pipe_core.setStyleSheet(BTN_ACTION)
         self.btn_pipe_core.setToolTip("耗時約5~10分。\n依序執行：\n1. 抓取最新JSON深度籌碼\n2. 結合最新K線產出策略大表")
-        #self.btn_pipe_core.clicked.connect(self.run_core_pipeline)
         self.btn_pipe_core.clicked.connect(self.run_pre_flight_check)
         l_pipe.addWidget(self.btn_pipe_core)
 
@@ -376,11 +431,12 @@ class SettingsModule(QWidget):
             inp.valueChanged.connect(self.update_action_button_text)
 
     # ==========================================
-    # 狀態與防呆探測
+    # 狀態與防呆探測 (🔥 優化版)
     # ==========================================
     def run_status_probe(self):
         kline_date = "無資料"
-        chips_date = "無資料"
+        inst_date = "無資料"
+        margin_date = "無資料"
         fund_date = "無資料"
 
         kline_paths = [
@@ -396,7 +452,8 @@ class SettingsModule(QWidget):
                         if isinstance(dt, (int, float)): dt = pd.to_datetime(dt)
                         kline_date = dt.strftime('%Y-%m-%d')
                         break
-                except: pass
+                except:
+                    pass
 
         json_paths = [
             self.project_root / "data" / "fundamentals" / "2330.json",
@@ -410,22 +467,30 @@ class SettingsModule(QWidget):
                     with open(p, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                         inst = data.get("institutional_investors", [])
-                        if inst: chips_date = inst[0].get("date", "無資料")
+                        margin = data.get("margin_trading", [])
+                        if inst: inst_date = inst[0].get("date", "無資料")
+                        if margin: margin_date = margin[0].get("date", "無資料")
                         break
-                except: pass
+                except:
+                    pass
 
         self.lbl_kline_date.setText(kline_date)
-        self.lbl_chips_date.setText(chips_date)
+        self.lbl_inst_date.setText(inst_date)
+        self.lbl_margin_date.setText(margin_date)
         self.lbl_fund_status.setText(fund_date)
 
-        if kline_date == chips_date and kline_date != "無資料":
-            self.lbl_align_status.setText("🟢 K線與籌碼已對齊")
+        # 💡 智慧判斷邏輯
+        if kline_date == inst_date == margin_date and kline_date != "無資料":
+            self.lbl_align_status.setText("🟢 系統資料已完全對齊 (K線/法人/資券)")
             self.lbl_align_status.setObjectName("Success")
-        elif kline_date == "無資料" and chips_date == "無資料":
+        elif kline_date == inst_date and margin_date != kline_date and kline_date != "無資料":
+            self.lbl_align_status.setText("🟡 法人已齊，資券尚未更新 (請於 21:00 後再次執行)")
+            self.lbl_align_status.setObjectName("Warning")
+        elif kline_date == "無資料" and inst_date == "無資料":
             self.lbl_align_status.setText("⚪ 尚無資料")
             self.lbl_align_status.setObjectName("Value")
         else:
-            self.lbl_align_status.setText("🟡 日期未對齊 (請執行核心排程更新籌碼)")
+            self.lbl_align_status.setText("🔴 日期未對齊 (請執行核心排程更新籌碼)")
             self.lbl_align_status.setObjectName("Warning")
 
         self.lbl_align_status.style().unpolish(self.lbl_align_status)
@@ -473,7 +538,6 @@ class SettingsModule(QWidget):
         self.runner_kline.finished.connect(self.on_pipeline_finished)
         self.runner_kline.start_script()
 
-    # 🔥 新增點：起飛前自動探測 (Pre-flight Check)
     def run_pre_flight_check(self):
         if not self._foolproof_check("深度籌碼與策略運算"): return
         self._disable_all_buttons()
@@ -496,14 +560,12 @@ class SettingsModule(QWidget):
         margin_date = margin_match.group(1).strip() if margin_match else "未知"
 
         now = datetime.now()
-        # 產生今天的日期字串 (因應不同格式可能是 YYYY/MM/DD 或 YYYY-MM-DD)
         today_str1 = now.strftime('%Y/%m/%d')
         today_str2 = now.strftime('%Y-%m-%d')
 
         is_inst_today = (today_str1 in inst_date) or (today_str2 in inst_date)
         is_margin_today = (today_str1 in margin_date) or (today_str2 in margin_date)
 
-        # 防呆邏輯：如果今天是平日且過了下午 3 點，法人有今天的資料，但融資券卻還沒有
         if now.weekday() < 5 and now.hour >= 15:
             if is_inst_today and not is_margin_today:
                 reply = QMessageBox.warning(
@@ -520,22 +582,19 @@ class SettingsModule(QWidget):
                     self._cancel_and_restore_ui()
                     return
 
-        # 如果資料齊全，或者使用者點擊了「是(強制執行)」，就啟動原來的核心排程！
         self.run_core_pipeline()
 
     def _cancel_and_restore_ui(self):
-            # 恢復按鈕狀態
-            self.btn_check_cloud.setEnabled(True)
-            self.btn_fallback_kline.setEnabled(True)
-            self.btn_pipe_core.setEnabled(True)
-            self.btn_pipe_finance.setEnabled(True)
-            self.btn_save_recalc.setEnabled(True)
-            # 如果雲端按鈕本來有字，要保留
-            if "下載" in self.btn_download_zip.text() or "套用" in self.btn_download_zip.text():
-                self.btn_download_zip.setEnabled(True)
+        self.btn_check_cloud.setEnabled(True)
+        self.btn_fallback_kline.setEnabled(True)
+        self.btn_pipe_core.setEnabled(True)
+        self.btn_pipe_finance.setEnabled(True)
+        self.btn_save_recalc.setEnabled(True)
+        if "下載" in self.btn_download_zip.text() or "套用" in self.btn_download_zip.text():
+            self.btn_download_zip.setEnabled(True)
 
-            self.progress.setValue(0)
-            self.progress.setFormat("已取消排程")
+        self.progress.setValue(0)
+        self.progress.setFormat("已取消排程")
 
     def run_core_pipeline(self):
         if not self._foolproof_check("深度籌碼與策略運算"): return
@@ -547,12 +606,9 @@ class SettingsModule(QWidget):
         self.runner_daily = ScriptRunner(self.project_root / "scripts" / "update_daily_chips.py")
         self.runner_daily.output_signal.connect(self.log)
         self.runner_daily.progress_signal.connect(self.progress.setValue)
-
-        # 🔥 修正點: 籌碼跑完後，確實接續跑估值 (2/3)
-        self.runner_daily.finished.connect(self._proceed_to_market_yield)  # <--- 這裡改對了
+        self.runner_daily.finished.connect(self._proceed_to_market_yield)
         self.runner_daily.start_script()
 
-    # 🔥 新增點: 第二階段，跑全市場估值 (update_market_yield.py)
     def _proceed_to_market_yield(self):
         self.log("📊 [核心] 啟動: 全市場估值更新 (update_market_yield.py) (2/3)...", False)
         self.progress.setFormat("⏳ 抓取全市場估值 (2/3) - %p%")
@@ -560,7 +616,6 @@ class SettingsModule(QWidget):
         self.runner_yield = ScriptRunner(self.project_root / "scripts" / "update_market_yield.py")
         self.runner_yield.output_signal.connect(self.log)
         self.runner_yield.progress_signal.connect(self.progress.setValue)
-        # 🔥 修改點: 估值跑完後，最後才接續算大表 (3/3)
         self.runner_yield.finished.connect(self._proceed_to_calc_factors)
         self.runner_yield.start_script()
 
@@ -581,7 +636,6 @@ class SettingsModule(QWidget):
         self.runner_finance = ScriptRunner(self.project_root / "scripts" / "update_financials.py", args)
         self.runner_finance.output_signal.connect(self.log)
         self.runner_finance.progress_signal.connect(self.progress.setValue)
-        # 財報/營收屬於低頻更新，跑完直接重算大表即可
         self.runner_finance.finished.connect(self._proceed_to_calc_factors)
         self.runner_finance.start_script()
 
@@ -591,13 +645,12 @@ class SettingsModule(QWidget):
         self.task_start_time = time.time()
         self.log("🏷️ [附加] 啟動: 概念股族群抓取 (update_concepts.py)...", True)
         self._disable_all_buttons()
-        self.btn_pipe_concepts.setEnabled(False)  # 記得把新按鈕也 disabled
+        self.btn_pipe_concepts.setEnabled(False)
         self.progress.setFormat("⏳ 抓取概念股分類中 - %p%")
 
         self.runner_concepts = ScriptRunner(self.project_root / "scripts" / "update_concepts.py")
         self.runner_concepts.output_signal.connect(self.log)
         self.runner_concepts.progress_signal.connect(self.progress.setValue)
-        # 跑完直接重算大表，讓新標籤生效
         self.runner_concepts.finished.connect(self._proceed_to_calc_factors)
         self.runner_concepts.start_script()
 
@@ -620,11 +673,8 @@ class SettingsModule(QWidget):
         self.btn_pipe_core.setEnabled(False)
         self.btn_pipe_finance.setEnabled(False)
         self.btn_save_recalc.setEnabled(False)
-
-        # 👇 確保這兩顆新按鈕在運算時不能被亂按 👇
         self.btn_pipe_concepts.setEnabled(False)
         self.btn_pipe_mdj_ind.setEnabled(False)
-
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
 
@@ -639,8 +689,6 @@ class SettingsModule(QWidget):
         self.btn_pipe_core.setEnabled(True)
         self.btn_pipe_finance.setEnabled(True)
         self.btn_save_recalc.setEnabled(True)
-
-        # 👇 運算結束後，這兩顆也要恢復成可以點擊的狀態 👇
         self.btn_pipe_concepts.setEnabled(True)
         self.btn_pipe_mdj_ind.setEnabled(True)
 
@@ -675,7 +723,8 @@ class SettingsModule(QWidget):
             has_zip = zip_path.exists()
             self.btn_download_zip.setEnabled(has_zip or remote_time != 'Unknown')
             self.btn_download_zip.setText("📦 發現 ZIP，立即套用" if has_zip else f"☁️ 下載 ({remote_time})")
-        except: pass
+        except:
+            pass
 
     def download_cloud_data(self):
         zip_path = self.project_root / "data" / "daily_data.zip"
@@ -685,7 +734,9 @@ class SettingsModule(QWidget):
         if zip_path.exists():
             self.unzip_data()
             return
-        self.dl_runner = ScriptRunner("git", ["checkout", "origin/main", "--", "data/daily_data.zip", "data/data_status.json"], use_python=False)
+        self.dl_runner = ScriptRunner("git",
+                                      ["checkout", "origin/main", "--", "data/daily_data.zip", "data/data_status.json"],
+                                      use_python=False)
         self.dl_runner.output_signal.connect(self.log)
         self.dl_runner.finished.connect(lambda ec, es: self.unzip_data())
         self.dl_runner.start_script()
@@ -700,13 +751,11 @@ class SettingsModule(QWidget):
             self.btn_download_zip.setText("🔄 重新檢查雲端")
             return
 
-        # 鎖定介面並準備進度條
         self._disable_all_buttons()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setFormat("🔓 解壓縮中 - %p%")
 
-        # 啟動背景解壓縮執行緒
         self.unzip_thread = UnzipWorker(zip_path, extract_target)
         self.unzip_thread.log_signal.connect(self.log)
         self.unzip_thread.progress_signal.connect(self.progress.setValue)
@@ -714,7 +763,7 @@ class SettingsModule(QWidget):
         self.unzip_thread.start()
 
     def _on_unzip_finished(self, success):
-        # 解壓縮完成後恢復介面狀態
+        # 恢復按鈕狀態
         self.btn_check_cloud.setEnabled(True)
         self.btn_fallback_kline.setEnabled(True)
         self.btn_pipe_core.setEnabled(True)
@@ -725,11 +774,16 @@ class SettingsModule(QWidget):
         self.btn_download_zip.setText("🔄 重新檢查雲端")
 
         if success:
-            self.progress.setFormat("✅ 作業結束")
+            self.log("✅ 雲端 K 線套用完成！正在結合本機基本面自動重算大表...")
+            self.progress.setFormat("✅ K線就緒，自動結合本機營收重算中...")
+            self.run_status_probe()
+
+            # 🔥 魔法在這裡：解壓縮成功後，直接自動觸發「重算策略因子」
+            # 這樣就會把新 K 線與你本機保護好的營收完美融合！
+            self.handle_action_click()
         else:
             self.progress.setFormat("❌ 解壓縮發生錯誤")
-
-        self.run_status_probe()
+            self.run_status_probe()
 
     def set_inputs_enabled(self, enabled):
         self.is_editing = enabled
@@ -739,7 +793,8 @@ class SettingsModule(QWidget):
         if not enabled: self.update_action_button_text()
 
     def update_action_button_text(self):
-        has_changed = any(abs(inp.value() - self.original_params.get(key, 0)) > 0.0001 for key, inp in self.inputs.items())
+        has_changed = any(
+            abs(inp.value() - self.original_params.get(key, 0)) > 0.0001 for key, inp in self.inputs.items())
         self.btn_save_recalc.setText("💾 儲存並重算策略因子" if has_changed else "⚡ 僅重算策略因子")
 
     def toggle_30w_params(self):
@@ -791,8 +846,10 @@ class SettingsModule(QWidget):
             if self.config_path.exists():
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     cfg = json.load(f).get('30w_strategy', default_cfg)
-            else: cfg = default_cfg
-        except: cfg = default_cfg
+            else:
+                cfg = default_cfg
+        except:
+            cfg = default_cfg
         for key, inp in self.inputs.items():
             if key in cfg: inp.setValue(cfg[key])
 
@@ -808,4 +865,5 @@ class SettingsModule(QWidget):
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             return True
-        except: return False
+        except:
+            return False
