@@ -87,6 +87,7 @@ class ScriptRunner(QProcess):
 
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONIOENCODING", "utf-8")
+        env.insert("PYTHONUNBUFFERED", "1")
         self.setProcessEnvironment(env)
         self.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.readyReadStandardOutput.connect(self.handle_output)
@@ -610,6 +611,9 @@ class SettingsModule(QWidget):
         if not self._foolproof_check("深度籌碼與策略運算"): return
         self.task_start_time = time.time()
 
+        # 🔥 新增：預設當作有抓到資料
+        self.found_new_data = True
+
         mode_idx = self.combo_chips_mode.currentIndex()
         args = []
         mode_log = "完整更新"
@@ -624,13 +628,30 @@ class SettingsModule(QWidget):
         self._disable_all_buttons()
         self.progress.setFormat("⏳ 抓取深度籌碼中 (1/3) - %p%")
 
-        self.runner_daily = ScriptRunner(self.project_root / "scripts" / "update_daily_chips.py", args)
-        self.runner_daily.output_signal.connect(self.log)
+        self.runner_daily = ScriptRunner(self.project_root / "scripts" / "update_daily_chips_fast.py", args)
+
+        # 🔥 修改這裡：原本直接連到 self.log，現在連到我們新的攔截器
+        self.runner_daily.output_signal.connect(self._check_if_no_data)
+
         self.runner_daily.progress_signal.connect(self.progress.setValue)
         self.runner_daily.finished.connect(self._proceed_to_market_yield)
         self.runner_daily.start_script()
 
+    # 🔥 新增：用來攔截腳本印出來的文字，判斷有沒有抓到資料
+    def _check_if_no_data(self, text):
+        # 照常印出日誌到畫面上 (保留原本功能)
+        self.log(text)
+        # 如果日誌中出現「查無資料」，就把變數設為 False
+        if "查無資料" in text or "跳過" in text:
+            self.found_new_data = False
+
     def _proceed_to_market_yield(self):
+        # 🔥 新增煞車機制：如果上面發現沒抓到資料，就停止執行
+        if getattr(self, 'found_new_data', True) is False:
+            self.log("🛑 偵測到今日查無新籌碼資料，自動取消後續運算以節省時間。")
+            self.on_pipeline_finished()
+            return
+
         self.log("📊 [核心] 啟動: 全市場估值更新 (update_market_yield.py) (2/3)...", False)
         self.progress.setFormat("⏳ 抓取全市場估值 (2/3) - %p%")
 
@@ -702,6 +723,9 @@ class SettingsModule(QWidget):
     def on_pipeline_finished(self):
         self.log("✅ 執行完畢！")
         if hasattr(self, 'task_start_time'): self._log_duration(self.task_start_time, "總執行耗時")
+
+        # 🔥 關閉跑馬燈，強制顯示綠色滿格的 100%
+        self.progress.setRange(0, 100)
         self.progress.setValue(100)
         self.progress.setFormat("✅ 作業結束")
 
@@ -751,10 +775,15 @@ class SettingsModule(QWidget):
         zip_path = self.project_root / "data" / "daily_data.zip"
         self.btn_download_zip.setEnabled(False)
         self.log("📡 啟動雲端數據下載...", True)
+
+        # 🔥 設定為 0, 0 啟用「左右來回滾動的跑馬燈模式」
         self.progress.setRange(0, 0)
+        self.progress.setFormat("📡 正在從雲端下載最新資料包 (Git Checkout)...")
+
         if zip_path.exists():
             self.unzip_data()
             return
+
         self.dl_runner = ScriptRunner("git",
                                       ["checkout", "origin/main", "--", "data/daily_data.zip", "data/data_status.json"],
                                       use_python=False)
@@ -770,12 +799,16 @@ class SettingsModule(QWidget):
             self.log("❌ 找不到 ZIP 檔案。")
             self.btn_download_zip.setEnabled(True)
             self.btn_download_zip.setText("🔄 重新檢查雲端")
+            self.progress.setRange(0, 100)
+            self.progress.setValue(0)
+            self.progress.setFormat("❌ 下載失敗")
             return
 
         self._disable_all_buttons()
+        # 🔥 恢復成有具體數字的進度條
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        self.progress.setFormat("🔓 解壓縮中 - %p%")
+        self.progress.setFormat("🔓 解壓縮與智慧合併中 - %p%")
 
         self.unzip_thread = UnzipWorker(zip_path, extract_target)
         self.unzip_thread.log_signal.connect(self.log)
@@ -841,7 +874,10 @@ class SettingsModule(QWidget):
         else:
             self.log("🚀 參數未變動，直接執行重算")
 
-        self.progress.setFormat("⏳ 單獨計算策略因子 - %p%")
+        # 🔥 因為 Pandas 算大表需要幾十秒且沒吐數字，我們再次啟用「跑馬燈模式」
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("⚙️ 龐大數據運算中 (約需 15~30 秒)，請耐心等候...")
+
         self.runner_recalc_only = ScriptRunner(self.project_root / "scripts" / "calc_snapshot_factors.py")
         self.runner_recalc_only.output_signal.connect(self.log)
         self.runner_recalc_only.progress_signal.connect(self.progress.setValue)
