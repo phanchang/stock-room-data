@@ -347,45 +347,48 @@ class RangeFilterWidget(QWidget):
         self.config = config
         self.setStyleSheet("background: transparent;")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 2, 0, 2)
 
         self.lbl_name = QLabel(config['label'])
         self.lbl_name.setStyleSheet("color: #DDD; font-size: 14px; border:none;")
-        # 🔥 修改此處：寬度從 100 增加至 115，避免長文字被蓋住
-        self.lbl_name.setFixedWidth(115)
+        # 🚀 寬度由 115 增加至 140，確保長文字如「30W起漲週數(前)」不被遮住
+        self.lbl_name.setFixedWidth(140)
         layout.addWidget(self.lbl_name)
 
         self.spin_min = QDoubleSpinBox()
         self.setup_spin(self.spin_min, config['min'], config['suffix'])
-        self.spin_min.setFixedWidth(80)
+        self.spin_min.setMinimumWidth(90) # 🚀 確保輸入框夠寬
         layout.addWidget(self.spin_min)
 
         lbl_tilde = QLabel("~")
         lbl_tilde.setStyleSheet("color:#555; border:none;")
-        lbl_tilde.setFixedWidth(10)
+        lbl_tilde.setFixedWidth(12)
         lbl_tilde.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl_tilde)
 
         self.spin_max = QDoubleSpinBox()
         self.setup_spin(self.spin_max, config['max'], config['suffix'])
-        self.spin_max.setFixedWidth(80)
+        self.spin_max.setMinimumWidth(90) # 🚀 確保輸入框夠寬
         layout.addWidget(self.spin_max)
-
         layout.addStretch()
 
     def setup_spin(self, spin, default_val, suffix):
         spin.setRange(-999999999, 999999999)
-        spin.setDecimals(
-            1 if '張' not in self.config.get('label', '') and '流' not in self.config.get('label', '') else 0)
+        # 增加判斷：RS強度與百分比類顯示一位小數，其餘整數，減少運算負擔
+        spin.setDecimals(1 if '%' in suffix or 'RS' in self.config['label'] else 0)
         spin.setSingleStep(self.config['step'])
         spin.setSuffix(suffix)
         spin.setValue(default_val)
+        # 🚀 關鍵效能修正：只有當使用者「結束編輯」或「按下Enter」時才大幅跳動，
+        # 或者保留原本 valueChanged 但在 Module 層做 Debounce
         spin.valueChanged.connect(self.emit_change)
 
-    def emit_change(self): self.value_changed.emit()
+    def emit_change(self):
+        self.value_changed.emit()
 
-    def is_modified(self): return (self.spin_min.value() != self.config['min']) or (
-            self.spin_max.value() != self.config['max'])
+    def is_modified(self):
+        return (abs(self.spin_min.value() - self.config['min']) > 0.001) or (
+                abs(self.spin_max.value() - self.config['max']) > 0.001)
 
     def reset(self):
         self.spin_min.blockSignals(True)
@@ -428,75 +431,60 @@ class StrategyTableModel(QAbstractTableModel):
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid(): return None
-
-        # 處理第 0 欄 (Checkbox)
         if index.column() == 0:
             sid = str(self._df.iloc[index.row()].get('sid', ''))
             if role == Qt.ItemDataRole.CheckStateRole:
                 return Qt.CheckState.Checked if sid in self.checked_sids else Qt.CheckState.Unchecked
             return None
 
-        # 處理資料欄位 (因為多了 Checkbox，所以可視欄位 index 要減 1)
         col_key = self.visible_cols[index.column() - 1]
         value = self._df.iloc[index.row()][col_key]
 
-        if col_key == 'insight' and role == Qt.ItemDataRole.DisplayRole:
-            return "🔍"
+        if col_key == 'insight' and role == Qt.ItemDataRole.DisplayRole: return "🔍"
         if role == Qt.ItemDataRole.UserRole: return value
 
         if role == Qt.ItemDataRole.DisplayRole:
             if isinstance(value, (int, float)):
-                if col_key == '現價':
-                    fmt_val = f"{value:,.2f}"
-                    if fmt_val.endswith('.00'):
-                        return fmt_val[:-3]
-                    elif fmt_val.endswith('0'):
-                        return fmt_val[:-1]
-                    return fmt_val
+                if col_key == '現價': return f"{value:,.2f}".rstrip('0').rstrip('.')
                 if col_key in ['RS強度', 'pe', 'pbr', '量比', 'fund_eps_cum']: return f"{value:.1f}"
-                if 'rev_now' in col_key: return f"{value:,.0f}"
-                if '漲幅' in col_key or 'yield' in col_key or 'width' in col_key or 'yoy' in col_key or 'qoq' in col_key or 'diff' in col_key: return f"{value:.2f}%"
-                if 'sum' in col_key or 'net' in col_key or 'cash_flow' in col_key: return f"{value:,.0f}"
-                if 'streak' in col_key or 'offset' in col_key: return f"{int(value)}"
+                if any(x in col_key for x in ['漲幅', 'yield', 'width', 'yoy', 'qoq', 'diff']): return f"{value:.2f}%"
+                if any(x in col_key for x in ['sum', 'net', 'cash_flow']): return f"{value:,.0f}"
+                if any(x in col_key for x in ['streak', 'offset']): return f"{int(value)}"
                 return f"{value:,.2f}"
             return str(value)
 
-        if role == Qt.ItemDataRole.ToolTipRole:
-            if col_key == '強勢特徵' and isinstance(value, str):
-                tags = [t.strip() for t in value.split(',')]
-                tips = [f"• {t}: {TAG_TOOLTIPS.get(t, '')}" for t in tags]
-                return "\n".join(tips)
-            return FULL_COLUMN_SPECS.get(col_key, {}).get('tip', '')
+        # ==========================================
+        # 🚀 漲跌停板計算規則 (台股漲跌幅限制 10%，因升降單位取 >= 9.85% 最準確)
+        # ==========================================
+        pct_1d = self._df.iloc[index.row()].get('漲幅1d', 0)
+        is_limit_up = (pct_1d >= 9.85)
+        is_limit_down = (pct_1d <= -9.85)
 
+        # 🚀 字體顏色 (ForegroundRole)
         if role == Qt.ItemDataRole.ForegroundRole:
+            # 漲跌停亮燈時，為了配深色底，字體強制為「純白色」
+            if (is_limit_up or is_limit_down) and col_key in ['現價', '漲幅1d']:
+                return QColor("#FFFFFF")
+
+            # 一般紅綠字體邏輯
             if col_key == '現價':
-                pct_1d = self._df.iloc[index.row()].get('漲幅1d', 0)
-                if pct_1d >= 9.5 or pct_1d <= -9.5: return QColor("#FFFFFF")
                 if pct_1d > 0: return QColor("#FF4444")
                 if pct_1d < 0: return QColor("#00CC00")
-                return QColor("#E0E0E0")
             if isinstance(value, (int, float)):
-                if '漲幅' in col_key or 'sum' in col_key or '買賣超' in col_key or 'yoy' in col_key or 'eps' in col_key or 'streak' in col_key or 'qoq' in col_key or 'diff' in col_key or 'cash_flow' in col_key:
+                if any(x in col_key for x in ['漲幅', 'sum', 'net', 'yoy', 'eps', 'streak', 'qoq', 'diff', 'cash_flow']):
                     if value > 0: return QColor("#FF4444")
                     if value < 0: return QColor("#00CC00")
-            if col_key == '強勢特徵' and value:
-                if 'ST轉多' in str(value): return QColor("#FF3333")
-                if '30W' in str(value): return QColor("#00E5FF")
-                if 'ILSS' in str(value): return QColor("#FF00FF")
-                if '土洋' in str(value): return QColor("#FFFF00")
             return QColor("#E0E0E0")
 
+        # 🚀 背景顏色 (BackgroundRole) - 製作亮燈底色
         if role == Qt.ItemDataRole.BackgroundRole:
-            if col_key == '現價':
-                pct_1d = self._df.iloc[index.row()].get('漲幅1d', 0)
-                if pct_1d >= 9.5: return QColor("#880000")
-                if pct_1d <= -9.5: return QColor("#004400")
-            return None
+            # 漲停板：漂亮不刺眼的「實心暗紅色」
+            if is_limit_up and col_key in ['現價', '漲幅1d']:
+                return QColor("#D32F2F")
+            # 跌停板：漂亮不刺眼的「實心暗綠色」
+            if is_limit_down and col_key in ['現價', '漲幅1d']:
+                return QColor("#2E7D32")
 
-        if role == Qt.ItemDataRole.TextAlignmentRole:
-            if isinstance(value, (int, float)) or col_key == '現價':
-                return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-            return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         return None
 
     def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
@@ -540,6 +528,118 @@ class NumericSortProxy(QSortFilterProxyModel):
         except:
             return str(l_val) < str(r_val)
 
+
+class FrozenTableView(QTableView):
+    """實作固定左側前 4 欄 (選/詳/代號/名稱)，恢復極速排序與正確字體顏色"""
+
+    def __init__(self, model, parent=None):
+        super().__init__(parent)
+        self.setModel(model)
+
+        # 🚀 恢復 Qt 原生極速排序 (解決卡頓)
+        self.setSortingEnabled(True)
+        self.horizontalHeader().setSortIndicatorShown(True)
+        self.horizontalHeader().setHighlightSections(False)
+
+        # 🚀 確保只選取「行」，保護 Checkbox 與字體不被吃掉
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+
+        # 🚀 移除破壞紅綠字的 CSS，只保留基礎黑底
+        self.setStyleSheet("""
+            QTableView { background-color: #000; gridline-color: #222; }
+            QTableView::item:selected { background-color: #111; }
+            QTableView:focus { outline: none; }
+        """)
+
+        self.frozen_view = QTableView(self)
+        self.init_frozen_view()
+
+        self.horizontalHeader().sectionResized.connect(self.update_section_width)
+        self.verticalHeader().sectionResized.connect(self.update_section_height)
+        self.frozen_view.verticalScrollBar().valueChanged.connect(self.verticalScrollBar().setValue)
+        self.verticalScrollBar().valueChanged.connect(self.frozen_view.verticalScrollBar().setValue)
+
+        # 同步排序箭頭動作
+        self.horizontalHeader().sortIndicatorChanged.connect(self.sync_sort_indicator_to_frozen)
+        self.frozen_view.horizontalHeader().sortIndicatorChanged.connect(self.sync_sort_indicator_to_main)
+
+    def sync_sort_indicator_to_frozen(self, logicalIndex, order):
+        self.frozen_view.horizontalHeader().blockSignals(True)
+        self.frozen_view.horizontalHeader().setSortIndicator(logicalIndex, order)
+        self.frozen_view.horizontalHeader().blockSignals(False)
+
+    def sync_sort_indicator_to_main(self, logicalIndex, order):
+        self.horizontalHeader().blockSignals(True)
+        self.horizontalHeader().setSortIndicator(logicalIndex, order)
+        self.horizontalHeader().blockSignals(False)
+
+    def init_frozen_view(self):
+        self.frozen_view.setModel(self.model())
+        self.frozen_view.verticalHeader().setVisible(False)
+        self.frozen_view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        self.frozen_view.setSortingEnabled(True)
+        self.frozen_view.horizontalHeader().setSortIndicatorShown(True)
+        self.frozen_view.horizontalHeader().setHighlightSections(False)
+        self.frozen_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.frozen_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+
+        b64_down = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHBhdGggZD0iTSAzIDYgaCAxMCBsIC01IDYgeiIgZmlsbD0iIzAwRTVGRiIvPjwvc3ZnPg=="
+        b64_up = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHBhdGggZD0iTSAzIDEwIGggMTAgbCAtNSAtNiB6IiBmaWxsPSIjMDBFNUZGIi8+PC9zdmc+"
+
+        self.frozen_view.setStyleSheet(f"""
+            QTableView {{ background-color: #000; border-right: 2px solid #00E5FF; gridline-color: #222; }}
+            QTableView::item:selected {{ background-color: #111; }}
+            QTableView:focus {{ outline: none; }}
+
+            QHeaderView::section {{ 
+                background-color: #111; color: #FFF; font-weight: bold; 
+                border: 1px solid #333; padding-left: 4px; padding-right: 18px; 
+            }}
+            QHeaderView::down-arrow {{ 
+                width: 14px; height: 14px; subcontrol-position: right center; right: 2px;
+                image: url("{b64_down}"); 
+            }}
+            QHeaderView::up-arrow {{ 
+                width: 14px; height: 14px; subcontrol-position: right center; right: 2px;
+                image: url("{b64_up}"); 
+            }}
+        """)
+
+        self.frozen_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.frozen_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.frozen_view.show()
+
+        self.update_frozen_columns()
+        self.update_frozen_geometry()
+
+    def update_frozen_columns(self):
+        for i in range(self.model().columnCount()):
+            if i < 4:
+                self.frozen_view.setColumnHidden(i, False)
+            else:
+                self.frozen_view.setColumnHidden(i, True)
+
+    def update_section_width(self, logicalIndex, oldSize, newSize):
+        if logicalIndex < 4:
+            self.frozen_view.setColumnWidth(logicalIndex, newSize)
+            self.update_frozen_geometry()
+
+    def update_section_height(self, logicalIndex, oldSize, newSize):
+        self.frozen_view.setRowHeight(logicalIndex, newSize)
+
+    def update_frozen_geometry(self):
+        width = 0
+        for i in range(4):
+            if not self.isColumnHidden(i):
+                width += self.columnWidth(i)
+        self.frozen_view.setGeometry(self.frameWidth(), self.frameWidth(),
+                                     width, self.viewport().height() + self.horizontalHeader().height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_frozen_geometry()
 
 class StrategyModule(QWidget):
     stock_clicked_signal = pyqtSignal(str)
@@ -638,7 +738,19 @@ class StrategyModule(QWidget):
                     QListView::item:selected { background-color: #0066CC; color: #FFF; }
                 """
 
-
+        # === 1. 加入劇本狀態顯示標籤 (插入在 tab_widget 之前) ===
+        self.lbl_active_preset = QLabel("當前狀態：預設過濾")
+        self.lbl_active_preset.setStyleSheet("""
+                    color: #FFD700; 
+                    background-color: #1A1A1A; 
+                    padding: 8px; 
+                    border: 1px solid #333;
+                    border-radius: 4px; 
+                    font-size: 14px; 
+                    font-weight: bold;
+                    margin-bottom: 5px;
+                """)
+        ctrl_layout.addWidget(self.lbl_active_preset)
         # ==========================================
         # 建立 Tab Widget (標籤分頁) 解決筆電版面擁擠問題
         # ==========================================
@@ -874,26 +986,12 @@ class StrategyModule(QWidget):
         table_layout.addWidget(self.ai_command_bar)
 
         # 📊 資料表格
-        self.table_view = QTableView()
-        self.table_view.setAlternatingRowColors(False)
-        self.table_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.table_view.verticalHeader().setVisible(False)
-        self.table_view.horizontalHeader().setStretchLastSection(True)
-        self.table_view.horizontalHeader().setSectionsMovable(True)
-        self.table_view.horizontalHeader().sectionMoved.connect(self.on_header_moved)
-        self.table_view.setSortingEnabled(True)
-        self.table_view.setStyleSheet("""
-                    QTableView { background-color: #000000; color: #E0E0E0; gridline-color: #222; font-size: 16px; font-family: 'Consolas', 'Microsoft JhengHei'; border: none; }
-                    QHeaderView::section { background-color: #111; color: #AAA; padding: 6px; border-right: 1px solid #222; border-bottom: 2px solid #333; font-weight: bold; font-size: 14px; }
-                    QTableView::item:selected { background-color: #004466; color: #FFF; }
-                    QTableView::indicator { width: 18px; height: 18px; } /* 放大 Checkbox */
-                    QTableView::indicator:checked { background-color: #00E5FF; border: 1px solid #00E5FF; border-radius: 3px; }
-                """)
-
         self.model = StrategyTableModel()
         self.proxy_model = NumericSortProxy()
         self.proxy_model.setSourceModel(self.model)
+
+        # 🚀 這裡換成 FrozenTableView (固定欄位版本)
+        self.table_view = FrozenTableView(self.proxy_model)
         self.table_view.setModel(self.proxy_model)
 
         # 連接勾選狀態改變的事件，即時更新頂部指揮列
@@ -1159,80 +1257,64 @@ class StrategyModule(QWidget):
         self.tag_layout.addStretch()
 
     def apply_preset(self, preset_name):
-        """套用戰略劇本：自動帶入參數，並切換回數值濾網頁面讓使用者微調"""
-        # 1. 先清空現有條件
-        self.reset_filters()
+        """套用戰略劇本：自動帶入參數"""
+        self.lbl_active_preset.setText(f"🔥 當前劇本：{preset_name}")
 
-        # 2. 定義劇本參數字典 (對應 FULL_FILTER_SPECS 的 key)
+        # 🚀 關鍵修正：先清空舊的「額外欄位」，回到預設狀態，避免欄位越加越多
+        self.active_filter_keys = DEFAULT_ACTIVE_FILTERS.copy()
+
         rules = {}
         target_tags = []
 
         if "暗渡陳倉" in preset_name:
-            rules = {
-                "漲幅20d": {"min": -5, "max": 8},
-                "bb_width": {"max": 12},
-                "legal_diff_20d": {"min": 1.5},
-                "margin_diff_20d": {"max": 0}
-            }
+            rules = {"漲幅20d": {"min": -5, "max": 8}, "bb_width": {"max": 12}, "legal_diff_20d": {"min": 1.5}}
         elif "春江水暖" in preset_name:
-            rules = {
-                "fund_contract_qoq": {"min": 15},
-                "fund_op_cash_flow": {"min": 0}
-            }
+            rules = {"fund_contract_qoq": {"min": 15}, "fund_op_cash_flow": {"min": 0}}
         elif "30W 臨門一腳" in preset_name:
-            rules = {
-                "bb_width": {"max": 6},
-                "漲幅60d": {"min": 0, "max": 20},
-                "量比": {"max": 0.6}
-            }
+            rules = {"bb_width": {"max": 6}, "量比": {"max": 0.6}}
         elif "破底翻黃金坑" in preset_name:
-            rules = {
-                "m_sum_5d": {"max": -300}
-            }
-            target_tags = ["假跌破", "主力掃單(ILSS)", "30W甩轎"]
-            self.rb_or.setChecked(True)  # 只要滿足其中一個洗盤特徵即可
+            rules = {"m_sum_5d": {"max": -300}}
+            target_tags = ["假跌破", "30W甩轎"]
 
-        # 3. 確保這些欄位在畫面上是有顯示的 (如果原本被隱藏，就自動幫使用者打開)
-        needed_keys = list(rules.keys())
-        need_rebuild = False
-        for k in needed_keys:
+        # 🚀 確保劇本需要的欄位被加入顯示名單中
+        for k in rules.keys():
             if k not in self.active_filter_keys:
                 self.active_filter_keys.append(k)
-                need_rebuild = True
 
-        if need_rebuild:
-            self.rebuild_filter_ui()
+        # 重建數值濾網 UI (這樣就會只顯示預設 + 此劇本相關的欄位)
+        self.rebuild_filter_ui()
 
-        # 4. 將數值填入 SpinBox 中
+        # 填入數值
         for w in self.dynamic_filters:
             if w.key in rules:
-                if "min" in rules[w.key]:
-                    w.spin_min.setValue(rules[w.key]["min"])
-                if "max" in rules[w.key]:
-                    w.spin_max.setValue(rules[w.key]["max"])
+                if "min" in rules[w.key]: w.spin_min.setValue(rules[w.key]["min"])
+                if "max" in rules[w.key]: w.spin_max.setValue(rules[w.key]["max"])
 
-        # 5. 打勾對應的特徵標籤
+        # 清除舊標籤並打勾新標籤
+        for chk in self.chk_tags.values(): chk.setChecked(False)
         for tag in target_tags:
-            if tag in self.chk_tags:
-                self.chk_tags[tag].setChecked(True)
+            if tag in self.chk_tags: self.chk_tags[tag].setChecked(True)
 
-        # 6. 自動跳轉到【📊 數值濾網】分頁 (Index 1)，讓使用者可以即時查看並微調
-        self.tab_widget.setCurrentIndex(1)
-
-        # 7. 觸發篩選
+        self.tab_widget.setCurrentIndex(1)  # 切換到數值分頁
         self.apply_filters_debounce()
 
-
-
     def reset_filters(self):
+        """完全清空篩選條件，回復預設"""
+        # 🚀 修正：回復標籤文字
+        self.lbl_active_preset.setText("當前狀態：預設過濾")
+
         self.combo_industry.setCurrentIndex(0)
-        self.combo_concept.setCurrentIndex(0)  # <-- 清除概念題材
-        self.combo_dj_ind.setCurrentIndex(0)   # <-- 清除產業細分
+        self.combo_concept.setCurrentIndex(0)
+        self.combo_dj_ind.setCurrentIndex(0)
         self.txt_search.clear()
+
+        # 🚀 修正：回到預設的 6 組欄位
+        self.active_filter_keys = DEFAULT_ACTIVE_FILTERS.copy()
+        self.rebuild_filter_ui()
+
         for w in self.dynamic_filters: w.reset()
         for chk in self.chk_tags.values(): chk.setChecked(False)
         self.rb_and.setChecked(True)
-        self.proxy_model.sort(-1)
         self.apply_filters_real()
 
     def apply_filters_debounce(self):
@@ -1243,117 +1325,104 @@ class StrategyModule(QWidget):
 
     def apply_filters_real(self):
         if self.full_df.empty: return
-        df = self.full_df.copy()
+        self.setUpdatesEnabled(False)
+        try:
+            df = self.full_df.copy()
+            df['insight'] = ''
 
-        # 1. 處理上方搜尋框 (全域搜尋)
-        search_txt = self.txt_search.text().strip()
-        if search_txt:
-            mask = df['sid'].str.contains(search_txt) | df['name'].str.contains(search_txt)
-            if 'sub_concepts' in df.columns:
-                mask = mask | df['sub_concepts'].fillna('').str.contains(search_txt)
-            if 'dj_sub_ind' in df.columns:
-                mask = mask | df['dj_sub_ind'].fillna('').str.contains(search_txt)
-            df = df[mask]
+            # A. 基本搜尋
+            search_txt = self.txt_search.text().strip()
+            if search_txt:
+                mask = df['sid'].str.contains(search_txt, case=False, na=False) | \
+                       df['name'].str.contains(search_txt, case=False, na=False)
+                df = df[mask]
 
-        # 2. 處理 📂 基本/自選 過濾
-        ind = self.combo_industry.currentText()
-        if ind.startswith("[自選] "):
-            group_name = ind.replace("[自選] ", "")
-            if group_name in self.watchlist_data:
-                target_sids = self.watchlist_data[group_name]
-                target_sids = [str(x).strip() for x in target_sids]
-                df = df[df['sid'].isin(target_sids)]
-        elif ind != "全部":
-            df = df[df['industry'] == ind]
+            # B. 產業/自選
+            ind = self.combo_industry.currentText()
+            if ind.startswith("[自選] "):
+                group_name = ind.replace("[自選] ", "")
+                df = df[df['sid'].isin(self.watchlist_data.get(group_name, []))]
+            elif ind != "全部":
+                df = df[df['industry'] == ind]
 
-        # 3. 處理 🏷️ 概念題材過濾 (支援手打字)
-        concept_txt = self.combo_concept.currentText().strip()
-        if concept_txt != "全部" and concept_txt != "" and 'sub_concepts' in df.columns:
-            df = df[df['sub_concepts'].fillna('').str.contains(concept_txt, regex=False)]
+            # C. 數值過濾 🚀 (核心修正：僅過濾「有被更動」的滑桿)
+            is_numeric_dirty = False
+            for w in self.dynamic_filters:
+                if w.is_modified():
+                    is_numeric_dirty = True
+                    df = df[(df[w.key] >= w.spin_min.value()) & (df[w.key] <= w.spin_max.value())]
 
-        # 4. 處理 🏭 MDJ 產業細分過濾 (智慧雙重比對)
-        dj_txt = self.combo_dj_ind.currentText().strip()
-        if dj_txt != "全部" and dj_txt != "" and 'dj_sub_ind' in df.columns and 'dj_main_ind' in df.columns:
-            if "] " in dj_txt:
-                # 情況 A：使用者用滑鼠點選完整的分類，例如 "[半導體] IC設計"
-                target_sub = dj_txt.split("] ")[-1]
-                df = df[df['dj_sub_ind'].fillna('').str.contains(target_sub, regex=False)]
-            else:
-                # 情況 B：使用者自己打關鍵字，例如 "半導體" 或 "車用" (主業跟細產業都找)
-                mask_dj = df['dj_main_ind'].fillna('').str.contains(dj_txt, regex=False) | \
-                          df['dj_sub_ind'].fillna('').str.contains(dj_txt, regex=False)
-                df = df[mask_dj]
+            # D. 特徵標籤
+            selected_tags = [t for t, chk in self.chk_tags.items() if chk.isChecked()]
+            if selected_tags and '強勢特徵' in df.columns:
+                df['強勢特徵'] = df['強勢特徵'].fillna("")
+                if self.rb_and.isChecked():
+                    for tag in selected_tags: df = df[df['強勢特徵'].str.contains(tag, na=False)]
+                else:
+                    pattern = "|".join([str(t) for t in selected_tags])
+                    df = df[df['強勢特徵'].str.contains(pattern, regex=True, na=False)]
 
-        # 5. 處理數值滑桿過濾 (SpinBoxes)
-        is_dirty = False
-        for w in self.dynamic_filters:
-            if w.is_modified(): is_dirty = True
-            key = w.key
-            if key not in df.columns: continue
-            min_val, max_val = w.spin_min.value(), w.spin_max.value()
-            default_min, default_max = w.config['min'], w.config['max']
-            if min_val != default_min: df = df[df[key] >= min_val]
-            if max_val != default_max: df = df[df[key] <= max_val]
+            # 整理欄位顯示
+            # 整理欄位顯示 (🚀 關鍵修復：強制將 詳、代號、名稱 永遠鎖死在最前面)
+            visible_cols = []
+            if FULL_COLUMN_SPECS.get('insight', {}).get('show', True): visible_cols.append('insight')
+            if 'sid' in df.columns: visible_cols.append('sid')
+            if 'name' in df.columns: visible_cols.append('name')
 
-        # 6. 處理按鈕亮燈狀態與強勢特徵標籤 (Checkboxes)
-        is_tag_dirty = any(chk.isChecked() for chk in self.chk_tags.values())
-        if is_dirty or is_tag_dirty or ind != "全部" or search_txt or (concept_txt != "全部" and concept_txt != "") or (dj_txt != "全部" and dj_txt != ""):
-            self.btn_reset.setStyleSheet("color: #FF5555; font-weight: bold; border: 1px solid #FF5555;")
-        else:
-            self.btn_reset.setStyleSheet("color: #666; font-weight: bold;")
+            for key in self.column_order:
+                # 扣除已經在最前面的三個欄位，剩下的才依序加入
+                if key not in ['insight', 'sid', 'name'] and FULL_COLUMN_SPECS.get(key, {}).get('show'):
+                    if key in df.columns: visible_cols.append(key)
 
-        selected_tags = [t for t, chk in self.chk_tags.items() if chk.isChecked()]
-        if selected_tags and '強勢特徵' in df.columns:
-            df['強勢特徵'] = df['強勢特徵'].fillna("")
-            if self.rb_and.isChecked():
-                for tag in selected_tags: df = df[df['強勢特徵'].str.contains(tag, regex=False)]
-            else:
-                pattern = "|".join([str(t) for t in selected_tags])
-                df = df[df['強勢特徵'].str.contains(pattern, regex=True)]
+            self.display_df = df[visible_cols].copy()
+            self.model.update_data(self.display_df, visible_cols)
+            self.proxy_model.invalidate()
+            self.lbl_status.setText(f"篩選結果: {len(self.display_df)} 檔")
+            self.update_ai_command_bar()
 
-        # 7. 整理最終顯示的 DataFrame
-        df['insight'] = ''
-        visible_cols = []
+            QTimer.singleShot(1, self.adjust_table_layout)
 
-        if 'insight' in FULL_COLUMN_SPECS and FULL_COLUMN_SPECS['insight'].get('show', True):
-            visible_cols.append('insight')
+        finally:
+            self.setUpdatesEnabled(True)
 
-        for key in self.column_order:
-            if key == 'insight': continue
-            if key in FULL_COLUMN_SPECS and FULL_COLUMN_SPECS[key]['show']:
-                if key in df.columns:
-                    visible_cols.append(key)
-
-        self.display_df = df[visible_cols].copy()
-
-        # 8. 預設排序邏輯
-        if '漲幅20d' in self.display_df.columns and self.proxy_model.sortColumn() == -1:
-            self.display_df = self.display_df.sort_values('漲幅20d', ascending=False)
-
-        # 9. 更新畫面與表格寬度
-        self.model.update_data(self.display_df, visible_cols)
-        self.proxy_model.invalidate()
-        self.lbl_status.setText(f"篩選結果: {len(self.display_df)} 檔")
-
-        # 10. 更新畫面與表格寬度
-        self.model.update_data(self.display_df, visible_cols)
-        self.proxy_model.invalidate()
-        self.update_ai_command_bar()  # 同步更新狀態列
+    def adjust_table_layout(self):
+        """校正表格欄位寬度與樣式，同步更新主表頭箭頭"""
+        if not hasattr(self, 'table_view'): return
 
         header = self.table_view.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.resizeSection(0, 40)  # Checkbox 欄位寬度
 
-        for i, col in enumerate(visible_cols):
-            real_idx = i + 1  # 扣除 Checkbox 偏移
+        b64_down = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHBhdGggZD0iTSAzIDYgaCAxMCBsIC01IDYgeiIgZmlsbD0iIzAwRTVGRiIvPjwvc3ZnPg=="
+        b64_up = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHBhdGggZD0iTSAzIDEwIGggMTAgbCAtNSAtNiB6IiBmaWxsPSIjMDBFNUZGIi8+PC9zdmc+"
+
+        header.setStyleSheet(f"""
+            QHeaderView::section {{ 
+                background-color: #111; color: #FFF; font-weight: bold; 
+                border: 1px solid #333; padding-left: 4px; padding-right: 18px; 
+            }}
+            QHeaderView::down-arrow {{ 
+                width: 14px; height: 14px; subcontrol-position: right center; right: 2px;
+                image: url("{b64_down}"); 
+            }}
+            QHeaderView::up-arrow {{ 
+                width: 14px; height: 14px; subcontrol-position: right center; right: 2px;
+                image: url("{b64_up}"); 
+            }}
+        """)
+
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+
+        # 🚀 強制確保最前面 4 欄 (選, 詳, 代號, 名稱) 的完美寬度
+        self.table_view.setColumnWidth(0, 40)
+        self.table_view.setColumnWidth(1, 40)
+        self.table_view.setColumnWidth(2, 75)
+        self.table_view.setColumnWidth(3, 110)
+
+        for i, col in enumerate(self.model.visible_cols):
             if col == '強勢特徵':
-                header.resizeSection(real_idx, 220)
-            elif col == 'name':
-                header.resizeSection(real_idx, 110)
-            elif 'sum' in col or 'net' in col:
-                header.resizeSection(real_idx, 100)
-            else:
-                header.resizeSection(real_idx, 80)
+                self.table_view.setColumnWidth(i + 1, 220)
+
+        if hasattr(self.table_view, 'update_frozen_geometry'):
+            self.table_view.update_frozen_geometry()
 
     def on_table_clicked(self, index):
         """當單擊表格時，判斷是否點擊了放大鏡欄位"""

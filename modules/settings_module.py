@@ -608,12 +608,14 @@ class SettingsModule(QWidget):
         self.progress.setFormat("已取消排程")
 
     def run_core_pipeline(self):
+        """啟動核心排程：包含籌碼抓取、估值更新與因子計算"""
         if not self._foolproof_check("深度籌碼與策略運算"): return
         self.task_start_time = time.time()
 
-        # 🔥 新增：預設當作有抓到資料
-        self.found_new_data = True
+        # 預設為 False，只有腳本回傳 [DATA_UPDATED] 才會變成 True
+        self.found_new_data = False
 
+        # --- 重新定義 args 邏輯 (修正 NameError) ---
         mode_idx = self.combo_chips_mode.currentIndex()
         args = []
         mode_log = "完整更新"
@@ -628,22 +630,61 @@ class SettingsModule(QWidget):
         self._disable_all_buttons()
         self.progress.setFormat("⏳ 抓取深度籌碼中 (1/3) - %p%")
 
+        # 啟動腳本
         self.runner_daily = ScriptRunner(self.project_root / "scripts" / "update_daily_chips_fast.py", args)
 
-        # 🔥 修改這裡：原本直接連到 self.log，現在連到我們新的攔截器
+        # 攔截輸出以判斷是否有新資料
         self.runner_daily.output_signal.connect(self._check_if_no_data)
-
         self.runner_daily.progress_signal.connect(self.progress.setValue)
-        self.runner_daily.finished.connect(self._proceed_to_market_yield)
+
+        # 結束後根據狀態決定是否往下跑
+        self.runner_daily.finished.connect(self._handle_daily_finished)
         self.runner_daily.start_script()
+
+    def _handle_daily_finished(self, exitCode):
+        """處理籌碼抓取結束後的邏輯"""
+        if exitCode != 0:
+            self.log("❌ 籌碼抓取腳本發生錯誤 (Crash)，已自動終止排程。")
+            self.on_pipeline_finished()
+            return
+
+        # 如果 _check_if_no_data 偵測到沒有新資料
+        if not getattr(self, 'found_new_data', False):
+            self.log("🛑 偵測到今日無新籌碼，自動取消後續運算。")
+            self.on_pipeline_finished()
+            return
+
+        # 若一切正常且有新資料，繼續下一步
+        self._proceed_to_market_yield()
+
+    def _check_if_no_data(self, text):
+        """攔截腳本日誌，判斷執行狀態"""
+        self.log(text)
+
+        # 1. 偵測是否成功更新
+        if "[DATA_UPDATED]" in text:
+            self.found_new_data = True
+
+        # 2. 偵測是否為空更新或報錯
+        if "[EMPTY_UPDATE]" in text or "Traceback" in text:
+            self.found_new_data = False
+
+    def _handle_daily_finished(self, exitCode):
+        if exitCode != 0:
+            self.log("❌ 籌碼抓取腳本發生錯誤(Crash)，停止後續排程。")
+            self.on_pipeline_finished()
+        else:
+            self._proceed_to_market_yield()
 
     # 🔥 新增：用來攔截腳本印出來的文字，判斷有沒有抓到資料
     def _check_if_no_data(self, text):
-        # 照常印出日誌到畫面上 (保留原本功能)
         self.log(text)
-        # 如果日誌中出現「查無資料」，就把變數設為 False
-        if "查無資料" in text or "跳過" in text:
+        # 如果出現腳本崩潰(Traceback)或我們自定義的空標記，就設為 False
+        if "Traceback" in text or "[EMPTY_UPDATE]" in text:
+            self.log("🛑 偵測到腳本錯誤或無新資料，將取消後續運算。", False)
             self.found_new_data = False
+        if "[DATA_UPDATED]" in text:
+            self.found_new_data = True
 
     def _proceed_to_market_yield(self):
         # 🔥 新增煞車機制：如果上面發現沒抓到資料，就停止執行
