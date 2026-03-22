@@ -269,3 +269,82 @@ class TechnicalStrategies:
         r_high = wvf.rolling(50).max() * 0.85
         is_green = (wvf >= upper) | (wvf >= r_high)
         return (is_green.shift(1)) & (~is_green)
+
+    # ==============================================================================
+    # 🎯 以下為新增的 V3 臨門一腳 (聽牌) 專用邏輯，完全不影響原先的突破邏輯
+    # ==============================================================================
+    @staticmethod
+    def check_30w_standby(df: pd.DataFrame) -> pd.Series:
+        """
+        [嚴格版] 30W 臨門一腳 (聽牌) 判定
+        依據實戰邏輯：均線已走平/向上、距離均線一個漲停板內、尚未出現單週>10%爆發、且甩轎不過久。
+        """
+        results = pd.Series(0, index=df.index)
+        if len(df) < 35: return results
+
+        close, high, low = df['Close'], df['High'], df['Low']
+        ma30 = close.rolling(window=30).mean()
+
+        for i in range(30, len(df)):
+            curr_c = close.iloc[i]
+            prev_c = close.iloc[i - 1]
+            curr_ma = ma30.iloc[i]
+            prev_ma = ma30.iloc[i - 1]
+
+            if pd.isna(curr_ma) or curr_ma == 0: continue
+
+            # 1. 均線斜率：30W 均線必須開始走平或向上 (容許極微幅下彎 0.5%)
+            if curr_ma < prev_ma * 0.995:
+                continue
+
+            # 2. 尚未爆發 (聽牌精神)：
+            # 近一週(相當於5個交易日)的漲幅不可以 >= 10%。
+            # 如果已經 >= 10%，那叫「已經突破」，不叫聽牌。
+            pct_change = (curr_c - prev_c) / prev_c
+            if pct_change >= 0.10:
+                continue
+
+            # 3. 聽牌基位：距離均線一個漲停板內 (-9% ~ +8%)
+            # 確保「隨時一根漲停就能站回均線」，太深的水鬼不要
+            bias = (curr_c - curr_ma) / curr_ma
+            if bias < -0.09 or bias > 0.08:
+                continue
+
+            is_adh = False
+            is_shk = False
+
+            # 4. 黏貼 (Adhesive) 判定：
+            # 近 4 週高低點極致收斂，偏離均線不超過 ±10%
+            start_adh = max(0, i - 3)  # 包含本週共 4 週
+            is_adh_tmp = True
+            for k in range(start_adh, i + 1):
+                if pd.isna(ma30.iloc[k]):
+                    is_adh_tmp = False
+                    break
+                dev = max(abs(high.iloc[k] - ma30.iloc[k]), abs(low.iloc[k] - ma30.iloc[k])) / ma30.iloc[k]
+                if dev > 0.10:
+                    is_adh_tmp = False
+                    break
+            if is_adh_tmp:
+                is_adh = True
+
+            # 5. 甩轎 (Shakeout) 判定：
+            # 過去 12 週內曾跌破，但水下時間「最多只能 8 週(約2個月)」
+            start_shk = max(0, i - 12)
+            has_dip = False
+            uw_weeks = 0
+            for k in range(start_shk, i):
+                if pd.isna(ma30.iloc[k]): continue
+                if low.iloc[k] < ma30.iloc[k]:
+                    has_dip = True
+                if close.iloc[k] < ma30.iloc[k]:
+                    uw_weeks += 1
+
+            if has_dip and (0 < uw_weeks <= 8):
+                is_shk = True
+
+            # 只要型態符合其一，且基位/均線/未爆發條件皆滿足，即發放聽牌標籤
+            if is_adh or is_shk:
+                results.iloc[i] = 1
+
+        return results

@@ -49,7 +49,8 @@ def calculate_advanced_factors(df, sid=None):
         'str_30w_adh': 0, 'str_30w_shk': 0, 'str_30w_info': "",
         'str_30w_week_offset': -1, 'str_st_week_offset': -1,
         'str_break_30w': 0, 'str_uptrend': 0, 'str_high_60': 0, 'str_high_30': 0,
-        'str_ma55_sup': 0, 'str_ma200_sup': 0, 'str_vix_rev': 0
+        'str_ma55_sup': 0, 'str_ma200_sup': 0, 'str_vix_rev': 0,
+        'str_30w_standby': 0  # 👈 [新增這行] 預設為 0
     }
 
     col_map = {k: v for k, v in
@@ -142,6 +143,12 @@ def calculate_advanced_factors(df, sid=None):
                         factors['str_30w_shk'] = 1 if sig in [2, 3] else 0
                         factors['str_30w_info'] = f"({res_30w['Adh_Info'].iloc[idx] if sig in [1, 3] else res_30w['Shk_Info'].iloc[idx]})"
                         break
+                        # 👇 --- [新增] 偷渡計算 30W 聽牌狀態 ---
+                try:
+                    standby_res = TechnicalStrategies.check_30w_standby(df_weekly)
+                    factors['str_30w_standby'] = int(standby_res.iloc[-1])
+                except Exception:
+                    pass
         except:
             pass
 
@@ -316,7 +323,7 @@ def get_strong_tags(row):
     if row.get('str_ma55_sup', 0) == 1: tags.append('回測季線')
     if row.get('str_ma200_sup', 0) == 1: tags.append('回測年線')
     if row.get('str_vix_rev', 0) == 1: tags.append('Vix反轉')
-
+    if row.get('str_30w_standby', 0) == 1: tags.append('30W臨門一腳')
     return ','.join(tags)
 
 def main():

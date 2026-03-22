@@ -155,8 +155,8 @@ TAG_CATEGORIES = {
     "📈 趨勢與突破": ["ST轉多", "突破30週", "創季高", "創月高", "強勢多頭", "波段黑馬", "超強勢"],
     "📉 壓縮與整理": ["極度壓縮", "波動壓縮", "盤整5日", "盤整10日", "盤整20日", "盤整60日"],
     "💰 籌碼與主力": ["主力掃單(ILSS)", "投信認養", "散戶退場", "土洋對作"],
-    "⚠️ 特殊型態": ["30W黏貼後突破", "30W甩轎", "假跌破", "回測季線", "回測年線", "Vix反轉"]
-}
+    "⚠️ 特殊型態": ["30W黏貼後突破", "30W甩轎", "假跌破", "回測季線", "回測年線", "Vix反轉"],
+    "⚠️ 特殊型態": ["30W臨門一腳", "30W黏貼後突破", "30W甩轎", "假跌破", "回測季線", "回測年線", "Vix反轉"]}
 
 # 🔥 補齊所有標籤的 Tooltip
 TAG_TOOLTIPS = {
@@ -167,7 +167,7 @@ TAG_TOOLTIPS = {
     '強勢多頭': '均線呈現完美多頭排列 (MA5 > 10 > 20 > 60)',
     '波段黑馬': '近 60 日累積漲幅已經超過 30%',
     '超強勢': 'RS 強度大於 90，屬於全市場前 10% 的強勢股',
-    '30W黏貼後突破': 'MA30 走平且股價在均線附近震盪沉澱後，首度帶量突破起漲',
+    '30W臨門一腳': '【聽牌】30W均線走平或向上，股價在均線 -9%~+8% 內(一根漲停可站回)且近週漲幅未達10%。具備近4週極致收斂或甩轎未逾8週的準備型態',    '30W黏貼後突破': 'MA30 走平且股價在均線附近震盪沉澱後，首度帶量突破起漲',
     '極度壓縮': '布林通道寬度小於 5%，呈現極致的籌碼沉澱與無波動狀態',
     '波動壓縮': '布林通道寬度小於 8%，波動率正在收斂',
     '盤整5日': '布林寬度近 5 日皆處於收斂狀態',
@@ -374,13 +374,16 @@ class RangeFilterWidget(QWidget):
 
     def setup_spin(self, spin, default_val, suffix):
         spin.setRange(-999999999, 999999999)
-        # 增加判斷：RS強度與百分比類顯示一位小數，其餘整數，減少運算負擔
         spin.setDecimals(1 if '%' in suffix or 'RS' in self.config['label'] else 0)
         spin.setSingleStep(self.config['step'])
         spin.setSuffix(suffix)
         spin.setValue(default_val)
-        # 🚀 關鍵效能修正：只有當使用者「結束編輯」或「按下Enter」時才大幅跳動，
-        # 或者保留原本 valueChanged 但在 Module 層做 Debounce
+
+        # 🚀 優化 1：關閉鍵盤追蹤。
+        # 當使用者在框內「打字」時，不會每輸入一個字就觸發篩選，
+        # 而是在使用者按 Enter 或點擊滑鼠離開輸入框後才執行，大幅減少 Hang。
+        spin.setKeyboardTracking(False)
+
         spin.valueChanged.connect(self.emit_change)
 
     def emit_change(self):
@@ -511,56 +514,117 @@ class StrategyTableModel(QAbstractTableModel):
 
 
 class NumericSortProxy(QSortFilterProxyModel):
-    def lessThan(self, left, right):
-        if left.column() == 0:  # 支援以打勾狀態排序 (修復 PyQt6 Enum 比對錯誤)
-            l_chk = self.sourceModel().data(left, Qt.ItemDataRole.CheckStateRole)
-            r_chk = self.sourceModel().data(right, Qt.ItemDataRole.CheckStateRole)
-            l_val = l_chk.value if l_chk else 0
-            r_val = r_chk.value if r_chk else 0
-            return l_val < r_val
-
-        l_val = self.sourceModel().data(left, Qt.ItemDataRole.UserRole)
-        r_val = self.sourceModel().data(right, Qt.ItemDataRole.UserRole)
-        if l_val is None: l_val = -999999
-        if r_val is None: r_val = -999999
+    def sort(self, column, order):
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            return float(l_val) < float(r_val)
-        except:
-            return str(l_val) < str(r_val)
+            self.setDynamicSortFilter(False)
+            super().sort(column, order)
+        finally:
+            self.setDynamicSortFilter(True)
+            QApplication.restoreOverrideCursor()
+
+    def lessThan(self, left, right):
+        source = self.sourceModel()
+        l_row, r_row = left.row(), right.row()
+
+        # 🚀 極速優化：使用 .values (Numpy Array) 直接讀取記憶體，避開 .iloc 造成的龐大物件生成負擔
+        if left.column() == 0:
+            sids = source._df['sid'].values
+            l_checked = str(sids[l_row]) in source.checked_sids
+            r_checked = str(sids[r_row]) in source.checked_sids
+            return bool(l_checked < r_checked)
+
+        col_key = source.visible_cols[left.column() - 1]
+        vals = source._df[col_key].values
+
+        l_val = vals[l_row]
+        r_val = vals[r_row]
+
+        if pd.isna(l_val): l_val = -999999
+        if pd.isna(r_val): r_val = -999999
+
+        try:
+            return bool(float(l_val) < float(r_val))
+        except (ValueError, TypeError):
+            return bool(str(l_val) < str(r_val))
+
+
+class ZeroWidthVerticalHeader(QHeaderView):
+    """最高階防禦：物理抹除寬度，強制回傳 QSize(0, 0)，徹底粉碎黑邊與拖拉熱區"""
+
+    def __init__(self, parent=None):
+        super().__init__(Qt.Orientation.Vertical, parent)
+        self.setHidden(True)
+        self.setDefaultSectionSize(38)  # 維持舒適的列高 38px
+
+    def sizeHint(self):
+        # ☢️ 核心殺招：不管 Qt 怎麼算，寬度永遠是 0！
+        return QSize(0, 0)
 
 
 class FrozenTableView(QTableView):
-    """實作固定左側前 4 欄 (選/詳/代號/名稱)，恢復極速排序與正確字體顏色"""
+    """終極完美版：徹底消滅黑邊 + 強化 Checkbox 視覺框線"""
 
     def __init__(self, model, parent=None):
         super().__init__(parent)
         self.setModel(model)
 
-        # 🚀 恢復 Qt 原生極速排序 (解決卡頓)
+        # 🚀 1. 替換為我們自訂的「絕對零寬度」標頭
+        self.setVerticalHeader(ZeroWidthVerticalHeader(self))
+
         self.setSortingEnabled(True)
         self.horizontalHeader().setSortIndicatorShown(True)
         self.horizontalHeader().setHighlightSections(False)
 
-        # 🚀 確保只選取「行」，保護 Checkbox 與字體不被吃掉
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
 
-        # 🚀 移除破壞紅綠字的 CSS，只保留基礎黑底
-        self.setStyleSheet("""
-            QTableView { background-color: #000; gridline-color: #222; }
-            QTableView::item:selected { background-color: #111; }
-            QTableView:focus { outline: none; }
+        # 🌟 Checkbox SVG 黑勾勾圖示
+        b64_check = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiMwMDAwMDAiIHN0cm9rZS13aWR0aD0iMyIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cG9seWxpbmUgcG9pbnRzPSIyMCA2IDkgMTcgNCAxMiI+PC9wb2x5bGluZT48L3N2Zz4="
+        b64_down = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHBhdGggZD0iTSAzIDYgaCAxMCBsIC01IDYgeiIgZmlsbD0iIzAwRTVGRiIvPjwvc3ZnPg=="
+        b64_up = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHBhdGggZD0iTSAzIDEwIGggMTAgbCAtNSAtNiB6IiBmaWxsPSIjMDBFNUZGIi8+PC9zdmc+"
+
+        # 🚀 主表樣式 (強化 Checkbox 方框)
+        self.setStyleSheet(f"""
+            QTableView {{ background-color: #000; gridline-color: #222; border: none; }}
+            QTableView::item:selected {{ background-color: #111; color: #EEE; }} 
+            QTableView:focus {{ outline: none; }}
+
+            /* 🌟 超清晰 Checkbox 方框設計 */
+            QTableView::indicator {{
+                width: 20px; 
+                height: 20px; 
+                border: 2px solid #666; 
+                border-radius: 4px; 
+                background-color: #1A1A1A;
+                margin-left: 2px;
+            }}
+            QTableView::indicator:hover {{ border: 2px solid #00E5FF; background-color: #222; }}
+            QTableView::indicator:checked {{
+                background-color: #00E5FF; 
+                border: 2px solid #00E5FF; 
+                image: url("{b64_check}");
+            }}
         """)
 
+        self.horizontalHeader().setStyleSheet(f"""
+            QHeaderView::section {{ 
+                background-color: #111; color: #FFF; font-weight: bold; 
+                border: 1px solid #333; padding-left: 4px; padding-right: 18px; 
+            }}
+            QHeaderView::down-arrow {{ width: 14px; height: 14px; subcontrol-position: right center; right: 2px; image: url("{b64_down}"); }}
+            QHeaderView::up-arrow {{ width: 14px; height: 14px; subcontrol-position: right center; right: 2px; image: url("{b64_up}"); }}
+        """)
+
+        # 🚀 2. 建立凍結層
         self.frozen_view = QTableView(self)
         self.init_frozen_view()
 
+        # 事件連動
         self.horizontalHeader().sectionResized.connect(self.update_section_width)
         self.verticalHeader().sectionResized.connect(self.update_section_height)
         self.frozen_view.verticalScrollBar().valueChanged.connect(self.verticalScrollBar().setValue)
         self.verticalScrollBar().valueChanged.connect(self.frozen_view.verticalScrollBar().setValue)
-
-        # 同步排序箭頭動作
         self.horizontalHeader().sortIndicatorChanged.connect(self.sync_sort_indicator_to_frozen)
         self.frozen_view.horizontalHeader().sortIndicatorChanged.connect(self.sync_sort_indicator_to_main)
 
@@ -576,34 +640,30 @@ class FrozenTableView(QTableView):
 
     def init_frozen_view(self):
         self.frozen_view.setModel(self.model())
-        self.frozen_view.verticalHeader().setVisible(False)
-        self.frozen_view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
+        # 🚀 凍結層同樣套用「絕對零寬度」標頭
+        self.frozen_view.setVerticalHeader(ZeroWidthVerticalHeader(self.frozen_view))
+
+        self.frozen_view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.frozen_view.setSortingEnabled(True)
         self.frozen_view.horizontalHeader().setSortIndicatorShown(True)
         self.frozen_view.horizontalHeader().setHighlightSections(False)
         self.frozen_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.frozen_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
 
-        b64_down = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHBhdGggZD0iTSAzIDYgaCAxMCBsIC01IDYgeiIgZmlsbD0iIzAwRTVGRiIvPjwvc3ZnPg=="
-        b64_up = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHBhdGggZD0iTSAzIDEwIGggMTAgbCAtNSAtNiB6IiBmaWxsPSIjMDBFNUZGIi8+PC9zdmc+"
-
+        b64_check = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiMwMDAwMDAiIHN0cm9rZS13aWR0aD0iMyIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cG9seWxpbmUgcG9pbnRzPSIyMCA2IDkgMTcgNCAxMiI+PC9wb2x5bGluZT48L3N2Zz4="
         self.frozen_view.setStyleSheet(f"""
             QTableView {{ background-color: #000; border-right: 2px solid #00E5FF; gridline-color: #222; }}
-            QTableView::item:selected {{ background-color: #111; }}
-            QTableView:focus {{ outline: none; }}
+            QTableView::item:selected {{ background-color: #111; color: #EEE; }}
+            QHeaderView::section {{ background-color: #111; color: #FFF; font-weight: bold; border: 1px solid #333; padding-left: 4px; padding-right: 18px; }}
 
-            QHeaderView::section {{ 
-                background-color: #111; color: #FFF; font-weight: bold; 
-                border: 1px solid #333; padding-left: 4px; padding-right: 18px; 
+            /* 🌟 凍結層超清晰 Checkbox */
+            QTableView::indicator {{
+                width: 20px; height: 20px; border: 2px solid #666; border-radius: 4px; background-color: #1A1A1A; margin-left: 2px;
             }}
-            QHeaderView::down-arrow {{ 
-                width: 14px; height: 14px; subcontrol-position: right center; right: 2px;
-                image: url("{b64_down}"); 
-            }}
-            QHeaderView::up-arrow {{ 
-                width: 14px; height: 14px; subcontrol-position: right center; right: 2px;
-                image: url("{b64_up}"); 
+            QTableView::indicator:hover {{ border: 2px solid #00E5FF; background-color: #222; }}
+            QTableView::indicator:checked {{
+                background-color: #00E5FF; border: 2px solid #00E5FF; image: url("{b64_check}");
             }}
         """)
 
@@ -616,10 +676,7 @@ class FrozenTableView(QTableView):
 
     def update_frozen_columns(self):
         for i in range(self.model().columnCount()):
-            if i < 4:
-                self.frozen_view.setColumnHidden(i, False)
-            else:
-                self.frozen_view.setColumnHidden(i, True)
+            self.frozen_view.setColumnHidden(i, i >= 4)
 
     def update_section_width(self, logicalIndex, oldSize, newSize):
         if logicalIndex < 4:
@@ -630,16 +687,25 @@ class FrozenTableView(QTableView):
         self.frozen_view.setRowHeight(logicalIndex, newSize)
 
     def update_frozen_geometry(self):
+        if not hasattr(self, 'frozen_view') or self.frozen_view is None:
+            return
+
         width = 0
         for i in range(4):
             if not self.isColumnHidden(i):
                 width += self.columnWidth(i)
+
         self.frozen_view.setGeometry(self.frameWidth(), self.frameWidth(),
                                      width, self.viewport().height() + self.horizontalHeader().height())
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.update_frozen_geometry()
+
+    def updateGeometries(self):
+        super().updateGeometries()
+        if hasattr(self, 'frozen_view'):
+            self.update_frozen_geometry()
 
 class StrategyModule(QWidget):
     stock_clicked_signal = pyqtSignal(str)
@@ -778,9 +844,39 @@ class StrategyModule(QWidget):
 
         lbl_ind = QLabel("📂 基本/自選");
         lbl_ind.setProperty("class", "category-label")
+        # === 統一後的下拉選單樣式變數 (確保復用) ===
+        editable_combo_style = """
+                    QComboBox { background: #111; color: #FFF; border: 1px solid #444; padding: 4px; font-size: 14px; }
+                    QComboBox::drop-down { border-left: 1px solid #444; width: 24px; background: #222; }
+                    QComboBox::drop-down:hover { background: #333; }
+                    QComboBox::down-arrow { width: 0px; height: 0px; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 6px solid #00E5FF; }
+                    QComboBox QAbstractItemView { background: #111; color: #FFF; selection-background-color: #00E5FF; selection-color: #000; outline: none; border: 1px solid #444; }
+                """
+        completer_style = """
+                    QListView { background-color: #1A1A1A; color: #00E5FF; border: 1px solid #00E5FF; font-size: 15px; font-weight: bold; }
+                    QListView::item { padding: 8px; background-color: #111; color: #EEE; }
+                    QListView::item:selected { background-color: #0066CC; color: #FFF; }
+                """
+
+        lbl_ind = QLabel("📂 基本/自選 (可打字搜尋)");
+        lbl_ind.setProperty("class", "category-label")
+
+        # 🚀 修正：將 combo_industry 改為可編輯並套用樣式
         self.combo_industry = QComboBox()
-        self.combo_industry.addItem("全部")
-        self.combo_industry.currentIndexChanged.connect(self.apply_filters_debounce)
+        self.combo_industry.setEditable(True)
+        self.combo_industry.setStyleSheet(editable_combo_style)
+        self.combo_industry.lineEdit().setPlaceholderText("選擇產業或自選清單...")
+
+        # 套用智慧搜尋器 (解決卡頓)
+        comp_ind = QCompleter(self.combo_industry.model(), self.combo_industry)
+        comp_ind.setFilterMode(Qt.MatchFlag.MatchContains)
+        comp_ind.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        comp_ind.popup().setStyleSheet(completer_style)
+        self.combo_industry.setCompleter(comp_ind)
+
+        self.combo_industry.activated.connect(self.apply_filters_debounce)
+        # 防止打字按 Enter 時沒反應
+        self.combo_industry.lineEdit().returnPressed.connect(self.apply_filters_debounce)
 
         lbl_con = QLabel("🏷️ 概念題材 (打字自動篩選)");
         lbl_con.setProperty("class", "category-label")
@@ -897,7 +993,7 @@ class StrategyModule(QWidget):
         presets = [
             ("🏦 暗渡陳倉 (法人默默吃貨)", "股價波動極小，但三大法人近一個月偷偷吸籌碼 > 1.5%，且散戶融資退場。"),
             ("🔭 春江水暖 (合約負債爆發)", "不管現在營收好不好，合約負債(未來訂單)季增 > 15%，且本業有現金流入。"),
-            ("🎯 30W 臨門一腳 (極致壓縮)", "布林帶寬壓縮至 6% 以下，長線季線翻揚，且今日量縮至 0.6 倍以下，隨時噴發。"),
+            ("🎯 30W 臨門一腳 (極致壓縮)","中長線打底具備『30W聽牌』型態，且今日日線布林寬度壓縮 < 8%、成交量極度萎縮 < 0.8倍，處於隨時點火發動的窒息量狀態。"),
             ("⚔️ 破底翻黃金坑 (主力洗盤)", "觸發假跌破或甩轎訊號，且近五日融資大減 300 張以上，清洗浮額乾淨。")
         ]
 
@@ -999,6 +1095,8 @@ class StrategyModule(QWidget):
 
         self.table_view.doubleClicked.connect(self.on_table_double_clicked)
         self.table_view.clicked.connect(self.on_table_clicked)
+        self.table_view.frozen_view.doubleClicked.connect(self.on_table_double_clicked)
+        self.table_view.frozen_view.clicked.connect(self.on_table_clicked)
         self.table_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table_view.customContextMenuRequested.connect(self.open_context_menu)
         self.table_view.selectionModel().currentChanged.connect(self.on_current_row_changed)
@@ -1069,10 +1167,33 @@ class StrategyModule(QWidget):
         self.btn_toggle_filters.setText("▼" if self.is_filters_expanded else "▶")
 
     def open_filter_setting(self):
+        # 🚀 修正 Bug：打開設定前，先備份當前畫面上所有的數值設定 (包含劇本自動帶入的數值)
+        current_values = {}
+        for w in self.dynamic_filters:
+            current_values[w.key] = {
+                'min': w.spin_min.value(),
+                'max': w.spin_max.value()
+            }
+
         dlg = FilterSelectionDialog(FULL_FILTER_SPECS, self.active_filter_keys, self)
         if dlg.exec():
+            # 更新要顯示的欄位名單
             self.active_filter_keys = dlg.get_selected_keys()
+
+            # 重新建立 UI (此時所有的滑桿都會變成預設值)
             self.rebuild_filter_ui()
+
+            # 🚀 修正 Bug：將剛剛備份的數值「回填」回去（如果該欄位還在顯示名單中的話）
+            for w in self.dynamic_filters:
+                if w.key in current_values:
+                    w.spin_min.blockSignals(True)
+                    w.spin_max.blockSignals(True)
+                    w.spin_min.setValue(current_values[w.key]['min'])
+                    w.spin_max.setValue(current_values[w.key]['max'])
+                    w.spin_min.blockSignals(False)
+                    w.spin_max.blockSignals(False)
+
+            # 最後套用真實的資料過濾
             self.apply_filters_real()
 
     def open_column_selector(self):
@@ -1159,8 +1280,14 @@ class StrategyModule(QWidget):
         self.combo_industry.blockSignals(True)
         self.combo_industry.clear()
         self.combo_industry.addItems(items)
-        if curr in items: self.combo_industry.setCurrentText(curr)
+
+        # 🚀 重新套用搜尋器，確保項目更新後打字搜尋依然流暢
+        if self.combo_industry.completer():
+            self.combo_industry.completer().setModel(self.combo_industry.model())
+
+        if curr: self.combo_industry.setCurrentText(curr)
         self.combo_industry.blockSignals(False)
+
 
         # 👇 新增：動態產生概念股下拉選單 👇
         concept_items = ["全部"]
@@ -1224,9 +1351,15 @@ class StrategyModule(QWidget):
             item = layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                # 🚀 關鍵修復：必須先立即隱藏並解除父節點，再進行記憶體刪除
+                # 否則新的元件加進來時，舊的還在畫面上，就會全部擠成一團並引發嚴重卡頓！
+                widget.hide()
+                widget.setParent(None)
                 widget.deleteLater()
             else:
-                self.clear_layout(item.layout())
+                sub_layout = item.layout()
+                if sub_layout:
+                    self.clear_layout(sub_layout)
 
     def _update_tag_checkboxes(self):
         self.clear_layout(self.tag_layout)
@@ -1270,11 +1403,13 @@ class StrategyModule(QWidget):
             rules = {"漲幅20d": {"min": -5, "max": 8}, "bb_width": {"max": 12}, "legal_diff_20d": {"min": 1.5}}
         elif "春江水暖" in preset_name:
             rules = {"fund_contract_qoq": {"min": 15}, "fund_op_cash_flow": {"min": 0}}
-        elif "30W 臨門一腳" in preset_name:
-            rules = {"bb_width": {"max": 6}, "量比": {"max": 0.6}}
         elif "破底翻黃金坑" in preset_name:
             rules = {"m_sum_5d": {"max": -300}}
             target_tags = ["假跌破", "30W甩轎"]
+        elif "30W 臨門一腳" in preset_name:
+            # 只要布林帶壓縮 < 8，且標籤命中「聽牌」即可
+            rules = {"bb_width": {"max": 8}, "量比": {"max": 0.8}}
+            target_tags = ["30W臨門一腳"]
 
         # 🚀 確保劇本需要的欄位被加入顯示名單中
         for k in rules.keys():
@@ -1300,7 +1435,6 @@ class StrategyModule(QWidget):
 
     def reset_filters(self):
         """完全清空篩選條件，回復預設"""
-        # 🚀 修正：回復標籤文字
         self.lbl_active_preset.setText("當前狀態：預設過濾")
 
         self.combo_industry.setCurrentIndex(0)
@@ -1308,13 +1442,16 @@ class StrategyModule(QWidget):
         self.combo_dj_ind.setCurrentIndex(0)
         self.txt_search.clear()
 
-        # 🚀 修正：回到預設的 6 組欄位
+        # 回到預設的 6 組欄位
         self.active_filter_keys = DEFAULT_ACTIVE_FILTERS.copy()
+
+        # 🚀 關鍵修復：這裡會建立全新的預設元件，不需要再多跑一圈 w.reset() 觸發多餘訊號
         self.rebuild_filter_ui()
 
-        for w in self.dynamic_filters: w.reset()
         for chk in self.chk_tags.values(): chk.setChecked(False)
         self.rb_and.setChecked(True)
+
+        # 統一執行一次實質過濾
         self.apply_filters_real()
 
     def apply_filters_debounce(self):
@@ -1325,7 +1462,10 @@ class StrategyModule(QWidget):
 
     def apply_filters_real(self):
         if self.full_df.empty: return
-        self.setUpdatesEnabled(False)
+        # 🚀 優化 2：讓系統有時間處理「旋轉等待」或「按鈕點擊」的繪製
+        QApplication.processEvents()
+
+        self.setUpdatesEnabled(False)  # 暫停畫面重繪
         try:
             df = self.full_df.copy()
             df['insight'] = ''
@@ -1380,46 +1520,29 @@ class StrategyModule(QWidget):
             self.lbl_status.setText(f"篩選結果: {len(self.display_df)} 檔")
             self.update_ai_command_bar()
 
-            QTimer.singleShot(1, self.adjust_table_layout)
+            # 🚀 優化 3：僅在結果數量發生變化時，才考慮調整寬度，節省佈局計算成本
+            if not hasattr(self, '_last_count') or self._last_count != len(self.display_df):
+                QTimer.singleShot(1, self.adjust_table_layout)
+                self._last_count = len(self.display_df)
 
         finally:
             self.setUpdatesEnabled(True)
 
     def adjust_table_layout(self):
-        """校正表格欄位寬度與樣式，同步更新主表頭箭頭"""
+        """處理表格寬度"""
         if not hasattr(self, 'table_view'): return
 
-        header = self.table_view.horizontalHeader()
+        # 🚀 稍微加寬，配合 38px 欄高更順眼
+        self.table_view.setColumnWidth(0, 45)  # 選
+        self.table_view.setColumnWidth(1, 45)  # 詳
+        self.table_view.setColumnWidth(2, 85)  # 代號
+        self.table_view.setColumnWidth(3, 115) # 名稱
 
-        b64_down = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHBhdGggZD0iTSAzIDYgaCAxMCBsIC01IDYgeiIgZmlsbD0iIzAwRTVGRiIvPjwvc3ZnPg=="
-        b64_up = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHBhdGggZD0iTSAzIDEwIGggMTAgbCAtNSAtNiB6IiBmaWxsPSIjMDBFNUZGIi8+PC9zdmc+"
-
-        header.setStyleSheet(f"""
-            QHeaderView::section {{ 
-                background-color: #111; color: #FFF; font-weight: bold; 
-                border: 1px solid #333; padding-left: 4px; padding-right: 18px; 
-            }}
-            QHeaderView::down-arrow {{ 
-                width: 14px; height: 14px; subcontrol-position: right center; right: 2px;
-                image: url("{b64_down}"); 
-            }}
-            QHeaderView::up-arrow {{ 
-                width: 14px; height: 14px; subcontrol-position: right center; right: 2px;
-                image: url("{b64_up}"); 
-            }}
-        """)
-
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-
-        # 🚀 強制確保最前面 4 欄 (選, 詳, 代號, 名稱) 的完美寬度
-        self.table_view.setColumnWidth(0, 40)
-        self.table_view.setColumnWidth(1, 40)
-        self.table_view.setColumnWidth(2, 75)
-        self.table_view.setColumnWidth(3, 110)
-
+        # 僅針對特定欄位進行寬度設定
         for i, col in enumerate(self.model.visible_cols):
             if col == '強勢特徵':
                 self.table_view.setColumnWidth(i + 1, 220)
+                break
 
         if hasattr(self.table_view, 'update_frozen_geometry'):
             self.table_view.update_frozen_geometry()
@@ -1512,14 +1635,28 @@ class StrategyModule(QWidget):
     def select_all_rows(self):
         """一鍵全選當前畫面上篩選出的所有股票"""
         if self.display_df.empty: return
-        # 將畫面上所有的 sid 加入 set
         self.model.checked_sids = set(self.display_df['sid'].astype(str))
 
-        # 觸發畫面更新 (僅更新第 0 欄)
         top_left = self.model.index(0, 0)
         bottom_right = self.model.index(self.model.rowCount() - 1, 0)
         self.model.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.CheckStateRole])
         self.update_ai_command_bar()
+
+        # 🔥 加上這行防禦：全選後強制校準凍結層佈局
+        if hasattr(self, 'table_view'): self.table_view.update_frozen_geometry()
+
+    def deselect_all_rows(self):
+        """一鍵清除所有打勾狀態"""
+        self.model.checked_sids.clear()
+
+        if self.display_df.empty: return
+        top_left = self.model.index(0, 0)
+        bottom_right = self.model.index(self.model.rowCount() - 1, 0)
+        self.model.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.CheckStateRole])
+        self.update_ai_command_bar()
+
+        # 🔥 加上這行防禦：全不選後強制校準凍結層佈局
+        if hasattr(self, 'table_view'): self.table_view.update_frozen_geometry()
 
     def deselect_all_rows(self):
         """一鍵清除所有打勾狀態"""
