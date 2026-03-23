@@ -50,7 +50,8 @@ def calculate_advanced_factors(df, sid=None):
         'str_30w_week_offset': -1, 'str_st_week_offset': -1,
         'str_break_30w': 0, 'str_uptrend': 0, 'str_high_60': 0, 'str_high_30': 0,
         'str_ma55_sup': 0, 'str_ma200_sup': 0, 'str_vix_rev': 0,
-        'str_30w_standby': 0  # 👈 [新增這行] 預設為 0
+        'str_30w_standby': 0 , # 👈 [新增這行] 預設為 0
+        '今日成交股數': 0.0
     }
 
     col_map = {k: v for k, v in
@@ -67,6 +68,7 @@ def calculate_advanced_factors(df, sid=None):
         if 'Volume' in df.columns:
             vol_mean = df['Volume'].tail(5).mean()
             factors['量比'] = round(df['Volume'].iloc[-1] / vol_mean, 2) if vol_mean > 0 else 0
+            factors['今日成交股數'] = float(df['Volume'].iloc[-1])  # 取得最新絕對成交股數
 
     if len(df) >= 6: factors['漲幅5d'] = round(df['Close'].pct_change(5).iloc[-1] * 100, 2)
 
@@ -167,10 +169,12 @@ def calculate_json_factors(sid_str):
         'margin_diff_5d': 0.0, 'legal_diff_5d': 0.0,
         'margin_diff_20d': 0.0, 'legal_diff_20d': 0.0,
         't_net_today': 0.0, 't_sum_5d': 0.0, 't_sum_10d': 0.0, 't_sum_20d': 0.0, 't_streak': 0, 't_sell_days_10': 0,
+        't_buy_days_5': 0,
         'f_net_today': 0.0, 'f_sum_5d': 0.0, 'f_sum_10d': 0.0, 'f_sum_20d': 0.0, 'f_streak': 0, 'f_buy_days_10': 0,
         'f_sum_3d': 0.0,
         'm_net_today': 0.0, 'm_sum_5d': 0.0, 'm_sum_10d': 0.0, 'm_sum_20d': 0.0, 'is_tu_yang': 0,
-        'fund_contract_qoq': 0.0, 'fund_inventory_qoq': 0.0, 'fund_op_cash_flow': 0.0
+        'fund_contract_qoq': 0.0, 'fund_inventory_qoq': 0.0, 'fund_op_cash_flow': 0.0,
+        'issued_shares': 0.0, 'invest_trust_hold_pct': 0.0
     }
 
     if not json_path.exists(): return res
@@ -263,11 +267,18 @@ def calculate_json_factors(sid_str):
         res['f_sum_3d'] = get_sum(df_inst, d_3, 'foreign_buy_sell')
 
         res['t_streak'], res['f_streak'] = get_streak(df_inst, 'invest_trust_buy_sell'), get_streak(df_inst, 'foreign_buy_sell')
+        # 取最新一日的發行張數與投信持股比例，並自行計算百分比
+        if not df_inst.empty:
+            iss = float(df_inst.iloc[0].get('issued_shares', 0) or 0)
+            hold = float(df_inst.iloc[0].get('invest_trust_hold', 0) or 0)
+            res['issued_shares'] = iss
+            res['invest_trust_hold_pct'] = round((hold / iss * 100), 2) if iss > 0 else 0.0
 
         inst_10d = df_inst.reindex(d_10).fillna(0)
+        inst_5d = df_inst.reindex(d_5).fillna(0)  # 👈 抓取近5日區間
         res['f_buy_days_10'] = (inst_10d['foreign_buy_sell'] > 0).sum()
         res['t_sell_days_10'] = (inst_10d['invest_trust_buy_sell'] < 0).sum()
-
+        res['t_buy_days_5'] = int((inst_5d['invest_trust_buy_sell'] > 0).sum())  # 👈 計算投信近5日買超天數
         cond_consistency = (res['f_buy_days_10'] >= 7) and (res['t_sell_days_10'] >= 7)
         res['is_tu_yang'] = 1 if (cond_consistency and res['f_sum_10d'] > 0 and res['t_sum_10d'] < 0 and res['f_sum_10d'] > abs(res['t_sum_10d']) and res['f_sum_3d'] > 0) else 0
 
@@ -287,11 +298,14 @@ def calculate_json_factors(sid_str):
 
     return res
 
+
 def get_strong_tags(row):
     tags = []
     st_week = row.get('str_st_week_offset', -1)
-    if st_week == 0: tags.append('ST轉多(本週)')
-    elif 0 < st_week <= 4: tags.append(f'ST轉多({int(st_week)}週前)')
+    if st_week == 0:
+        tags.append('ST轉多(本週)')
+    elif 0 < st_week <= 4:
+        tags.append(f'ST轉多({int(st_week)}週前)')
 
     if row.get('str_break_30w', 0) == 1: tags.append('突破30週')
     if row.get('str_high_60', 0) == 1: tags.append('創季高')
@@ -301,18 +315,57 @@ def get_strong_tags(row):
     if row.get('RS強度', 0) > 90: tags.append('超強勢')
 
     bb_width = row.get('bb_width', 100)
-    if bb_width < 5.0: tags.append('極度壓縮')
-    elif bb_width < 8.0: tags.append('波動壓縮')
+    if bb_width < 5.0:
+        tags.append('極度壓縮')
+    elif bb_width < 8.0:
+        tags.append('波動壓縮')
 
     if row.get('str_consol_5', 0) == 1: tags.append('盤整5日')
     if row.get('str_consol_10', 0) == 1: tags.append('盤整10日')
     if row.get('str_consol_20', 0) == 1: tags.append('盤整20日')
     if row.get('str_consol_60', 0) == 1: tags.append('盤整60日')
 
-    if row.get('str_ilss_sweep', 0) == 1 and row.get('rev_cum_yoy', 0) > 0 and (row.get('m_net_today', 0) < 0 or row.get('m_sum_5d', 0) < 0): tags.append('主力掃單(ILSS)')
-    if row.get('t_streak', 0) >= 3: tags.append('投信認養')
+    if row.get('str_ilss_sweep', 0) == 1 and row.get('rev_cum_yoy', 0) > 0 and (
+            row.get('m_net_today', 0) < 0 or row.get('m_sum_5d', 0) < 0): tags.append('主力掃單(ILSS)')
+
+    # === 投信認養 (近5日買3日版，嚴格濾網) ===
+    iss_shares = row.get('issued_shares', 0)
+    it_pct = row.get('invest_trust_hold_pct', 0)
+    t_net = row.get('t_net_today', 0)
+    vol = row.get('今日成交股數', 0)
+    t_buy_5d = row.get('t_buy_days_5', 0)
+
+    c1 = (0 < iss_shares < 500000)
+    c2 = (1.0 <= it_pct <= 8.0)
+    c3 = (t_buy_5d >= 3 and t_net > 0)
+    c4 = (t_net * 1000 / vol * 100 > 10.0) if vol > 0 else False
+
+    if c1 and c2 and c3 and c4:
+        tags.append('投信認養')
+    # ===============================
+
     if row.get('m_net_today', 0) <= -200: tags.append('散戶退場')
-    if row.get('is_tu_yang', 0) == 1: tags.append('土洋對作')
+
+    # === 終極版：土洋對作 (10日與20日雙雷達波段換手 + 5日價格點火) ===
+    t_10d, f_10d = row.get('t_sum_10d', 0), row.get('f_sum_10d', 0)
+    t_20d, f_20d = row.get('t_sum_20d', 0), row.get('f_sum_20d', 0)
+    pct_5d = row.get('漲幅5d', 0)
+
+    # 判定投信接刀成功 (內資軋外資)：近10日或近20日，投信買盤吃掉外資賣壓 30% 以上
+    cond_t_win_10 = (t_10d > 0 and f_10d < 0 and t_10d >= abs(f_10d) * 0.3)
+    cond_t_win_20 = (t_20d > 0 and f_20d < 0 and t_20d >= abs(f_20d) * 0.3)
+
+    if (cond_t_win_10 or cond_t_win_20) and pct_5d > 0:
+        tags.append('土洋對作(投勝)')
+
+    # 判定外資掃貨成功 (外資軋內資)：近10日或近20日，外資買盤吃掉投信賣壓 30% 以上
+    cond_f_win_10 = (f_10d > 0 and t_10d < 0 and f_10d >= abs(t_10d) * 0.3)
+    cond_f_win_20 = (f_20d > 0 and t_20d < 0 and f_20d >= abs(t_20d) * 0.3)
+
+    if (cond_f_win_10 or cond_f_win_20) and pct_5d > 0:
+        tags.append('土洋對作(外勝)')
+    # ================================================
+
     if row.get('legal_diff_20d', 0) > 1.5 and row.get('t_net_today', 0) > 0: tags.append('波段吸籌發動')
 
     offset = row.get('str_30w_week_offset', -1)
@@ -324,6 +377,7 @@ def get_strong_tags(row):
     if row.get('str_ma200_sup', 0) == 1: tags.append('回測年線')
     if row.get('str_vix_rev', 0) == 1: tags.append('Vix反轉')
     if row.get('str_30w_standby', 0) == 1: tags.append('30W臨門一腳')
+
     return ','.join(tags)
 
 def main():

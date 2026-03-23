@@ -48,6 +48,9 @@ def to_shares_round(val):
 # ==========================================
 # 核心網路爬蟲與解析
 # ==========================================
+# ==========================================
+# 核心網路爬蟲與解析
+# ==========================================
 class TaiwanStockDataFetcher:
     def __init__(self, target_date):
         self.date = target_date
@@ -77,6 +80,14 @@ class TaiwanStockDataFetcher:
         except:
             return None
 
+    def _extract_tpex_data(self, j):
+        """🛡️ 萬用 JSON 解析：解決櫃買中心 API 格式不統一的歷史共業"""
+        if not j: return []
+        if 'aaData' in j: return j['aaData']
+        if 'tables' in j and len(j['tables']) > 0 and 'data' in j['tables'][0]: return j['tables'][0]['data']
+        if 'data' in j: return j['data']
+        return []
+
     def fetch_inst(self):
         records = []
         lines = self._get_csv_lines(
@@ -89,16 +100,18 @@ class TaiwanStockDataFetcher:
                 d = to_shares_round(clean_num(cols[11]))
                 records.append(
                     {'sid': cols[0], 'f_buy_sell': f, 't_buy_sell': t, 'd_buy_sell': d, 'total_buy_sell': f + t + d})
+
         j = self._get_json_data(
             f"https://www.tpex.org.tw/web/stock/3insti/daily_trade/3itrade_hedge_result.php?l=zh-tw&se=EW&t=D&d={self.tpex_date}&o=json")
-        if j and j.get('tables'):
-            for row in j['tables'][0]['data']:
-                if len(row) >= 24 and str(row[0]).isdigit():
+        for row in self._extract_tpex_data(j):
+            if len(row) >= 24:
+                sid = str(row[0]).strip()
+                if sid.isdigit() and len(sid) >= 4:
                     f = to_shares_round(clean_num(row[10]))
                     t = to_shares_round(clean_num(row[13]))
                     d = to_shares_round(clean_num(row[22]))
-                    records.append({'sid': str(row[0]), 'f_buy_sell': f, 't_buy_sell': t, 'd_buy_sell': d,
-                                    'total_buy_sell': f + t + d})
+                    records.append(
+                        {'sid': sid, 'f_buy_sell': f, 't_buy_sell': t, 'd_buy_sell': d, 'total_buy_sell': f + t + d})
         return pd.DataFrame(records).set_index('sid') if records else pd.DataFrame()
 
     def fetch_foreign_hold(self):
@@ -110,12 +123,13 @@ class TaiwanStockDataFetcher:
             if len(cols) >= 10 and cols[0].isdigit():
                 records.append({'sid': cols[0], 'issued_shares': to_shares_round(clean_num(cols[3])),
                                 'f_hold': to_shares_round(clean_num(cols[5])), 'f_hold_pct': clean_num(cols[7])})
+
         j = self._get_json_data(
             f"https://www.tpex.org.tw/web/stock/3insti/qfii/qfii_result.php?l=zh-tw&d={self.tpex_date}&o=json")
-        if j and j.get('tables'):
-            for row in j['tables'][0]['data']:
-                sid = str(row[0]) if str(row[0]).isdigit() else str(row[1])
-                if sid.isdigit():
+        for row in self._extract_tpex_data(j):
+            if len(row) >= 10:
+                sid = str(row[1]).strip()
+                if sid.isdigit() and len(sid) >= 4:
                     records.append({'sid': sid, 'issued_shares': to_shares_round(clean_num(row[3])),
                                     'f_hold': to_shares_round(clean_num(row[5])), 'f_hold_pct': clean_num(row[7])})
         return pd.DataFrame(records).set_index('sid') if records else pd.DataFrame()
@@ -138,14 +152,16 @@ class TaiwanStockDataFetcher:
                     'short_balance': clean_num(cols[12]), 'short_change': clean_num(cols[12]) - clean_num(cols[11]),
                     'offset': clean_num(cols[14])
                 })
+
         j = self._get_json_data(
             f"https://www.tpex.org.tw/web/stock/margin_trading/margin_balance/margin_bal_result.php?l=zh-tw&d={self.tpex_date}&o=json")
-        if j and j.get('tables'):
-            for row in j['tables'][0]['data']:
-                if len(row) >= 19 and str(row[0]).isdigit():
+        for row in self._extract_tpex_data(j):
+            if len(row) >= 19:
+                sid = str(row[0]).strip()
+                if sid.isdigit() and len(sid) >= 4:
                     bal, limit = clean_num(row[6]), clean_num(row[9])
                     records.append({
-                        'sid': str(row[0]), 'fin_buy': clean_num(row[3]), 'fin_sell': clean_num(row[4]),
+                        'sid': sid, 'fin_buy': clean_num(row[3]), 'fin_sell': clean_num(row[4]),
                         'fin_repay': clean_num(row[5]),
                         'fin_balance': bal, 'fin_change': bal - clean_num(row[2]), 'fin_limit': limit,
                         'fin_usage': calc_pct(bal, limit),
@@ -271,7 +287,12 @@ def run_for_date(target_date, mode, target_stocks):
 
     if mode in ['all', 'inst']:
         df_i, df_f = fetcher.fetch_inst(), fetcher.fetch_foreign_hold()
-        if not df_i.empty: df_inst = df_i.join(df_f, how='left').fillna(0)
+
+        # 🛡️ 關鍵修復：改用 Outer Join (pd.concat)，任一邊有資料絕對保留！
+        if not df_i.empty or not df_f.empty:
+            df_inst = pd.concat([df_i, df_f], axis=1).fillna(0)
+        else:
+            df_inst = pd.DataFrame()
 
     if mode in ['all', 'margin']:
         df_margin = fetcher.fetch_margin()

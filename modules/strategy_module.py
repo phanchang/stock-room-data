@@ -154,9 +154,9 @@ DEFAULT_ACTIVE_FILTERS = [
 TAG_CATEGORIES = {
     "📈 趨勢與突破": ["ST轉多", "突破30週", "創季高", "創月高", "強勢多頭", "波段黑馬", "超強勢"],
     "📉 壓縮與整理": ["極度壓縮", "波動壓縮", "盤整5日", "盤整10日", "盤整20日", "盤整60日"],
-    "💰 籌碼與主力": ["主力掃單(ILSS)", "投信認養", "散戶退場", "土洋對作"],
-    "⚠️ 特殊型態": ["30W黏貼後突破", "30W甩轎", "假跌破", "回測季線", "回測年線", "Vix反轉"],
-    "⚠️ 特殊型態": ["30W臨門一腳", "30W黏貼後突破", "30W甩轎", "假跌破", "回測季線", "回測年線", "Vix反轉"]}
+    "💰 籌碼與主力": ["主力掃單(ILSS)", "投信認養", "散戶退場", "土洋對作(投勝)", "土洋對作(外勝)"],
+    "⚠️ 特殊型態": ["30W臨門一腳", "30W黏貼後突破", "30W甩轎", "假跌破", "回測季線", "回測年線", "Vix反轉"]
+}
 
 # 🔥 補齊所有標籤的 Tooltip
 TAG_TOOLTIPS = {
@@ -167,7 +167,8 @@ TAG_TOOLTIPS = {
     '強勢多頭': '均線呈現完美多頭排列 (MA5 > 10 > 20 > 60)',
     '波段黑馬': '近 60 日累積漲幅已經超過 30%',
     '超強勢': 'RS 強度大於 90，屬於全市場前 10% 的強勢股',
-    '30W臨門一腳': '【聽牌】30W均線走平或向上，股價在均線 -9%~+8% 內(一根漲停可站回)且近週漲幅未達10%。具備近4週極致收斂或甩轎未逾8週的準備型態',    '30W黏貼後突破': 'MA30 走平且股價在均線附近震盪沉澱後，首度帶量突破起漲',
+    '30W臨門一腳': '【聽牌】30W均線走平或向上，股價在均線 -9%~+8% 內(一根漲停可站回)且近週漲幅未達10%。具備近4週極致收斂或甩轎未逾8週的準備型態',
+    '30W黏貼後突破': 'MA30 走平且股價在均線附近震盪沉澱後，首度帶量突破起漲',
     '極度壓縮': '布林通道寬度小於 5%，呈現極致的籌碼沉澱與無波動狀態',
     '波動壓縮': '布林通道寬度小於 8%，波動率正在收斂',
     '盤整5日': '布林寬度近 5 日皆處於收斂狀態',
@@ -175,9 +176,10 @@ TAG_TOOLTIPS = {
     '盤整20日': '布林寬度近 20 日皆處於收斂狀態',
     '盤整60日': '布林寬度長達 60 日皆處於收斂狀態 (大底成型)',
     '主力掃單(ILSS)': '[嚴格] MA200上 + 假跌破掃單 + 爆量站回 + 營收成長 + 融資退場',
-    '投信認養': '投信連續買超天數達到 3 天以上',
+    '投信認養': '[嚴格] 股本<50萬張 + 持股1~8% + 5日內買超3日 + 單日買盤佔成交量>10%',
     '散戶退場': '融資今日單日大減超過 200 張',
-    '土洋對作': '投信與外資買賣方向相反 (通常指投信買、外資賣的籌碼換手)',
+    '土洋對作(投勝)': '外資近10日或20日賣超，投信波段承接(達賣壓30%以上)，且近5日股價已點火上漲',
+    '土洋對作(外勝)': '投信近10日或20日賣超，外資波段承接(達賣壓30%以上)，且近5日股價已點火上漲',
     '30W甩轎': 'MA30 趨勢向上，股價回測跌破均線後，在 10 週內迅速站回',
     '假跌破': '股價昨日跌破月線(MA20)，今日立刻反彈站回月線之上',
     '回測季線': '股價回測並防守住季線 (MA60) 支撐',
@@ -1437,21 +1439,33 @@ class StrategyModule(QWidget):
         """完全清空篩選條件，回復預設"""
         self.lbl_active_preset.setText("當前狀態：預設過濾")
 
-        self.combo_industry.setCurrentIndex(0)
-        self.combo_concept.setCurrentIndex(0)
-        self.combo_dj_ind.setCurrentIndex(0)
+        # 🚀 效能優化 1：暫停下拉選單與搜尋框的訊號，避免清空時觸發不必要的過濾
+        for combo in [self.combo_industry, self.combo_concept, self.combo_dj_ind]:
+            combo.blockSignals(True)
+            combo.setCurrentIndex(0)
+            combo.blockSignals(False)
+
+        self.txt_search.blockSignals(True)
         self.txt_search.clear()
+        self.txt_search.blockSignals(False)
 
         # 回到預設的 6 組欄位
         self.active_filter_keys = DEFAULT_ACTIVE_FILTERS.copy()
 
-        # 🚀 關鍵修復：這裡會建立全新的預設元件，不需要再多跑一圈 w.reset() 觸發多餘訊號
+        # 重建數值 UI
         self.rebuild_filter_ui()
 
-        for chk in self.chk_tags.values(): chk.setChecked(False)
-        self.rb_and.setChecked(True)
+        # 🚀 效能優化 2 (關鍵)：阻擋 Checkbox 訊號，避免瞬間發出幾十次重新運算事件導致卡頓 6~8 秒
+        for chk in self.chk_tags.values():
+            chk.blockSignals(True)
+            chk.setChecked(False)
+            chk.blockSignals(False)
 
-        # 統一執行一次實質過濾
+        self.rb_and.blockSignals(True)
+        self.rb_and.setChecked(True)
+        self.rb_and.blockSignals(False)
+
+        # 統一由這裡乾淨俐落地執行一次實質過濾
         self.apply_filters_real()
 
     def apply_filters_debounce(self):
@@ -1477,13 +1491,26 @@ class StrategyModule(QWidget):
                        df['name'].str.contains(search_txt, case=False, na=False)
                 df = df[mask]
 
-            # B. 產業/自選
+            # B. 產業/自選/概念/細產業 (🚀 修復下拉選單無反應問題)
             ind = self.combo_industry.currentText()
             if ind.startswith("[自選] "):
                 group_name = ind.replace("[自選] ", "")
                 df = df[df['sid'].isin(self.watchlist_data.get(group_name, []))]
-            elif ind != "全部":
+            elif ind != "全部" and ind != "":
                 df = df[df['industry'] == ind]
+
+            concept = self.combo_concept.currentText().strip()
+            if concept and concept != "全部" and 'sub_concepts' in df.columns:
+                # 確保欄位不是 NaN，並且進行字串模糊比對
+                df = df[df['sub_concepts'].fillna("").str.contains(concept, regex=False)]
+                print(f"👉 [驗證] 套用概念題材 '{concept}'，剩餘檔數: {len(df)}")
+
+            dj_ind = self.combo_dj_ind.currentText().strip()
+            if dj_ind and dj_ind != "全部" and 'dj_sub_ind' in df.columns:
+                # 下拉清單格式為 "[主業] 細產業"，我們提取出 "細產業" 來做比對
+                sub_ind_target = dj_ind.split("] ")[-1] if "] " in dj_ind else dj_ind
+                df = df[df['dj_sub_ind'].fillna("").str.contains(sub_ind_target, regex=False)]
+                print(f"👉 [驗證] 套用細產業 '{sub_ind_target}'，剩餘檔數: {len(df)}")
 
             # C. 數值過濾 🚀 (核心修正：僅過濾「有被更動」的滑桿)
             is_numeric_dirty = False
@@ -1496,13 +1523,16 @@ class StrategyModule(QWidget):
             selected_tags = [t for t, chk in self.chk_tags.items() if chk.isChecked()]
             if selected_tags and '強勢特徵' in df.columns:
                 df['強勢特徵'] = df['強勢特徵'].fillna("")
+                import re  # 確保有載入正則套件
                 if self.rb_and.isChecked():
-                    for tag in selected_tags: df = df[df['強勢特徵'].str.contains(tag, na=False)]
+                    # 加入 regex=False，強迫 Pandas 當作純文字比對，忽略括號的特殊意義
+                    for tag in selected_tags:
+                        df = df[df['強勢特徵'].str.contains(tag, regex=False, na=False)]
                 else:
-                    pattern = "|".join([str(t) for t in selected_tags])
+                    # 在 OR 聯集模式下，使用 re.escape 把括號跳脫 (變成 \(\))
+                    pattern = "|".join([re.escape(str(t)) for t in selected_tags])
                     df = df[df['強勢特徵'].str.contains(pattern, regex=True, na=False)]
 
-            # 整理欄位顯示
             # 整理欄位顯示 (🚀 關鍵修復：強制將 詳、代號、名稱 永遠鎖死在最前面)
             visible_cols = []
             if FULL_COLUMN_SPECS.get('insight', {}).get('show', True): visible_cols.append('insight')
