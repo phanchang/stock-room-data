@@ -39,7 +39,6 @@ class RevenueWorker(QThread):
 
 
 class RevenueModule(QWidget):
-    # 訊號通常用於內部通知，這裡暫時保留
     stock_changed = pyqtSignal(str)
 
     def __init__(self, parent=None):
@@ -58,40 +57,33 @@ class RevenueModule(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # 1. Header (標準化標題列)
+        # 1. Header (修改為兩層架構以容納更多資訊)
         header_widget = QWidget()
-        header_widget.setFixedHeight(45)  # 稍微加高以容納大字體
+        header_widget.setFixedHeight(65)  # 👑 加高以容納兩行文字
         header_widget.setStyleSheet("background-color: #050505; border-bottom: 1px solid #333;")
 
-        header_layout = QHBoxLayout(header_widget)
-        header_layout.setContentsMargins(10, 0, 10, 0)
-        header_layout.setSpacing(15)
+        header_vbox = QVBoxLayout(header_widget)
+        header_vbox.setContentsMargins(10, 5, 10, 5)
+        header_vbox.setSpacing(5)
 
-        # 🔥 [Item 1] 股票資訊 (代號+名稱)
+        row1_layout = QHBoxLayout()
+        row2_layout = QHBoxLayout()
+
+        # 🔥 [Row 1] 股票資訊與標題
         self.lbl_stock_info = QLabel("請選擇股票")
-        self.lbl_stock_info.setStyleSheet(
-            "color: #FFFF00; font-weight: bold; font-size: 18px; font-family: 'Microsoft JhengHei';")
+        self.lbl_stock_info.setStyleSheet("color: #FFFF00; font-weight: bold; font-size: 18px;")
 
-        # 分隔線
         sep = QLabel("|")
         sep.setStyleSheet("color: #444; font-size: 16px;")
 
-        # 模組標題
         title = QLabel("月營收成長趨勢")
         title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 16px;")
 
-        # 滑鼠互動資訊
-        self.info_label = QLabel("移動滑鼠查看數據...")
-        self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 13px; color: #888;")
-        self.info_label.setFixedWidth(350)  # 給予固定寬度避免抖動
-
-        # 🔥 [Item 5] 資料日期標籤
         self.lbl_update_date = QLabel("")
         self.lbl_update_date.setStyleSheet(
             "color: #FF8800; font-size: 12px; border: 1px solid #555; padding: 2px 4px; border-radius: 3px;")
         self.lbl_update_date.setVisible(False)
 
-        # 🔥 [Item 6] 切換視圖按鈕
         self.btn_toggle_chart = QPushButton("切換視圖")
         self.btn_toggle_chart.setFixedSize(80, 26)
         self.btn_toggle_chart.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -101,29 +93,40 @@ class RevenueModule(QWidget):
         """)
         self.btn_toggle_chart.clicked.connect(self.toggle_chart_visibility)
 
-        # 依序加入 Layout
-        header_layout.addWidget(self.lbl_stock_info)
-        header_layout.addWidget(sep)
-        header_layout.addWidget(title)
-        header_layout.addWidget(self.info_label)
-        header_layout.addStretch()  # 彈簧
-        header_layout.addWidget(self.lbl_update_date)
-        header_layout.addWidget(self.btn_toggle_chart)
+        row1_layout.addWidget(self.lbl_stock_info)
+        row1_layout.addWidget(sep)
+        row1_layout.addWidget(title)
+        row1_layout.addStretch()
+        row1_layout.addWidget(self.lbl_update_date)
+        row1_layout.addWidget(self.btn_toggle_chart)
 
+        # 🔥 [Row 2] 滑鼠浮動數據 與 👑 新增的固定累計數據
+        self.info_label = QLabel("移動滑鼠查看數據...")
+        self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 13px; color: #888;")
+        self.info_label.setFixedWidth(350)
+
+        # 👑 新增：顯示最新一期累計資料的 Label
+        self.lbl_cumulative_info = QLabel("")
+        self.lbl_cumulative_info.setStyleSheet("font-family: 'Consolas', 'Microsoft JhengHei'; font-size: 14px;")
+
+        row2_layout.addWidget(self.info_label)
+        row2_layout.addStretch()
+        row2_layout.addWidget(self.lbl_cumulative_info)  # 放在右側
+
+        header_vbox.addLayout(row1_layout)
+        header_vbox.addLayout(row2_layout)
         layout.addWidget(header_widget)
 
         # 2. Canvas (圖表)
         self.fig = Figure(facecolor='#000000')
         self.canvas = FigureCanvas(self.fig)
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-
         layout.addWidget(self.canvas, stretch=6)
 
         # 3. Table (表格)
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["月份", "營收(億)", "單月YoY", "累月YoY"])
-        # 表格樣式優化
         self.table.setStyleSheet("""
             QTableWidget { background-color: #000000; gridline-color: #444; color: #FFF; border: none; font-size: 15px; font-family: 'Consolas', 'Microsoft JhengHei'; }
             QHeaderView::section { background-color: #1A1A1A; color: #FFFFFF; font-weight: bold; height: 32px; border: 1px solid #333; font-size: 13px; }
@@ -136,10 +139,8 @@ class RevenueModule(QWidget):
         self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
 
     def toggle_chart_visibility(self):
-        """ 切換圖表顯示/隱藏，最大化表格空間 """
         is_visible = self.canvas.isVisible()
         self.canvas.setVisible(not is_visible)
-
         if is_visible:
             self.btn_toggle_chart.setText("顯示圖表")
             self.btn_toggle_chart.setStyleSheet("background: #004444; color: white; border: 1px solid #00E5FF;")
@@ -147,39 +148,25 @@ class RevenueModule(QWidget):
             self.btn_toggle_chart.setText("隱藏圖表")
             self.btn_toggle_chart.setStyleSheet("background: #333; color: #CCC; border: 1px solid #555;")
 
-    # 🔥 [關鍵修正] 接收 stock_name 參數
     def load_revenue_data(self, stock_id, stock_name=""):
-        # 1. 緩存機制：如果股票跟上次一樣且資料已存在，就不要重抓
         if stock_id == self.current_stock_id and self.table.rowCount() > 0:
             return
         self.current_stock_id = stock_id
         self.current_stock_name = stock_name
 
-        # 解析顯示用代號 (去除 _TW)
         display_id = stock_id.split('_')[0]
-
-        # 更新左上角資訊
-        if stock_name:
-            self.lbl_stock_info.setText(f"{display_id} {stock_name}")
-        else:
-            self.lbl_stock_info.setText(f"{display_id}")
-
-        self.info_label.setText("⏳ 連線 MoneyDJ...")
+        self.lbl_stock_info.setText(f"{display_id} {stock_name}" if stock_name else display_id)
+        self.info_label.setText("⏳ 連線資料庫中...")
+        self.lbl_cumulative_info.setText("")
         self.table.setRowCount(0)
         self.fig.clear()
         self.canvas.draw()
         self.lbl_update_date.setVisible(False)
 
         if self.worker is not None:
-            # 重要：先斷開訊號連接，防止舊的 Worker 回傳資料觸發 UI 繪圖
             try:
                 self.worker.data_fetched.disconnect()
             except:
-                pass
-
-            if self.worker.isRunning():
-                # 不要用 terminate()，讓它跑完或在 Worker 內部下 flag
-                # 這裡我們選擇直接放生它（它跑完會自動結束），但不再接收它的訊號
                 pass
 
         self.worker = RevenueWorker(stock_id)
@@ -192,7 +179,6 @@ class RevenueModule(QWidget):
             return
 
         self.info_label.setText("✅ 更新完成")
-
         try:
             df['Revenue'] = df['營收'] / 100000
             df['YoY'] = df['年增率']
@@ -201,7 +187,6 @@ class RevenueModule(QWidget):
             df['Year'] = df['Date'].dt.year
             df['Month'] = df['Date'].dt.month
 
-            # 更新資料日期標籤
             if not df.empty:
                 last_date = df['Date'].max()
                 self.lbl_update_date.setText(f"資料日期: {last_date.strftime('%Y-%m')}")
@@ -209,12 +194,40 @@ class RevenueModule(QWidget):
 
             recent_years = sorted(df['Year'].unique(), reverse=True)[:3]
             self.update_ui(df, recent_years)
+
+            # 👑 計算並顯示最新的累計數據
+            self.update_cumulative_label(df)
+
         except Exception as e:
             print(f"Data process error: {e}")
             self.info_label.setText("❌ 資料格式錯誤")
 
+    # 👑 新增：計算今年最新期累加與去年同期的比較
+    def update_cumulative_label(self, df):
+        if df.empty: return
+
+        # 抓取最新資料的年月
+        latest_row = df.loc[df['Date'].idxmax()]
+        latest_year = latest_row['Year']
+        latest_month = latest_row['Month']
+
+        # 計算今年 1 ~ 最新月的加總
+        curr_sum = df[(df['Year'] == latest_year) & (df['Month'] <= latest_month)]['Revenue'].sum()
+        # 計算去年 1 ~ 最新月的加總
+        prev_sum = df[(df['Year'] == latest_year - 1) & (df['Month'] <= latest_month)]['Revenue'].sum()
+
+        yoy = ((curr_sum - prev_sum) / prev_sum * 100) if prev_sum != 0 else 0
+        color = "#FF3333" if yoy >= 0 else "#00FF00"  # 台股習慣：紅漲綠跌
+
+        # 如果是 EPS 模組，這裡的「月」改成「季」即可
+        text = f"💡 截至 {latest_year}年 1~{latest_month}月累計營收: <span style='color:#FFF; font-weight:bold;'>{curr_sum:.2f}億</span> | YoY: <span style='color:{color}; font-weight:bold;'>{yoy:+.2f}%</span>"
+        self.lbl_cumulative_info.setText(text)
+
     def update_ui(self, df, years):
         self.fig.clear()
+
+        # 👑 調整圖表邊界，留出上方空間給圖例 (top=0.85)
+        self.fig.subplots_adjust(top=0.85, bottom=0.1, left=0.08, right=0.95)
         self.ax = self.fig.add_subplot(111)
         self.ax.set_facecolor('#000000')
 
@@ -246,8 +259,15 @@ class RevenueModule(QWidget):
         for spine in self.ax.spines.values():
             spine.set_edgecolor('#555')
 
-        # 加入圖例
-        self.ax.legend(facecolor='#111', edgecolor='#333', labelcolor='white', fontsize=8, loc='upper left')
+        # 👑 圖例 Bug 修復：
+        # 1. 將 loc 改為 'upper center'，bbox_to_anchor 設定到圖表外側上方 (y=1.12)
+        # 2. ncol 設定等於年份數量，讓其水平排列
+        legend = self.ax.legend(facecolor='#111', edgecolor='#333', labelcolor='white',
+                                fontsize=9, loc='upper center', bbox_to_anchor=(0.5, 1.15),
+                                ncol=len(years))
+
+        # 👑 開啟圖例滑鼠拖曳功能！如果還是覺得擋住，用滑鼠直接把它拉走就好。
+        legend.set_draggable(True)
 
         self.canvas.draw()
 
@@ -304,8 +324,7 @@ class RevenueModule(QWidget):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     module = RevenueModule()
-    # 測試時模擬傳入名稱
     module.load_revenue_data("2330_TW", "台積電")
-    module.resize(600, 800)
+    module.resize(700, 800)
     module.show()
     sys.exit(app.exec())

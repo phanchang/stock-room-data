@@ -6,7 +6,6 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem,
                              QHeaderView, QAbstractItemView, QLineEdit,
                              QHBoxLayout, QPushButton, QCompleter, QMenu, QComboBox, QMessageBox)
-# 🔥 [修正] 這裡補上了 QTimer
 from PyQt6.QtCore import pyqtSignal, Qt, QStringListModel, QTimer
 from PyQt6.QtGui import QColor, QAction, QFont, QBrush
 
@@ -50,11 +49,11 @@ class StockListModule(QWidget):
         self.columns_config = [
             ("id", "代號", 65),
             ("name", "名稱", 80),
-            ("price", "成交", 75),
+            ("price", "成交", 70),
             ("change_val", "漲跌", 65),
             ("change_pct", "漲跌%", 75),
-            ("tick_vol", "單量", 60),
-            ("total_vol", "總量", 70),
+            ("tick_vol", "單量(張)", 65),
+            ("total_vol", "總量(張)", 75),
             ("time", "時間", 0),
         ]
 
@@ -62,7 +61,6 @@ class StockListModule(QWidget):
             self.quote_worker = shared_worker
         else:
             self.quote_worker = QuoteWorker(self)
-            # self.quote_worker.start()  <-- 確保這裡沒有啟動
 
         self.quote_worker.quote_updated.connect(self.update_streaming_data)
 
@@ -75,6 +73,7 @@ class StockListModule(QWidget):
     def init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         top_container = QWidget()
         top_container.setStyleSheet("background: #111; border-bottom: 1px solid #333;")
@@ -84,7 +83,10 @@ class StockListModule(QWidget):
         self.group_combo = QComboBox()
         self.group_combo.addItems(list(self.watchlists.keys()))
         self.group_combo.setCurrentText(self.current_group)
-        self.group_combo.setStyleSheet("QComboBox { background: #222; color: #FFF; border: 1px solid #444; }")
+        self.group_combo.setStyleSheet("""
+            QComboBox { background: #222; color: #FFFFFF; border: 1px solid #444; }
+            QComboBox QAbstractItemView { background: #222; color: #FFFFFF; selection-background-color: #444; }
+        """)
         self.group_combo.currentTextChanged.connect(self.change_group)
 
         self.btn_monitor = QPushButton("▶ 即時")
@@ -109,6 +111,7 @@ class StockListModule(QWidget):
 
         self.btn_add = QPushButton("+")
         self.btn_add.setFixedSize(30, 24)
+        self.btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_add.clicked.connect(self.add_stock_to_list)
 
         top_layout.addWidget(self.group_combo, 2)
@@ -120,13 +123,18 @@ class StockListModule(QWidget):
         self.table = QTableWidget()
         self.setup_table_columns()
         self.table.verticalHeader().setVisible(False)
+
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
+        # 🔥 [修正] 拿掉 QTableWidget::item 的 background-color，改由底下的 background-color:#000 支撐
+        # 這樣 setData(BackgroundRole) 就不會被 CSS 覆蓋失效了！
         self.table.setStyleSheet("""
             QTableWidget { background-color: #000000; font-family: 'Consolas', 'Microsoft JhengHei'; font-size: 14px; }
             QHeaderView::section { background-color: #1A1A1A; color: #BBB; border: none; font-weight: bold; }
             QTableWidget::item { border-bottom: 1px solid #222; padding-right: 5px; }
-            QTableWidget::item:selected { background-color: #333; color: #FFF; }
+            QTableWidget::item:selected { background-color: #444; color: #FFF; }
         """)
 
         self.table.cellClicked.connect(self.on_row_clicked)
@@ -134,11 +142,9 @@ class StockListModule(QWidget):
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
         layout.addWidget(self.table)
-
         self.refresh_table()
 
     def _auto_select_first_row(self):
-        """啟動時自動選取列表中的第一支股票"""
         if self.table.rowCount() > 0:
             self.table.selectRow(0)
             item = self.table.item(0, 0)
@@ -181,7 +187,6 @@ class StockListModule(QWidget):
         if not hasattr(self, 'quote_worker'): return
 
         if checked:
-            # 🔥 關鍵修正：確保只有按下去時才啟動 Driver
             if not self.quote_worker.isRunning():
                 self.quote_worker.start()
 
@@ -260,6 +265,8 @@ class StockListModule(QWidget):
             else:
                 header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
 
+        self.table.setColumnHidden(5, True)
+
     def update_completer_model(self):
         search_list = [f"{c} {i['name']}" for c, i in self.stock_db.items()]
         self.completer.setModel(QStringListModel(search_list))
@@ -267,9 +274,11 @@ class StockListModule(QWidget):
     def _resolve_stock_code(self, text):
         text = text.strip().upper()
         if not text: return None
-        if text in self.stock_db: return text
         code_part = text.split(' ')[0]
-        if code_part in self.stock_db: return code_part
+        if code_part in self.stock_db:
+            return code_part
+        if code_part.isalnum():
+            return code_part
         return None
 
     def quick_search(self):
@@ -287,22 +296,44 @@ class StockListModule(QWidget):
             self.refresh_table()
             self.input_stock.clear()
 
+    def add_stock_to_group(self, stock_code, group_name):
+        clean_code = stock_code.split('_')[0]
+        if group_name not in self.watchlists:
+            self.watchlists[group_name] = []
+
+        if clean_code not in self.watchlists[group_name]:
+            self.watchlists[group_name].insert(0, clean_code)
+            self.save_watchlists()
+
+            if self.current_group == group_name:
+                self.refresh_table()
+            else:
+                self.group_combo.setCurrentText(group_name)
+
     def open_context_menu(self, pos):
-        idx = self.table.indexAt(pos)
-        if not idx.isValid(): return
+        selected_items = self.table.selectedItems()
+        if not selected_items: return
+
+        rows = set(item.row() for item in selected_items)
+
         menu = QMenu()
-        act = QAction("🗑️ 刪除", self)
-        act.triggered.connect(lambda: self.delete_stock(idx.row()))
+        menu.setStyleSheet(
+            "QMenu { background: #222; color: #FFF; border: 1px solid #555; } QMenu::item:selected { background: #444; }")
+        act = QAction(f"🗑️ 刪除選取的 {len(rows)} 檔", self)
+        act.triggered.connect(lambda: self.delete_stocks(rows))
         menu.addAction(act)
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
-    def delete_stock(self, row):
-        code = self.table.item(row, 0).text()
+    def delete_stocks(self, rows):
+        codes_to_delete = [self.table.item(r, 0).text() for r in rows]
         curr = self.watchlists[self.current_group]
-        if code in curr:
-            curr.remove(code)
-            self.save_watchlists()
-            self.refresh_table()
+
+        for code in codes_to_delete:
+            if code in curr:
+                curr.remove(code)
+
+        self.save_watchlists()
+        self.refresh_table()
 
     def change_group(self, group_name):
         self.current_group = group_name
@@ -319,7 +350,8 @@ class StockListModule(QWidget):
         item = self.table.item(row, 0)
         if item: self._emit_smart_stock_id(item.text())
 
-    def _set_cell(self, row, col, text, color=None, is_num=False):
+
+    def _set_cell(self, row, col, text, color=None, bg_color=None, is_num=False):
         if is_num:
             item = NumericTableWidgetItem(str(text))
         else:
@@ -329,6 +361,10 @@ class StockListModule(QWidget):
             item.setForeground(color)
         else:
             item.setForeground(QColor("white"))
+
+        if bg_color:
+            # 🔥 關鍵修正：在 PyQt6 中，背景必須套上 QBrush(畫刷) 才能成功渲染！
+            item.setBackground(QBrush(QColor(bg_color)))
 
         item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.table.setItem(row, col, item)
@@ -345,7 +381,6 @@ class StockListModule(QWidget):
             current_list = self.watchlists.get(self.current_group, [])
             self.table.setRowCount(len(current_list))
 
-            # 如果按鈕是開啟狀態，才設定監控
             if hasattr(self, 'quote_worker') and self.btn_monitor.isChecked():
                 self.quote_worker.set_monitoring_stocks(current_list, source='watchlist')
 
@@ -355,50 +390,79 @@ class StockListModule(QWidget):
                 self.row_mapping[code] = i
                 info = self.stock_db.get(code, {"name": code, "market": "TW"})
 
-                # 🔥 [修正] 改用廣泛比對，不依賴 DB 內的 market 欄位文字
                 last_close = 0
                 target_file = None
-                # 同時檢查所有可能的後綴
+
                 for suffix in ["_TW.parquet", "_TWO.parquet", ".parquet"]:
                     p = base_cache_path / f"{code}{suffix}"
                     if p.exists():
                         target_file = p
                         break
 
-                if target_file:
-                    try:
-                        df = pd.read_parquet(target_file)
-                        if not df.empty:
-                            # 🔥 [修正] 同時相容 'close' 與 'Close' 欄位
-                            cols = df.columns
-                            close_col = 'close' if 'close' in cols else 'Close'
-                            if close_col in cols:
-                                last_close = float(df.iloc[-1][close_col])
-                                self.history_cache[code] = {'prev': last_close}
-                    except Exception as e:
-                        print(f"Error reading {target_file}: {e}")
-
-                # 建立 ID Item
                 item_id = QTableWidgetItem(code)
                 item_id.setForeground(QColor("#00E5FF"))
                 item_id.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
                 item_id.setData(Qt.ItemDataRole.UserRole, info['market'])
                 self.table.setItem(i, 0, item_id)
 
-                # 建立名稱 Item
                 item_name = QTableWidgetItem(info['name'])
                 item_name.setForeground(QColor("white"))
                 self.table.setItem(i, 1, item_name)
 
-                # 填入成交價 (有抓到快取就填入，沒抓到就顯示 -)
-                if last_close > 0:
-                    self._set_cell(i, 2, f"{last_close:.2f}", QColor("#CCCCCC"), is_num=True)
-                else:
-                    self._set_cell(i, 2, "-", is_num=True)
+                change_str, pct_str = "-", "-"
+                fg_color = QColor("#CCCCCC")
+                bg_color = None
+                vol_str = "-"
 
-                # 其他欄位初始清空
-                for c in range(3, 8):
-                    self._set_cell(i, c, "-", is_num=True)
+                if target_file:
+                    try:
+                        df = pd.read_parquet(target_file)
+                        if not df.empty and len(df) >= 1:
+                            cols = {c.lower(): c for c in df.columns}
+                            c_col = cols.get('close')
+                            v_col = cols.get('volume')
+
+                            if c_col:
+                                last_close = float(df.iloc[-1][c_col])
+                                self.history_cache[code] = {'prev': last_close}
+
+                            if c_col and len(df) >= 2:
+                                prev_close = float(df.iloc[-2][c_col])
+                                change = last_close - prev_close
+                                pct = (change / prev_close) * 100 if prev_close != 0 else 0
+
+                                change_str = f"{change:+.2f}"
+                                pct_str = f"{pct:+.2f}%"
+
+                                if pct >= 9.5:
+                                    fg_color = QColor("#FFFFFF")
+                                    bg_color = "#D32F2F"  # 實心暗紅色
+                                elif pct <= -9.5:
+                                    fg_color = QColor("#FFFFFF")
+                                    bg_color = "#2E7D32"  # 實心暗綠色
+                                elif change > 0:
+                                    fg_color = QColor("#FF3333")
+                                elif change < 0:
+                                    fg_color = QColor("#00FF00")
+                                else:
+                                    fg_color = QColor("#FFFFFF")
+
+                            if v_col:
+                                volume = float(df.iloc[-1][v_col])
+                                vol_str = f"{int(volume / 1000):,}"
+
+                    except Exception as e:
+                        print(f"Error reading {target_file}: {e}")
+
+                if last_close > 0:
+                    self._set_cell(i, 2, f"{last_close:.2f}", fg_color, bg_color=bg_color, is_num=True)
+                    self._set_cell(i, 3, change_str, fg_color, bg_color=bg_color, is_num=True)
+                    self._set_cell(i, 4, pct_str, fg_color, bg_color=bg_color, is_num=True)
+                    self._set_cell(i, 5, vol_str, QColor("#FFFF00"), is_num=True)
+                    self._set_cell(i, 6, vol_str, QColor("#CCCCCC"), is_num=True)
+                else:
+                    for c in range(2, 7):
+                        self._set_cell(i, c, "-", is_num=True)
 
         except Exception as e:
             print(f"Error refreshing table: {e}")
@@ -406,20 +470,14 @@ class StockListModule(QWidget):
             self.table.setSortingEnabled(True)
             self.table.setUpdatesEnabled(True)
 
-            # 延遲觸發選取
             if not self.has_auto_selected:
                 QTimer.singleShot(500, self._auto_select_first_row)
 
-    # 在 stock_list_module.py 的 StockListModule 類別中新增此方法
     def force_trigger_first_selection(self):
-        """強制選取表格中的第一支股票並發出選取訊號"""
         if self.table.rowCount() > 0:
-            # 選取第一列
             self.table.selectRow(0)
-            # 取得第一欄的 Item (股票代號)
             item = self.table.item(0, 0)
             if item:
-                # 呼叫既有的點擊處理邏輯，這會觸發訊號發送給 main_app
                 self.on_row_clicked(0, 0)
 
     def update_streaming_data(self, data):
@@ -430,6 +488,13 @@ class StockListModule(QWidget):
                     return float(v)
                 except:
                     return 0.0
+
+            def to_lots_str(v):
+                if v == '-' or v == '' or v is None: return '-'
+                try:
+                    return f"{int(float(v) / 1000):,}"
+                except:
+                    return '-'
 
             for code, stock_data in data.items():
                 row = self.row_mapping.get(code)
@@ -448,28 +513,37 @@ class StockListModule(QWidget):
                     prev_close = api_prev if api_prev > 0 else self.history_cache.get(code, {}).get('prev', 0)
 
                     color = QColor("white")
+                    bg_color = None
                     change_str = "-"
                     pct_str = "-"
 
                     if prev_close > 0:
                         change = price - prev_close
                         pct = (change / prev_close) * 100
-                        if change > 0:
-                            color = QColor("#FF3333")
-                        elif change < 0:
-                            color = QColor("#00FF00")
+
                         change_str = f"{change:+.2f}"
                         pct_str = f"{pct:+.2f}%"
 
-                    self._set_cell(row, 2, f"{price:.2f}", color, is_num=True)
-                    self._set_cell(row, 3, change_str, color, is_num=True)
-                    self._set_cell(row, 4, pct_str, color, is_num=True)
+                        if pct >= 9.5:
+                            color = QColor("#FFFFFF")
+                            bg_color = "#D32F2F"  # 實心暗紅色
+                        elif pct <= -9.5:
+                            color = QColor("#FFFFFF")
+                            bg_color = "#2E7D32"  # 實心暗綠色
+                        elif change > 0:
+                            color = QColor("#FF3333")
+                        elif change < 0:
+                            color = QColor("#00FF00")
 
-                    vol = real.get('trade_volume', '-')
-                    total_vol = real.get('accumulate_trade_volume', '-')
+                    self._set_cell(row, 2, f"{price:.2f}", color, bg_color=bg_color, is_num=True)
+                    self._set_cell(row, 3, change_str, color, bg_color=bg_color, is_num=True)
+                    self._set_cell(row, 4, pct_str, color, bg_color=bg_color, is_num=True)
 
-                    self._set_cell(row, 5, str(vol), QColor("#FFFF00"), is_num=True)
-                    self._set_cell(row, 6, str(total_vol), None, is_num=True)
+                    vol_str = to_lots_str(real.get('trade_volume', '-'))
+                    total_vol_str = to_lots_str(real.get('accumulate_trade_volume', '-'))
+
+                    self._set_cell(row, 5, vol_str, QColor("#FFFF00"), is_num=True)
+                    self._set_cell(row, 6, total_vol_str, QColor("#CCCCCC"), is_num=True)
 
                     t = info.get('time', '-')
                     if ' ' in t: t = t.split(' ')[1]

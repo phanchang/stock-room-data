@@ -1,4 +1,5 @@
 import sys
+import re
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -54,15 +55,19 @@ class EPSModule(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # 1. Header (標準化)
+        # 1. Header (修改為兩層架構以容納更多資訊)
         header_widget = QWidget()
-        header_widget.setFixedHeight(45)
+        header_widget.setFixedHeight(65)  # 👑 加高以容納兩行文字
         header_widget.setStyleSheet("background-color: #050505; border-bottom: 1px solid #333;")
-        header_layout = QHBoxLayout(header_widget)
-        header_layout.setContentsMargins(10, 0, 10, 0)
-        header_layout.setSpacing(15)
 
-        # 股票資訊
+        header_vbox = QVBoxLayout(header_widget)
+        header_vbox.setContentsMargins(10, 5, 10, 5)
+        header_vbox.setSpacing(5)
+
+        row1_layout = QHBoxLayout()
+        row2_layout = QHBoxLayout()
+
+        # 🔥 [Row 1] 股票資訊與標題
         self.lbl_stock_info = QLabel("請選擇股票")
         self.lbl_stock_info.setStyleSheet(
             "color: #FFFF00; font-weight: bold; font-size: 18px; font-family: 'Microsoft JhengHei';")
@@ -73,11 +78,6 @@ class EPSModule(QWidget):
         # 標題
         title = QLabel("每股盈餘 (EPS) 季度趨勢")
         title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 16px;")
-
-        # 互動資訊
-        self.info_label = QLabel("移動滑鼠查看數據...")
-        self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 13px; color: #888;")
-        self.info_label.setFixedWidth(350)
 
         # 資料日期
         self.lbl_update_date = QLabel("")
@@ -95,13 +95,28 @@ class EPSModule(QWidget):
         """)
         self.btn_toggle_chart.clicked.connect(self.toggle_chart_visibility)
 
-        header_layout.addWidget(self.lbl_stock_info)
-        header_layout.addWidget(sep)
-        header_layout.addWidget(title)
-        header_layout.addWidget(self.info_label)
-        header_layout.addStretch()
-        header_layout.addWidget(self.lbl_update_date)
-        header_layout.addWidget(self.btn_toggle_chart)
+        row1_layout.addWidget(self.lbl_stock_info)
+        row1_layout.addWidget(sep)
+        row1_layout.addWidget(title)
+        row1_layout.addStretch()
+        row1_layout.addWidget(self.lbl_update_date)
+        row1_layout.addWidget(self.btn_toggle_chart)
+
+        # 🔥 [Row 2] 滑鼠浮動數據 與 👑 新增的固定累計數據
+        self.info_label = QLabel("移動滑鼠查看數據...")
+        self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 13px; color: #888;")
+        self.info_label.setFixedWidth(350)
+
+        # 👑 新增：顯示最新一期累計資料的 Label
+        self.lbl_cumulative_info = QLabel("")
+        self.lbl_cumulative_info.setStyleSheet("font-family: 'Consolas', 'Microsoft JhengHei'; font-size: 14px;")
+
+        row2_layout.addWidget(self.info_label)
+        row2_layout.addStretch()
+        row2_layout.addWidget(self.lbl_cumulative_info)  # 放在右側
+
+        header_vbox.addLayout(row1_layout)
+        header_vbox.addLayout(row2_layout)
         layout.addWidget(header_widget)
 
         # 2. Canvas
@@ -147,6 +162,7 @@ class EPSModule(QWidget):
         display_id = stock_id.split('_')[0]
         self.lbl_stock_info.setText(f"{display_id} {stock_name}" if stock_name else f"{display_id}")
         self.info_label.setText(f"⏳ 更新數據中...")
+        self.lbl_cumulative_info.setText("")
         self.lbl_update_date.setVisible(False)
 
         # 清空 UI (保持原本功能)
@@ -157,14 +173,9 @@ class EPSModule(QWidget):
         # 2. 安全處理舊的 Worker：斷開訊號而非終止執行緒
         if hasattr(self, 'worker') and self.worker is not None:
             try:
-                # 斷開所有已連接的訊號，防止舊 Worker 回傳資料觸發 UI 更新
                 self.worker.data_loaded.disconnect()
             except (TypeError, RuntimeError):
-                # 如果原本就沒連接，忽略錯誤
                 pass
-
-            # 不要用 terminate()，讓它在背景自然跑完結束
-            # 如果你擔心記憶體，可以不用管它，QThread 跑完 run() 就會釋放資源
 
         # 3. 啟動新 Worker
         self.worker = EPSWorker(display_id)
@@ -180,12 +191,20 @@ class EPSModule(QWidget):
             df = df.rename(columns={'季別': 'Quarter'})
             df['EPS'] = pd.to_numeric(df['EPS'], errors='coerce').fillna(0)
 
+            # 👑 新增：從季別字串解析出 年份(Year) 與 季度(Q) 用於累計運算
+            def extract_yq(x):
+                m = re.findall(r'\d+', str(x))
+                if len(m) >= 2:
+                    return int(m[0]), int(m[-1])  # 支援 114.4Q 或 2024Q3 各種格式
+                return 0, 0
+
+            yq_df = pd.DataFrame(df['Quarter'].apply(extract_yq).tolist(), columns=['Year', 'Q'])
+            df['Year'] = yq_df['Year'].values
+            df['Q'] = yq_df['Q'].values
+
             # 更新資料日期 (取最新的季度)
             if not df.empty:
-                last_q = df['Quarter'].iloc[0]  # 因為爬蟲通常回傳最新的在最上面(或需要確認)
-                # 假設爬蟲回傳順序不固定，先排序
-                # 這裡假設 'Quarter' 格式為 '2024Q3'，字串排序即可
-                sorted_quarters = sorted(df['Quarter'], reverse=True)
+                sorted_quarters = sorted(df['Quarter'].astype(str), reverse=True)
                 if sorted_quarters:
                     self.lbl_update_date.setText(f"資料季度: {sorted_quarters[0]}")
                     self.lbl_update_date.setVisible(True)
@@ -198,11 +217,47 @@ class EPSModule(QWidget):
             final_df = df_calc.iloc[::-1].copy().fillna(0)
 
             self.info_label.setText("✅ 更新完成")
+
+            # 👑 執行累加標籤計算
+            self.update_cumulative_label(df)
+
             self.update_ui(final_df)
 
         except Exception as e:
             print(f"❌ [EPS] 處理錯誤: {e}")
             self.info_label.setText("❌ 數據解析錯誤")
+
+    # 👑 新增：計算最新一季度的同年度累加與去年同期的比較
+    def update_cumulative_label(self, df):
+        try:
+            valid_df = df[df['Year'] > 0]
+            if valid_df.empty: return
+
+            # 抓取最新資料的年/季
+            latest_year = valid_df['Year'].max()
+            latest_q = valid_df[valid_df['Year'] == latest_year]['Q'].max()
+
+            # 計算今年 1 ~ 最新季度的加總
+            curr_mask = (valid_df['Year'] == latest_year) & (valid_df['Q'] <= latest_q)
+            curr_sum = valid_df[curr_mask]['EPS'].sum()
+
+            # 計算去年 1 ~ 最新季度的加總
+            prev_year = latest_year - 1
+            prev_mask = (valid_df['Year'] == prev_year) & (valid_df['Q'] <= latest_q)
+            prev_sum = valid_df[prev_mask]['EPS'].sum()
+
+            # EPS 經常有負轉正的情況，因此分母取絕對值
+            if prev_sum != 0:
+                yoy = ((curr_sum - prev_sum) / abs(prev_sum)) * 100
+            else:
+                yoy = 0
+
+            color = "#FF3333" if yoy >= 0 else "#00FF00"
+            text = f"💡 截至 {latest_year}年 1~{latest_q}季累計EPS: <span style='color:#FFF; font-weight:bold;'>{curr_sum:.2f}元</span> | YoY: <span style='color:{color}; font-weight:bold;'>{yoy:+.2f}%</span>"
+            self.lbl_cumulative_info.setText(text)
+
+        except Exception as e:
+            print(f"Cumulative EPS error: {e}")
 
     def update_ui(self, df):
         self.fig.clear()

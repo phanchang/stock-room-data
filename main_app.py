@@ -145,8 +145,8 @@ class StockWarRoomV3(QMainWindow):
 
         warroom_layout.setColumnStretch(0, 50)
         warroom_layout.setColumnStretch(1, 50)
-        warroom_layout.setRowStretch(0, 55)
-        warroom_layout.setRowStretch(1, 45)
+        warroom_layout.setRowStretch(0, 48)
+        warroom_layout.setRowStretch(1, 52)
 
         self.pages.addWidget(self.warroom_page)
 
@@ -187,6 +187,8 @@ class StockWarRoomV3(QMainWindow):
         self.market_page.stock_clicked_signal.connect(self.on_stock_changed)
         self.strategy_page.stock_clicked_signal.connect(self.on_strategy_stock_clicked)
         self.strategy_page.request_add_watchlist.connect(self.on_add_watchlist_request)
+        # 👇 新增這行，接通 K 線模組的加入清單訊號！
+        self.kline_module.request_add_watchlist.connect(self.on_add_watchlist_request)
 
     def on_page_changed(self, index):
         if index == 0:

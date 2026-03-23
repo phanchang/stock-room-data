@@ -48,6 +48,7 @@ class ChartOverlay(QWidget):
 
 class KLineModule(QWidget):
     stock_selected = pyqtSignal(str)
+    request_add_watchlist = pyqtSignal(str, str)  # 🔔 新增這行：用來發送 (股票代號, 群組名稱) 給主程式
 
     MA_CONFIG = {
         'D': [5, 10, 22, 55, 200],
@@ -152,7 +153,14 @@ class KLineModule(QWidget):
         self.lbl_data_date = QLabel("資料日期: --/--")
         self.lbl_data_date.setStyleSheet("color: #FF8800; font-weight: bold; font-size: 13px; margin-right: 10px;")
         control_layout.addWidget(self.lbl_data_date)
-
+        self.btn_add_watchlist = QPushButton("+")
+        self.btn_add_watchlist.setFixedSize(30, 30)
+        self.btn_add_watchlist.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_add_watchlist.setStyleSheet(
+            "background: #333; color: #FFF; font-weight: bold; font-size: 18px; border-radius: 4px; border: 1px solid #444;")
+        self.btn_add_watchlist.setToolTip("將此股票加入自選名單")
+        self.btn_add_watchlist.clicked.connect(self.show_add_watchlist_menu)
+        control_layout.addWidget(self.btn_add_watchlist)
         btn_expand = QPushButton("⛶")
         btn_expand.setFixedSize(35, 30)
         btn_expand.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -697,3 +705,50 @@ class KLineModule(QWidget):
                         ma_str += f"<span style='color:{color};'>MA{ma}:{val:.2f}</span>&nbsp;"
 
         self.info_label.setText(f"{line1}<br>{ma_str}")
+
+    def show_add_watchlist_menu(self):
+        """顯示可加入的觀察名單選單"""
+        if not self.current_stock_id:
+            return
+
+        from PyQt6.QtWidgets import QMenu
+        from PyQt6.QtGui import QAction
+        import json
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu { background-color: #222; color: #FFF; border: 1px solid #555; font-family: 'Microsoft JhengHei'; } 
+            QMenu::item { padding: 5px 20px; }
+            QMenu::item:selected { background-color: #444; }
+        """)
+
+        # 讀取名單只是為了取得 "有哪些群組可以選"
+        json_path = Path("data/watchlist.json")
+        groups = ["我的持股", "觀察名單"]
+        if json_path.exists():
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    watchlists = json.load(f)
+                    groups = list(watchlists.keys())
+            except:
+                pass
+
+        stock_code = self.current_stock_id.split('_')[0]
+
+        for group_name in groups:
+            action = QAction(f"➕ 加入至 [{group_name}]", self)
+            # 點擊後不自己寫入，而是呼叫 emit_add_signal 讓主程式接手
+            action.triggered.connect(lambda checked, g=group_name, s=stock_code: self.emit_add_signal(g, s))
+            menu.addAction(action)
+
+        menu.exec(self.btn_add_watchlist.mapToGlobal(self.btn_add_watchlist.rect().bottomLeft()))
+
+    def emit_add_signal(self, group_name, stock_code):
+        """發送訊號給主程式，讓 StockListModule 統一處理新增與刷新"""
+        self.request_add_watchlist.emit(stock_code, group_name)
+
+        # 按鈕閃爍綠色作為成功回饋
+        self.btn_add_watchlist.setStyleSheet(
+            "background: #008800; color: #FFF; font-weight: bold; font-size: 18px; border-radius: 4px;")
+        QTimer.singleShot(1000, lambda: self.btn_add_watchlist.setStyleSheet(
+            "background: #333; color: #FFF; font-weight: bold; font-size: 18px; border-radius: 4px; border: 1px solid #444;"))
