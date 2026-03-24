@@ -45,6 +45,8 @@ FULL_COLUMN_SPECS = {
     'f_sum_10d': {'name': '外10日', 'show': False, 'tip': '外資10日累計買賣超', 'type': 'num'},
     'f_sum_20d': {'name': '外20日', 'show': False, 'tip': '外資20日累計買賣超', 'type': 'num'},
     'f_streak': {'name': '外連買', 'show': True, 'tip': '外資連續買超天數', 'type': 'num'},
+    'invest_trust_hold_pct': {'name': '投信持股%', 'show': True, 'tip': '最新投信持股比例', 'type': 'num'},
+    'foreign_hold_pct': {'name': '外資持股%', 'show': True, 'tip': '最新外資持股比例', 'type': 'num'},
     'm_net_today': {'name': '資今日', 'show': False, 'tip': '融資今日增減', 'type': 'num'},
     'm_sum_5d': {'name': '資5日', 'show': True, 'tip': '融資5日累計', 'type': 'num'},
     'm_sum_10d': {'name': '資10日', 'show': False, 'tip': '融資10日累計', 'type': 'num'},
@@ -106,6 +108,8 @@ FULL_FILTER_SPECS = [
     {'category': '💰 籌碼面', 'key': 't_sum_20d', 'label': '投信20日(張)', 'min': -100000, 'max': 100000, 'step': 500,
      'suffix': ''},
     {'category': '💰 籌碼面', 'key': 'f_streak', 'label': '外資連買(日)', 'min': 0, 'max': 30, 'step': 1, 'suffix': ''},
+    {'category': '💰 籌碼面', 'key': 'invest_trust_hold_pct', 'label': '投信持股(%)', 'min': 0, 'max': 100, 'step': 0.1, 'suffix': '%'},
+    {'category': '💰 籌碼面', 'key': 'foreign_hold_pct', 'label': '外資持股(%)', 'min': 0, 'max': 100, 'step': 0.1, 'suffix': '%'},
     {'category': '💰 籌碼面', 'key': 'f_net_today', 'label': '外資今日(張)', 'min': -50000, 'max': 50000, 'step': 500,
      'suffix': ''},
     {'category': '💰 籌碼面', 'key': 'f_sum_5d', 'label': '外資5日(張)', 'min': -100000, 'max': 100000, 'step': 500,
@@ -806,19 +810,35 @@ class StrategyModule(QWidget):
                     QListView::item:selected { background-color: #0066CC; color: #FFF; }
                 """
 
-        # === 1. 加入劇本狀態顯示標籤 (插入在 tab_widget 之前) ===
+        # === 1. 加入劇本狀態與全局清除按鈕 (插入在 tab_widget 之前) ===
+        status_layout = QHBoxLayout()
+        status_layout.setContentsMargins(0, 0, 0, 5)
+
         self.lbl_active_preset = QLabel("當前狀態：預設過濾")
         self.lbl_active_preset.setStyleSheet("""
-                    color: #FFD700; 
-                    background-color: #1A1A1A; 
-                    padding: 8px; 
-                    border: 1px solid #333;
-                    border-radius: 4px; 
-                    font-size: 14px; 
-                    font-weight: bold;
-                    margin-bottom: 5px;
+                            color: #FFD700; 
+                            background-color: #1A1A1A; 
+                            padding: 8px; 
+                            border: 1px solid #333;
+                            border-radius: 4px; 
+                            font-size: 14px; 
+                            font-weight: bold;
+                        """)
+
+        # 🌟 全局共用：清除條件按鈕 (配上警示色的暗黑風格)
+        self.btn_reset = QPushButton("🧹 清除條件")
+        self.btn_reset.setFixedSize(100, 36)
+        self.btn_reset.setStyleSheet("""
+                    QPushButton { background-color: #331111; color: #FF6666; border: 1px solid #552222; border-radius: 4px; font-weight: bold; font-size: 14px;}
+                    QPushButton:hover { background-color: #551111; color: #FF9999; border: 1px solid #FF4444;}
                 """)
-        ctrl_layout.addWidget(self.lbl_active_preset)
+        self.btn_reset.clicked.connect(self.reset_filters)
+
+        status_layout.addWidget(self.lbl_active_preset)
+        status_layout.addStretch()
+        status_layout.addWidget(self.btn_reset)
+
+        ctrl_layout.addLayout(status_layout)
         # ==========================================
         # 建立 Tab Widget (標籤分頁) 解決筆電版面擁擠問題
         # ==========================================
@@ -926,14 +946,12 @@ class StrategyModule(QWidget):
         lay_numeric.setContentsMargins(0, 5, 0, 0)
 
         filter_header_box = QHBoxLayout()
-        self.btn_reset = QPushButton("🧹 清除條件")
-        self.btn_reset.setFixedSize(100, 30)
-        self.btn_reset.clicked.connect(self.reset_filters)
+
+        # 僅保留「設定欄位」按鈕靠右對齊
         self.btn_filter_setting = QToolButton()
         self.btn_filter_setting.setText("⚙️ 設定欄位")
         self.btn_filter_setting.clicked.connect(self.open_filter_setting)
 
-        filter_header_box.addWidget(self.btn_reset)
         filter_header_box.addStretch()
         filter_header_box.addWidget(self.btn_filter_setting)
         lay_numeric.addLayout(filter_header_box)

@@ -174,7 +174,7 @@ def calculate_json_factors(sid_str):
         'f_sum_3d': 0.0,
         'm_net_today': 0.0, 'm_sum_5d': 0.0, 'm_sum_10d': 0.0, 'm_sum_20d': 0.0, 'is_tu_yang': 0,
         'fund_contract_qoq': 0.0, 'fund_inventory_qoq': 0.0, 'fund_op_cash_flow': 0.0,
-        'issued_shares': 0.0, 'invest_trust_hold_pct': 0.0
+        'issued_shares': 0.0, 'invest_trust_hold_pct': 0.0, 'foreign_hold_pct': 0.0
     }
 
     if not json_path.exists(): return res
@@ -267,20 +267,21 @@ def calculate_json_factors(sid_str):
         res['f_sum_3d'] = get_sum(df_inst, d_3, 'foreign_buy_sell')
 
         res['t_streak'], res['f_streak'] = get_streak(df_inst, 'invest_trust_buy_sell'), get_streak(df_inst, 'foreign_buy_sell')
-        # 取最新一日的發行張數與投信持股比例，並自行計算百分比
+        # 取最新一日的發行張數與持股比例
         if not df_inst.empty:
             iss = float(df_inst.iloc[0].get('issued_shares', 0) or 0)
-            hold = float(df_inst.iloc[0].get('invest_trust_hold', 0) or 0)
+            t_hold = float(df_inst.iloc[0].get('invest_trust_hold', 0) or 0)
             res['issued_shares'] = iss
-            res['invest_trust_hold_pct'] = round((hold / iss * 100), 2) if iss > 0 else 0.0
+            res['invest_trust_hold_pct'] = round((t_hold / iss * 100), 2) if iss > 0 else 0.0
+            res['foreign_hold_pct'] = float(df_inst.iloc[0].get('foreign_hold_pct', 0) or 0)
 
         inst_10d = df_inst.reindex(d_10).fillna(0)
         inst_5d = df_inst.reindex(d_5).fillna(0)  # 👈 抓取近5日區間
         res['f_buy_days_10'] = (inst_10d['foreign_buy_sell'] > 0).sum()
         res['t_sell_days_10'] = (inst_10d['invest_trust_buy_sell'] < 0).sum()
         res['t_buy_days_5'] = int((inst_5d['invest_trust_buy_sell'] > 0).sum())  # 👈 計算投信近5日買超天數
-        cond_consistency = (res['f_buy_days_10'] >= 7) and (res['t_sell_days_10'] >= 7)
-        res['is_tu_yang'] = 1 if (cond_consistency and res['f_sum_10d'] > 0 and res['t_sum_10d'] < 0 and res['f_sum_10d'] > abs(res['t_sum_10d']) and res['f_sum_3d'] > 0) else 0
+        # 這裡先給預設值 0，稍後在大表組合後，統一依據「強勢特徵標籤」來連動同步
+        res['is_tu_yang'] = 0
 
         def get_val(df, date, col):
             if df.empty or col not in df.columns: return 0.0
@@ -497,6 +498,8 @@ def main():
         final_df['RS強度'] = final_df['RS強度'].round(1)
 
     final_df['強勢特徵'] = final_df.apply(get_strong_tags, axis=1)
+    # 🌟 確保 is_tu_yang (數值欄位) 與終極版標籤 100% 同步 (只要有投勝或外勝，就標記為 1)
+    final_df['is_tu_yang'] = final_df['強勢特徵'].apply(lambda x: 1 if '土洋對作' in str(x) else 0)
 
     chinese_map = {
         'sid': '股票代號', 'name': '股票名稱', 'industry': '產業別',
@@ -513,6 +516,8 @@ def main():
         't_sum_20d': '投信買賣超(20日)', 't_streak': '投信連買天數',
         'f_net_today': '外資買賣超(今)', 'f_sum_5d': '外資買賣超(5日)', 'f_sum_10d': '外資買賣超(10日)',
         'f_sum_20d': '外資買賣超(20日)', 'f_streak': '外資連買天數',
+        'invest_trust_hold_pct': '投信持股(%)',
+        'foreign_hold_pct': '外資持股(%)',
         'm_net_today': '融資增減(今)', 'm_sum_5d': '融資增減(5日)', 'm_sum_10d': '融資增減(10日)',
         'm_sum_20d': '融資增減(20日)',
         'fund_contract_qoq': '合約負債季增(%)', 'fund_inventory_qoq': '庫存季增(%)',
