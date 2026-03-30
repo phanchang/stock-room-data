@@ -646,7 +646,7 @@ class FrozenTableView(QTableView):
 
     def init_frozen_view(self):
         self.frozen_view.setModel(self.model())
-
+        self.frozen_view.setSelectionModel(self.selectionModel())
         # 🚀 凍結層同樣套用「絕對零寬度」標頭
         self.frozen_view.setVerticalHeader(ZeroWidthVerticalHeader(self.frozen_view))
 
@@ -1119,8 +1119,11 @@ class StrategyModule(QWidget):
         self.table_view.frozen_view.clicked.connect(self.on_table_clicked)
         self.table_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table_view.customContextMenuRequested.connect(self.open_context_menu)
-        self.table_view.selectionModel().currentChanged.connect(self.on_current_row_changed)
+        # 強制凍結層也綁定右鍵選單，防止右鍵點擊名稱時出錯
+        self.table_view.frozen_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table_view.frozen_view.customContextMenuRequested.connect(self.open_context_menu)
 
+        self.table_view.selectionModel().currentChanged.connect(self.on_current_row_changed)
         table_layout.addWidget(self.table_view)
 
         splitter.addWidget(control_widget)
@@ -1634,25 +1637,40 @@ class StrategyModule(QWidget):
         self.stock_clicked_signal.emit(f"{sid}_{market}")
 
     def open_context_menu(self, pos):
-        menu = QMenu()
-        add_menu = QMenu("➕ 加入自選群組", self)
+        checked_count = len(self.model.checked_sids)
+        if checked_count == 0:
+            QMessageBox.warning(self, "提示", "請先在表格左側「選」欄位勾選要加入的股票！")
+            return
+
+        menu = QMenu(self)
+        # 🌟 加上深色 CSS 樣式，解決字跟底色一樣被吃掉的問題
+        menu.setStyleSheet("""
+            QMenu { background-color: #1A1A1A; color: #00E5FF; border: 1px solid #00E5FF; font-size: 15px; font-weight: bold; }
+            QMenu::item { padding: 8px 25px; background-color: transparent; }
+            QMenu::item:selected { background-color: #0066CC; color: #FFF; }
+        """)
+
+        add_menu = QMenu(f"➕ 將勾選的 {checked_count} 檔加入自選", self)
         for g in self.watchlist_data.keys():
             action = QAction(g, self)
             action.triggered.connect(lambda _, group=g: self.add_to_watchlist(group))
             add_menu.addAction(action)
+
         menu.addMenu(add_menu)
         menu.exec(QCursor.pos())
 
     def add_to_watchlist(self, group_name):
-        rows = self.table_view.selectionModel().selectedRows()
-        if not rows: return
+        if not self.model.checked_sids:
+            return
+
         count = 0
-        for idx in rows:
-            src_idx = self.proxy_model.mapToSource(idx)
-            sid = str(self.display_df.iloc[src_idx.row()]['sid'])
+        for sid in self.model.checked_sids:
             self.request_add_watchlist.emit(sid, group_name)
             count += 1
-        QMessageBox.information(self, "完成", f"已請求將 {count} 檔加入「{group_name}」。")
+
+        # 🌟 加入完畢後自動清空打勾狀態
+        self.deselect_all_rows()
+        QMessageBox.information(self, "完成", f"已成功將 {count} 檔股票加入「{group_name}」。\n您可以切換至戰情室查看。")
 
     def update_ai_command_bar(self, top_left=None, bottom_right=None, roles=None):
         """動態更新頂部 AI 指揮列的數量與按鈕狀態"""

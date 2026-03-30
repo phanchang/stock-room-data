@@ -305,10 +305,15 @@ class StockListModule(QWidget):
             self.watchlists[group_name].insert(0, clean_code)
             self.save_watchlists()
 
-            if self.current_group == group_name:
-                self.refresh_table()
-            else:
+            # 如果當前不在被加入的群組，強制切換過去 (防止訊號重複觸發，先阻擋 Signal)
+            if self.current_group != group_name:
+                self.group_combo.blockSignals(True)
                 self.group_combo.setCurrentText(group_name)
+                self.current_group = group_name
+                self.group_combo.blockSignals(False)
+
+            # 🌟 透過 QTimer 延遲 100 毫秒重繪，就算一次塞入 10 檔也只會順暢重繪一次！
+            QTimer.singleShot(100, self.refresh_table)
 
     def open_context_menu(self, pos):
         selected_items = self.table.selectedItems()

@@ -255,8 +255,8 @@ class StockWarRoomV3(QMainWindow):
         self.update_visible_tabs()
 
         # [移除/註解跳轉邏輯，不再強制切到首頁]
-        # self.side_menu.button_group.button(0).setChecked(True)
-        # self.pages.setCurrentIndex(0)
+        self.side_menu.button_group.button(0).setChecked(True)
+        self.pages.setCurrentIndex(0)
 
     def on_add_watchlist_request(self, stock_id, group_name):
         self.list_module.add_stock_to_group(stock_id, group_name)
