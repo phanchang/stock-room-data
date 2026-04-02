@@ -4,6 +4,7 @@ import json
 import time
 import random
 import argparse
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,10 +20,13 @@ from utils.moneydj_parser import MoneyDJParser
 DATA_DIR = Path(PROJECT_ROOT) / "data" / "fundamentals"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+# 💡 快取總表：用來記錄營收、財報月份與「最後連線日期」
+META_FILE = DATA_DIR / "meta_index.json"
+
 NOW = datetime.now()
+TODAY_STR = NOW.strftime("%Y-%m-%d")  # 取得今日日期字串 (例如: 2024-04-01)
 
 # 💡 自動計算目標營收月份 (永遠是上個月)
-# 例如：現在是 2026年3月 -> 目標是 115/02
 if NOW.month == 1:
     TARGET_YEAR_ROC = NOW.year - 1911 - 1
     TARGET_MONTH = 12
@@ -32,61 +36,92 @@ else:
 
 TARGET_REV_MONTH = f"{TARGET_YEAR_ROC:03d}/{TARGET_MONTH:02d}"
 
+# 💡 目標最新財報季 (依據當前月份推算)
+if NOW.month in [1, 2, 3]:
+    TARGET_EPS_Q = f"{NOW.year - 1}.3Q"
+elif NOW.month in [4, 5]:
+    TARGET_EPS_Q = f"{NOW.year - 1}.4Q"
+elif NOW.month in [6, 7, 8]:
+    TARGET_EPS_Q = f"{NOW.year}.1Q"
+elif NOW.month in [9, 10, 11]:
+    TARGET_EPS_Q = f"{NOW.year}.2Q"
+else:
+    TARGET_EPS_Q = f"{NOW.year}.3Q"
+
 
 def load_all_stocks():
-    """ 從 stock_list.csv 讀取全部股票 """
     csv_path = Path(PROJECT_ROOT) / "data" / "stock_list.csv"
     if not csv_path.exists():
-        print(f"❌ 找不到股票清單: {csv_path}")
         return []
-
     import pandas as pd
     try:
         df = pd.read_csv(csv_path, dtype={'stock_id': str})
         return df['stock_id'].tolist()
-    except Exception as e:
-        print(f"❌ 讀取清單失敗: {e}")
+    except:
         return []
 
 
+def load_meta_index():
+    """讀取快取總表"""
+    if META_FILE.exists():
+        try:
+            with open(META_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            pass
+    return {}
+
+
+def update_global_meta(meta_updates):
+    """將批次更新狀態與「最後檢查日期」寫入總表"""
+    if not meta_updates: return
+
+    meta_data = load_meta_index()
+
+    for sid, data in meta_updates.items():
+        if isinstance(meta_data.get(sid), str):
+            meta_data[sid] = {"rev": meta_data[sid], "eps": "", "last_check": ""}
+        if sid not in meta_data:
+            meta_data[sid] = {"rev": "", "eps": "", "last_check": ""}
+
+        if "rev" in data: meta_data[sid]["rev"] = data["rev"]
+        if "eps" in data: meta_data[sid]["eps"] = data["eps"]
+        if "last_check" in data: meta_data[sid]["last_check"] = data["last_check"]
+
+    try:
+        with open(META_FILE, 'w', encoding='utf-8') as f:
+            json.dump(meta_data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️ 更新快取清單失敗: {e}")
+
+
 def process_financials(sid, mode='revenue'):
-    """
-    單一股票基本面處理邏輯
-    修正版：強制更新深度資料，暫時關閉 Smart Skip
-    """
     sid = str(sid).strip()
     file_path = DATA_DIR / f"{sid}.json"
-
-    # 1. 先讀取舊資料
     existing_data = {"sid": sid}
-    file_exists = file_path.exists()
 
-    if file_exists:
+    if file_path.exists():
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 existing_data = json.load(f)
-        except Exception:
-            pass  # 讀取失敗就當作空的
+        except:
+            pass
 
-    # 2. 🔥 全新聰明跳過邏輯 (攔截網路請求)
-    # 如果我們只是要更新營收，且本地檔案已經有最新的月份，就直接跳過，不浪費網路資源！
-    if mode == 'revenue' and 'revenue' in existing_data and len(existing_data['revenue']) > 0:
-        latest_local_month = existing_data['revenue'][0].get('month', '')
+    latest_local_rev = ""
+    if 'revenue' in existing_data and len(existing_data['revenue']) > 0:
+        latest_local_rev = existing_data['revenue'][0].get('month', '')
 
-        # 字串比對：如果本地檔案的月份 >= 目標月份 (例如 115/02 >= 115/02)
-        if latest_local_month >= TARGET_REV_MONTH:
-            return sid, True, f"⏩ Skipped (本地已有 {latest_local_month}，免連線)"
+    latest_local_eps = ""
+    if 'profitability' in existing_data and len(existing_data['profitability']) > 0:
+        latest_local_eps = existing_data['profitability'][0].get('quarter', '')
 
-    # 3. 開始抓取
+    # 3. 開始抓取網路資料
     try:
         parser = MoneyDJParser(sid)
         updates = {}
 
-        # 根據模式決定抓取範圍
         if mode == 'full':
-            # 全抓：適合 3,5,8,11 月財報季
             time.sleep(random.uniform(0.5, 1.0))
-            # 🔥 強制指定深度，確保 Parser 吃到參數
             updates["profitability"] = parser.get_profitability_quarterly(limit=12)
             updates["yearly_perf"] = parser.get_yearly_performance(limit=5)
             updates["balance_sheet"] = parser.get_balance_sheet(limit=8)
@@ -94,125 +129,166 @@ def process_financials(sid, mode='revenue'):
             updates["cash_flow"] = parser.get_cash_flow(limit=8)
             req_count = 5
         else:
-            # 只抓營收：適合平時
             time.sleep(random.uniform(0.1, 0.3))
             updates["revenue"] = parser.get_monthly_revenue(limit=24)
             req_count = 1
 
-        # 檢查是否有抓到東西
         has_data = any(len(v) > 0 for v in updates.values() if isinstance(v, list))
         if not has_data:
-            return sid, False, "⚠️ 無資料或被擋"
+            return sid, False, "⚠️ 無資料或被擋", latest_local_rev, latest_local_eps
 
-        # 4. 更新欄位 (Merge) - 確保不覆蓋籌碼資料
+        # 4. 更新欄位 (Merge)
         has_changes = False
         for key, value in updates.items():
             if value:
-                # 如果舊資料沒有這個 key，或是新抓到的內容跟舊的不一樣
                 if key not in existing_data or existing_data[key] != value:
                     existing_data[key] = value
                     has_changes = True
 
+        if 'revenue' in existing_data and len(existing_data['revenue']) > 0:
+            latest_local_rev = existing_data['revenue'][0].get('month', '')
+        if 'profitability' in existing_data and len(existing_data['profitability']) > 0:
+            latest_local_eps = existing_data['profitability'][0].get('quarter', '')
+
         # 5. 寫入存檔
         if has_changes:
-            # 🔥 只有在資料有變動時，才更新時間戳記並寫入硬碟
             existing_data["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(existing_data, f, indent=2, ensure_ascii=False)
-            return sid, True, f"✨ Updated ({'Full' if req_count > 1 else 'Rev'} - 有新資料)"
+            return sid, True, f"✨ Updated ({'Full' if req_count > 1 else 'Rev'} - 有新資料)", latest_local_rev, latest_local_eps
         else:
-            # 資料完全沒變，不碰檔案，不增加硬碟 I/O
-            return sid, True, f"✅ Checked (無變動，略過存檔)"
+            return sid, True, f"✅ Checked (網站未公佈，無變動)", latest_local_rev, latest_local_eps
 
     except Exception as e:
-        return sid, False, f"❌ Error: {e}"
+        return sid, False, f"❌ Error: {e}", latest_local_rev, latest_local_eps
 
 
 def run_financials_update(stock_list, workers=12, chunk_size=50, mode='revenue'):
     total = len(stock_list)
-    mode_str = "🔥 全面財報 (慢)" if mode == 'full' else "⚡ 僅月營收 (快)"
-    print(f"📊 啟動【基本面更新】{mode_str} (Workers: {workers})，總數 {total} 檔...")
+    mode_str = "🔥 全面財報" if mode == 'full' else "⚡ 僅月營收"
+    print(f"📊 啟動【基本面更新】{mode_str} (總數 {total} 檔)...")
+
+    # 🔥 核心優化：發起連線前，直接在主執行緒過濾名單！
+    meta_data = load_meta_index()
+    active_stocks = []
+    skip_target_count = 0
+    skip_cooldown_count = 0
+
+    for sid in stock_list:
+        sid_str = str(sid)
+        rec = meta_data.get(sid_str, {})
+        if isinstance(rec, str): rec = {"rev": rec, "eps": "", "last_check": ""}
+
+        # 1. 如果資料已經是最新，直接跳過
+        is_target_met = False
+        if mode == 'revenue' and rec.get("rev", "") >= TARGET_REV_MONTH:
+            is_target_met = True
+        elif mode == 'full' and rec.get("eps", "") >= TARGET_EPS_Q and rec.get("rev", "") >= TARGET_REV_MONTH:
+            is_target_met = True
+
+        if is_target_met:
+            skip_target_count += 1
+            continue
+
+        # 2. 如果今天已經檢查過，且沒新資料，啟動冷卻跳過 (保護 MoneyDJ 不被連線)
+        if rec.get("last_check", "") == TODAY_STR:
+            skip_cooldown_count += 1
+            continue
+
+        # 需要真正連線的股票
+        active_stocks.append(sid_str)
+
+    print(f"🛡️ 記憶體預先攔截：")
+    print(f"   - ⏩ 達標免連線: {skip_target_count} 檔")
+    print(f"   - 💤 單日冷卻中: {skip_cooldown_count} 檔 (今日已問過，不再打擾 MoneyDJ)")
+    print(f"   - 🚀 準備實體連線: {len(active_stocks)} 檔")
+    sys.stdout.flush()
+
+    if not active_stocks:
+        print("\n🎉 所有股票皆已是最新狀態，或處於單日冷卻中，本次無需發起網路連線！")
+        trigger_snapshot()
+        return
 
     start_time = time.time()
+    updated_count = 0
+    checked_count = 0
+    fail_count = 0
+    meta_updates = {}
 
-    # 🔥 升級版計數器
-    updated_count = 0  # 實際抓到新資料且寫入硬碟
-    checked_count = 0  # 上網抓了，但網站還沒更新 (沒寫入硬碟)
-    skip_count = 0  # 本地已經是最新，連網都不用 (聰明跳過)
-    fail_count = 0  # 發生錯誤
-
-    chunks = [stock_list[i:i + chunk_size] for i in range(0, total, chunk_size)]
+    chunks = [active_stocks[i:i + chunk_size] for i in range(0, len(active_stocks), chunk_size)]
 
     for chunk_idx, chunk in enumerate(chunks):
-        pct = int((chunk_idx * chunk_size) / total * 100)
+        pct = int((chunk_idx * chunk_size) / len(active_stocks) * 100)
         print(f"PROGRESS: {pct}")
-        print(f"📦 批次 {chunk_idx + 1}/{len(chunks)}...", flush=True)
+        print(f"📦 網路連線批次 {chunk_idx + 1}/{len(chunks)}...", flush=True)
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_sid = {executor.submit(process_financials, sid, mode): sid for sid in chunk}
 
             for future in as_completed(future_to_sid):
-                sid, is_success, msg = future.result()
+                sid, is_success, msg, rev_month, eps_q = future.result()
 
-                # 根據回傳訊息分類計數
-                if "Skipped" in msg:
-                    skip_count += 1
-                elif is_success:
+                # 寫入包含「今日已檢查」的時間戳記
+                meta_updates[sid] = {"rev": rev_month, "eps": eps_q, "last_check": TODAY_STR}
+
+                if is_success:
                     if "Updated" in msg:
                         updated_count += 1
                     elif "Checked" in msg:
                         checked_count += 1
-                    else:
-                        updated_count += 1  # 防呆
                 else:
                     fail_count += 1
 
-                # 畫面上只印出「有去連線」或「失敗」的股票，保持終端機乾淨
-                if not is_success or "Skipped" not in msg:
-                    current_processed = updated_count + checked_count + fail_count
-                    print(f"[{current_processed}] {sid} {msg}")
+                current_processed = updated_count + checked_count + fail_count
+                print(f"[{current_processed}] {sid} {msg}", flush=True)
+        update_global_meta(meta_updates)
 
         if chunk_idx < len(chunks) - 1:
-            if mode == 'full':
-                time.sleep(random.uniform(4.0, 7.0))
-            else:
-                time.sleep(random.uniform(1.5, 3.0))
+            time.sleep(random.uniform(2.0, 4.0) if mode == 'full' else random.uniform(1.0, 2.0))
+
+
 
     elapsed = time.time() - start_time
     print(f"PROGRESS: 100")
+    time.sleep(1.5)
 
-    # 🔥 終極清晰版 Log 報表
-    print(f"\n🎉 執行完畢！總耗時: {elapsed:.2f} 秒")
-    print("-" * 40)
-    print(f"   總處理檔數: {total} 檔")
-    print(f"   ⏩ 免連線跳過 (本地已最新): {skip_count} 檔")
-    print("-" * 40)
-    print(f"   🎯 實際發送網路請求: {updated_count + checked_count} 檔")
-    print(f"      ✨ 成功更新寫入: {updated_count} 檔")
-    print(f"      ✅ 網站尚未公布: {checked_count} 檔 (略過存檔)")
-    print(f"   ❌ 執行失敗: {fail_count} 檔")
-    print("-" * 40)
+    print("\n" + "=" * 50)
+    print(f"🎉 【{mode_str}】 執行完畢！ (網路連線耗時: {elapsed:.1f} 秒)")
+    print("=" * 50)
+    print(f" 📂 原始總名單: {total} 檔")
+    print(f" 🛡️ 記憶體防護攔截: {skip_target_count + skip_cooldown_count} 檔 (達標或冷卻中)")
+    print("-" * 50)
+    print(f" 🎯 實際發起網路請求: {updated_count + checked_count} 檔")
+    print(f"    ✨ 成功抓取新資料寫入: {updated_count} 檔")
+    print(f"    ✅ 網站尚未公佈新資料: {checked_count} 檔")
+    print(f" ❌ 執行失敗/超時: {fail_count} 檔")
+    print("=" * 50 + "\n")
+    sys.stdout.flush()
 
-def find_outdated_stocks(target_month="115/01"):
-    """自動掃描資料夾，找出營收停留在 target_month (含) 以前的股票代號"""
-    outdated = []
-    print(f"🔍 正在掃描本機資料，尋找營收卡在 {target_month} 以前的落後股票...")
+    trigger_snapshot()
 
-    for file_path in DATA_DIR.glob("*.json"):
-        sid = file_path.stem
+
+def trigger_snapshot():
+    print("🚀 偵測到財報更新完畢，準備自動更新【戰情室快照】大表...", flush=True)
+    possible_scripts = ["calc_snapshot_factors.py", "calc_snapshot.py", "calculate_snapshot.py"]
+    script_path = None
+
+    for script in possible_scripts:
+        p = Path(PROJECT_ROOT) / "scripts" / script
+        if p.exists(): script_path = p; break
+        p2 = Path(PROJECT_ROOT) / script
+        if p2.exists(): script_path = p2; break
+
+    if script_path:
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                rev = data.get("revenue", [])
-                if rev:
-                    latest_month = rev[0].get("month", "")
-                    # 字串比對：例如 "114/12" <= "115/01" 會成立
-                    if latest_month and latest_month <= target_month:
-                        outdated.append(sid)
-        except Exception:
-            pass
-
-    return outdated
+            print(f"⚙️ 執行: {script_path.name}")
+            sys.stdout.flush()
+            subprocess.run([sys.executable, str(script_path)], check=True)
+            print("\n✅ 戰情室大表 (Snapshot) 自動重新計算成功！")
+        except Exception as e:
+            print(f"\n❌ 快照計算失敗，請手動執行 ({e})")
+    else:
+        print("\n⚠️ 找不到 calc_snapshot 系列腳本，請手動執行。")
 
 
 if __name__ == "__main__":
@@ -222,40 +298,23 @@ if __name__ == "__main__":
     parser.add_argument('--workers', type=int, default=12, help='執行緒數量 (預設12)')
     parser.add_argument('--chunk', type=int, default=50, help='批次大小')
     parser.add_argument('--full', action='store_true', help='開啟全財報抓取模式')
-
-    # 💡 保留手動指定的功能 (備用)
     parser.add_argument('--stocks', type=str, default="", help='指定特定股票代號 (例: 8240,1468)')
-    # 💡 終極武器：自動掃描落後名單
-    parser.add_argument('--auto-fix', type=str, default="", help='自動掃描舊資料 (輸入要淘汰的月份，如 115/01)')
 
     args = parser.parse_args()
-
-    # 決定要跑的名單：自動掃描 vs 手動指定 vs 全市場
-    if args.auto_fix:
-        target_list = find_outdated_stocks(args.auto_fix)
-        print(f"🎯 自動掃描完畢！共發現 {len(target_list)} 檔股票需要救援！")
-        print(f"🔍 釘子戶名單：{target_list}")
-        if not target_list:
-            print("🎉 恭喜！所有股票的營收都是最新版，沒有落後名單。")
-            sys.exit(0)
-    elif args.stocks:
-        target_list = [s.strip() for s in args.stocks.split(',')]
-        print(f"🎯 啟動指定股票模式，共 {len(target_list)} 檔")
-    else:
-        target_list = load_all_stocks()
-        if not target_list:
-            sys.exit(1)
-
     mode = 'full' if args.full else 'revenue'
 
+    if args.stocks:
+        target_list = [s.strip() for s in args.stocks.split(',')]
+    else:
+        target_list = load_all_stocks()
+        if not target_list: sys.exit(1)
+
     if args.full and args.workers > 12:
-        print("⚠️ Full 模式下自動將 Workers 降至 12 以策安全")
         args.workers = 12
     elif not args.full and args.workers == 12:
         args.workers = 16
 
-    # 切片邏輯：只有在跑「全市場」時才做切片
-    if not args.auto_fix and not args.stocks:
+    if not args.stocks:
         start_idx = args.start
         end_idx = args.end if args.end is not None else len(target_list)
         sliced_list = target_list[start_idx:end_idx]
@@ -265,4 +324,4 @@ if __name__ == "__main__":
     if len(sliced_list) > 0:
         run_financials_update(sliced_list, workers=args.workers, chunk_size=args.chunk, mode=mode)
     else:
-        print("⚠️ 範圍內沒有任何股票")
+        print("⚠️ 範圍內沒有任何股票需要更新")

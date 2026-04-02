@@ -1,4 +1,5 @@
 import sys
+import json
 import pandas as pd
 import numpy as np
 from io import StringIO
@@ -22,8 +23,6 @@ plt.rcParams['axes.unicode_minus'] = False
 
 
 # --- 數據抓取線程 ---
-
-
 class ETFDataWorker(QThread):
     data_fetched = pyqtSignal(pd.DataFrame, str)
 
@@ -88,6 +87,8 @@ class ActiveETFModule(QWidget):
         self.bar_data = None
         self.line_data = None
         self.stock_market_map = {}
+        self.latest_data = pd.DataFrame()
+        self.merged_data = pd.DataFrame()
 
         self.mapping = {
             "00981A": ("ezmoney", "統一-00981A (統一台股增長)"),
@@ -128,6 +129,22 @@ class ActiveETFModule(QWidget):
     def get_market_suffix(self, stock_id):
         return self.stock_market_map.get(str(stock_id), "TW")
 
+    def load_watchlists_to_combo(self):
+        """讀取 watchlist.json 並更新比對下拉選單"""
+        json_path = Path("data/watchlist.json")
+        self.combo_compare.blockSignals(True)
+        self.combo_compare.clear()
+        self.combo_compare.addItem("🔍 不比對")
+        if json_path.exists():
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    for key in data.keys():
+                        self.combo_compare.addItem(f"📌 {key}")
+            except Exception as e:
+                print(f"❌ [ETF] 讀取觀察清單失敗: {e}")
+        self.combo_compare.blockSignals(False)
+
     def init_ui(self):
         self.setStyleSheet("background-color: #0E0E0E; color: #E0E0E0;")
         main_layout = QHBoxLayout(self)
@@ -162,13 +179,30 @@ class ActiveETFModule(QWidget):
         left_layout.addWidget(left_header)
         left_layout.addWidget(self.combo)
 
-        lbl_top = QLabel("🔥 持股權重排行 (Top 10)")
-        lbl_top.setStyleSheet("color: #FFD700; font-weight: bold; margin-top: 5px;")
-        left_layout.addWidget(lbl_top)
+        # 🔥 功能 3: 增加比對清單列
+        top_bar = QWidget()
+        top_layout = QHBoxLayout(top_bar)
+        top_layout.setContentsMargins(0, 5, 0, 0)
+        lbl_top = QLabel("🔥 持股排行")
+        lbl_top.setStyleSheet("color: #FFD700; font-weight: bold;")
 
+        self.combo_compare = QComboBox()
+        self.load_watchlists_to_combo()
+        self.combo_compare.setStyleSheet("""
+            QComboBox { background: #222; color: #FFF; border: 1px solid #444; padding: 2px; font-size: 13px; }
+            QComboBox::drop-down { border: none; }
+        """)
+        self.combo_compare.currentIndexChanged.connect(self.render_table)
+
+        top_layout.addWidget(lbl_top)
+        top_layout.addStretch()
+        top_layout.addWidget(self.combo_compare)
+        left_layout.addWidget(top_bar)
+
+        # 🔥 功能 2: 增加張數欄位
         self.stock_table = QTableWidget()
-        self.stock_table.setColumnCount(3)
-        self.stock_table.setHorizontalHeaderLabels(["代號", "名稱", "權重"])
+        self.stock_table.setColumnCount(4)
+        self.stock_table.setHorizontalHeaderLabels(["代號", "名稱", "權重", "張數(千)"])
         self.stock_table.verticalHeader().setVisible(False)
         self.stock_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.stock_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -185,6 +219,7 @@ class ActiveETFModule(QWidget):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.stock_table.cellClicked.connect(self.on_table_clicked)
 
         left_layout.addWidget(self.stock_table)
@@ -215,7 +250,6 @@ class ActiveETFModule(QWidget):
         self.fig_change = Figure(facecolor='#0E0E0E')
         self.canvas_change = FigureCanvas(self.fig_change)
         self.canvas_change.mpl_connect('motion_notify_event', self.on_bar_hover)
-        # 🔥 新增點擊連動事件
         self.canvas_change.mpl_connect('button_press_event', self.on_bar_click)
 
         self.fig_trend = Figure(facecolor='#0E0E0E')
@@ -227,8 +261,9 @@ class ActiveETFModule(QWidget):
 
         splitter.addWidget(left_panel)
         splitter.addWidget(right_panel)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 7)
+        # 🔥 微調切割比例，讓左側 4 個欄位完整顯示不用滾動
+        splitter.setStretchFactor(0, 35)
+        splitter.setStretchFactor(1, 65)
 
         main_layout.addWidget(splitter)
         self.on_combo_change(0)
@@ -263,41 +298,19 @@ class ActiveETFModule(QWidget):
         self.current_df = df
         dates = sorted(df['date'].unique())
         if len(dates) < 1: return
-        latest_date = dates[-1]
+        self.latest_date = dates[-1]
 
-        latest_data = df[df['date'] == latest_date].sort_values('weight', ascending=False)
-
-        self.stock_table.setRowCount(len(latest_data))
-        for idx, row in enumerate(latest_data.itertuples()):
-            sid = str(row.stock_id)
-            name = str(row.name)
-            weight = row.weight
-
-            item_id = QTableWidgetItem(sid)
-            item_name = QTableWidgetItem(name)
-            item_weight = QTableWidgetItem(f"{weight}%")
-
-            item_id.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            item_name.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            item_weight.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-
-            color = QColor("#FFD700") if idx < 10 else QColor("#AAAAAA")
-            font = QFont()
-            if idx < 10: font.setBold(True)
-
-            for item in [item_id, item_name, item_weight]:
-                item.setForeground(color)
-                item.setFont(font)
-                self.stock_table.setItem(idx, [item_id, item_name, item_weight].index(item), item)
+        self.latest_data = df[df['date'] == self.latest_date].sort_values('weight', ascending=False)
+        self.load_watchlists_to_combo()
 
         if len(dates) >= 2:
             prev_date = dates[-2]
             prev_data = df[df['date'] == prev_date]
 
-            merged = pd.merge(latest_data, prev_data, on=['stock_id', 'name'], suffixes=('_now', '_prev'),
-                              how='outer').fillna(0)
-            merged['share_diff'] = merged['shares_now'] - merged['shares_prev']
-            merged['pct_change'] = merged.apply(
+            self.merged_data = pd.merge(self.latest_data, prev_data, on=['stock_id', 'name'],
+                                        suffixes=('_now', '_prev'), how='outer').fillna(0)
+            self.merged_data['share_diff'] = self.merged_data['shares_now'] - self.merged_data['shares_prev']
+            self.merged_data['pct_change'] = self.merged_data.apply(
                 lambda r: (r['share_diff'] / r['shares_prev'] * 100) if r['shares_prev'] > 0 else 0, axis=1)
 
             def classify_action(row):
@@ -319,23 +332,101 @@ class ActiveETFModule(QWidget):
                 else:
                     return None
 
-            merged['action_type'] = merged.apply(classify_action, axis=1)
-            merged['abs_diff'] = merged['share_diff'].abs()
+            self.merged_data['action_type'] = self.merged_data.apply(classify_action, axis=1)
+            self.merged_data['abs_diff'] = self.merged_data['share_diff'].abs()
 
-            # 🔥 排序並只取 Top 12
-            active_df = merged[merged['abs_diff'] > 0].copy()
+            active_df = self.merged_data[self.merged_data['abs_diff'] > 0].copy()
             active_df = active_df.sort_values('abs_diff', ascending=False).head(12)
 
-            # 再依百分比排序以便畫圖有階梯感
             final_df = active_df.sort_values('pct_change', ascending=True)
-            self.plot_changes(final_df, latest_date)
+            self.plot_changes(final_df, self.latest_date)
+        else:
+            self.merged_data = pd.DataFrame()
+            self.plot_changes(pd.DataFrame(), self.latest_date)
 
-            if not latest_data.empty:
-                first_id = str(latest_data.iloc[0]['stock_id'])
-                first_name = str(latest_data.iloc[0]['name'])
-                market = self.get_market_suffix(first_id)
-                self.plot_trend(first_id, first_name, market)
-                self.stock_table.selectRow(0)
+        self.render_table()
+
+        if not self.latest_data.empty:
+            first_id = str(self.latest_data.iloc[0]['stock_id'])
+            first_name = str(self.latest_data.iloc[0]['name'])
+            market = self.get_market_suffix(first_id)
+            self.plot_trend(first_id, first_name, market)
+            self.stock_table.selectRow(0)
+
+    def render_table(self):
+        """將 Table 渲染邏輯獨立，方便下拉選單切換時即時更新箭頭"""
+        if getattr(self, 'latest_data', None) is None or self.latest_data.empty: return
+
+        # 讀取目前選取的比對清單
+        selected_compare = self.combo_compare.currentText()
+        compare_list = []
+        if selected_compare != "🔍 不比對":
+            group_name = selected_compare.replace("📌 ", "")
+            json_path = Path("data/watchlist.json")
+            if json_path.exists():
+                try:
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        compare_list = data.get(group_name, [])
+                except:
+                    pass
+
+        self.stock_table.setRowCount(len(self.latest_data))
+        for idx, row in enumerate(self.latest_data.itertuples()):
+            sid = str(row.stock_id)
+            name = str(row.name)
+            weight = row.weight
+            shares = row.shares
+            shares_k = int(shares / 1000) if pd.notna(shares) else 0
+
+            arrow = ""
+            shares_color = QColor("#FFD700") if idx < 10 else QColor("#AAAAAA")
+
+            # 🔥 功能 3: 判斷是否在選取的清單中，並給予對應的箭頭與顏色
+            if sid in compare_list:
+                diff = 0
+                if hasattr(self, 'merged_data') and not self.merged_data.empty:
+                    match = self.merged_data[self.merged_data['stock_id'] == sid]
+                    if not match.empty:
+                        diff = match.iloc[0]['share_diff']
+
+                if diff > 0:
+                    arrow = " ⬆"
+                    shares_color = QColor("#FF3333")  # 紅色代表增持
+                elif diff < 0:
+                    arrow = " ⬇"
+                    shares_color = QColor("#00FF00")  # 綠色代表減持
+                else:
+                    arrow = " -"
+                    shares_color = QColor("#FFFF00")  # 黃色代表吻合但無變化
+
+            item_id = QTableWidgetItem(sid)
+            item_name = QTableWidgetItem(name)
+            item_weight = QTableWidgetItem(f"{weight:.2f}%")
+            item_shares = QTableWidgetItem(f"{shares_k:,}{arrow}")
+
+            item_id.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            item_name.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            item_weight.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            item_shares.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+            font = QFont()
+            if idx < 10 or arrow:
+                font.setBold(True)
+
+            base_color = QColor("#FFD700") if idx < 10 else QColor("#AAAAAA")
+
+            for item in [item_id, item_name, item_weight]:
+                item.setForeground(base_color)
+                item.setFont(font)
+
+            item_shares.setForeground(shares_color)
+            item_shares.setFont(font)
+
+            self.stock_table.setItem(idx, 0, item_id)
+            self.stock_table.setItem(idx, 1, item_name)
+            self.stock_table.setItem(idx, 2, item_weight)
+            self.stock_table.setItem(idx, 3, item_shares)
 
     def plot_changes(self, df, data_date):
         self.fig_change.clear()
@@ -356,7 +447,6 @@ class ActiveETFModule(QWidget):
         ax.set_yticklabels(self.bar_data['name'], fontsize=11, fontweight='bold', color='#DDD')
         ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=100))
 
-        # 🔥 固定 Y 軸範圍，確保少於 12 檔時長條圖不會被異常拉寬
         ax.set_ylim(-0.5, 11.5)
 
         date_str = data_date.strftime('%Y-%m-%d')
@@ -380,7 +470,6 @@ class ActiveETFModule(QWidget):
             name = str(row['name'])
             market = self.get_market_suffix(sid)
 
-            # 更新左側 Table 的選取狀態
             for i in range(self.stock_table.rowCount()):
                 if self.stock_table.item(i, 0).text() == sid:
                     self.stock_table.selectRow(i)
@@ -399,7 +488,21 @@ class ActiveETFModule(QWidget):
     def plot_trend(self, stock_id, stock_name, market="TW"):
         if self.current_df is None: return
 
-        trend_data = self.current_df[self.current_df['stock_id'] == str(stock_id)].sort_values('date')
+        # 找出 ETF 整體資料最新的日期
+        global_max_date = self.current_df['date'].max()
+
+        trend_data = self.current_df[self.current_df['stock_id'] == str(stock_id)].copy()
+        if trend_data.empty: return
+
+        # 🔥 功能 1 修復: 如果這檔股票被清空了，最新日期會缺少這筆，我們手動補上 0 的數據讓曲線下跌
+        if trend_data['date'].max() < global_max_date:
+            new_row = trend_data.iloc[-1].copy()
+            new_row['date'] = global_max_date
+            new_row['shares'] = 0
+            new_row['weight'] = 0.0
+            trend_data = pd.concat([trend_data, pd.DataFrame([new_row])], ignore_index=True)
+
+        trend_data = trend_data.sort_values('date')
 
         price_data = pd.DataFrame()
         price_path = Path(f"data/cache/tw/{stock_id}_{market}.parquet")
@@ -436,7 +539,6 @@ class ActiveETFModule(QWidget):
             'ax3': ax3
         }
 
-        # 繪製權重與庫存
         l3, = ax3.plot(trend_data['date'], trend_data['shares'], color='#FFFFFF', linewidth=0.8, alpha=0.6,
                        linestyle='-', label='庫存股數(細線)')
         l1, = ax1.plot(trend_data['date'], trend_data['weight'], color='#00E5FF', linewidth=2, marker='o', markersize=4,
@@ -454,7 +556,6 @@ class ActiveETFModule(QWidget):
             l2, = ax2.plot(price_data.index, price_data['Close'], color='#FFD700', linewidth=1.5, linestyle='--',
                            alpha=0.9, label='股價(右)')
 
-            # 🔥 1. 計算投信持有成本
             avg_cost = 0.0
             total_shares = 0
             total_cost = 0.0
@@ -464,7 +565,6 @@ class ActiveETFModule(QWidget):
                 shares = row['shares']
 
                 try:
-                    # 抓取當天或前一個交易日價格
                     p_idx = price_data.index.get_indexer([d], method='ffill')[0]
                     if p_idx != -1:
                         price = price_data['Close'].iloc[p_idx]
@@ -473,11 +573,11 @@ class ActiveETFModule(QWidget):
                 except:
                     continue
 
-                if shares > total_shares:  # 買進
+                if shares > total_shares:
                     added = shares - total_shares
                     total_cost += added * price
                     total_shares = shares
-                elif shares < total_shares:  # 賣出
+                elif shares < total_shares:
                     if shares == 0:
                         total_shares = 0
                         total_cost = 0.0
@@ -488,7 +588,6 @@ class ActiveETFModule(QWidget):
             if total_shares > 0:
                 avg_cost = total_cost / total_shares
 
-            # 🔥 2. 標註最後一筆股價 (原點 + 價格)
             last_date = price_data.index[-1]
             last_price = price_data['Close'].iloc[-1]
             ax2.plot(last_date, last_price, marker='o', color='#FFD700', markersize=6)
@@ -497,13 +596,10 @@ class ActiveETFModule(QWidget):
             ax2.text(last_date, last_price, f" {last_price:.1f}", color='#FFD700',
                      fontsize=10, fontweight='bold', va='center', ha='left', bbox=bbox_price)
 
-            # 🔥 3. 畫出成本線並作上下限防呆 (Clamping)
             if avg_cost > 0:
                 ax2.axhline(avg_cost, color='#FF00FF', linestyle=':', linewidth=2, alpha=0.7)
 
-                # 計算文字應擺放的 Y 軸位置，防止超出圖表外
                 ymin, ymax = ax2.get_ylim()
-                # 若尚未設定 ylim，先手動算一下
                 if ymin == 0 and ymax == 1:
                     ymin = price_data['Close'].min() * 0.95
                     ymax = price_data['Close'].max() * 1.05

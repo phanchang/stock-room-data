@@ -11,12 +11,22 @@ from PyQt6.QtGui import QColor, QAction, QFont, QBrush
 
 from utils.data_downloader import DataDownloader
 from utils.quote_worker import QuoteWorker
+from PyQt6.QtWidgets import QStyledItemDelegate, QStyle
 
 DEFAULT_WATCHLISTS = {
     "我的持股": ["2330", "2317", "2603"],
     "觀察名單": []
 }
 
+class BackgroundDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        # 若該列未被選取，且有設定背景色，則強制在底層填滿背景
+        if not (option.state & QStyle.StateFlag.State_Selected):
+            bg_brush = index.data(Qt.ItemDataRole.BackgroundRole)
+            if bg_brush:
+                painter.fillRect(option.rect, bg_brush)
+        # 接著呼叫原生的 paint 來畫出文字與原本的 CSS 底線
+        super().paint(painter, option, index)
 
 class NumericTableWidgetItem(QTableWidgetItem):
     def __lt__(self, other):
@@ -49,8 +59,8 @@ class StockListModule(QWidget):
         self.columns_config = [
             ("id", "代號", 65),
             ("name", "名稱", 80),
-            ("price", "成交", 70),
-            ("change_val", "漲跌", 65),
+            ("price", "成交", 80),
+            ("change_val", "漲跌", 80),
             ("change_pct", "漲跌%", 75),
             ("tick_vol", "單量(張)", 65),
             ("total_vol", "總量(張)", 75),
@@ -129,14 +139,15 @@ class StockListModule(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
         # 🔥 [修正] 拿掉 QTableWidget::item 的 background-color，改由底下的 background-color:#000 支撐
-        # 這樣 setData(BackgroundRole) 就不會被 CSS 覆蓋失效了！
+        # 🔥 替換原本的 setStyleSheet 區塊
         self.table.setStyleSheet("""
-            QTableWidget { background-color: #000000; font-family: 'Consolas', 'Microsoft JhengHei'; font-size: 14px; }
-            QHeaderView::section { background-color: #1A1A1A; color: #BBB; border: none; font-weight: bold; }
-            QTableWidget::item { border-bottom: 1px solid #222; padding-right: 5px; }
-            QTableWidget::item:selected { background-color: #444; color: #FFF; }
-        """)
-
+                    QTableWidget { background-color: #000000; font-family: 'Consolas', 'Microsoft JhengHei'; font-size: 14px; }
+                    QHeaderView::section { background-color: #1A1A1A; color: #BBB; border: none; font-weight: bold; }
+                    /* 關鍵修正：必須加上 background-color: transparent; 才能讓 Delegate 的背景色透出來 */
+                    QTableWidget::item { background-color: transparent; border-bottom: 1px solid #222; padding-right: 5px; }
+                    QTableWidget::item:selected { background-color: #444; color: #FFF; }
+                """)
+        self.table.setItemDelegate(BackgroundDelegate(self.table))
         self.table.cellClicked.connect(self.on_row_clicked)
         self.table.customContextMenuRequested.connect(self.open_context_menu)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -440,11 +451,11 @@ class StockListModule(QWidget):
                                 pct_str = f"{pct:+.2f}%"
 
                                 if pct >= 9.5:
-                                    fg_color = QColor("#FFFFFF")
-                                    bg_color = "#D32F2F"  # 實心暗紅色
+                                    fg_color = QColor("#FFFFFF")  # 漲停字體維持白色以確保對比度
+                                    bg_color = "#D32F2F"  # 恢復明顯的實心紅底色
                                 elif pct <= -9.5:
-                                    fg_color = QColor("#FFFFFF")
-                                    bg_color = "#2E7D32"  # 實心暗綠色
+                                    fg_color = QColor("#FFFFFF")  # 跌停字體維持白色
+                                    bg_color = "#2E7D32"  # 恢復明顯的實心綠底色
                                 elif change > 0:
                                     fg_color = QColor("#FF3333")
                                 elif change < 0:
@@ -530,11 +541,11 @@ class StockListModule(QWidget):
                         pct_str = f"{pct:+.2f}%"
 
                         if pct >= 9.5:
-                            color = QColor("#FFFFFF")
-                            bg_color = "#D32F2F"  # 實心暗紅色
+                            color = QColor("#FFFFFF")  # 漲停字體維持白色
+                            bg_color = "#D32F2F"  # 恢復明顯的實心紅底色
                         elif pct <= -9.5:
-                            color = QColor("#FFFFFF")
-                            bg_color = "#2E7D32"  # 實心暗綠色
+                            color = QColor("#FFFFFF")  # 跌停字體維持白色
+                            bg_color = "#2E7D32"  # 恢復明顯的實心綠底色
                         elif change > 0:
                             color = QColor("#FF3333")
                         elif change < 0:
