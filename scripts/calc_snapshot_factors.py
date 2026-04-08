@@ -196,7 +196,7 @@ def calculate_advanced_factors(df, sid=None):
             pass
 
         # 👇 插入此段測試日誌
-        if sid in ['6831', '4420', '2330']:
+        if sid in ['2330']:
             print(f"\n[驗證] 代號: {sid} | 原始收盤價: {last_raw_close:.2f} | 還原收盤價: {adj_last_close:.2f}")
             print(f"      漲幅 -> 1d: {factors['漲幅1d']}%, 5d: {factors['漲幅5d']}%, 20d: {factors['漲幅20d']}%")
             print(f"      指標 -> 布林寬度: {factors['bb_width']}%, ST買訊(週前): {factors['str_st_week_offset']}")
