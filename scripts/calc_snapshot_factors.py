@@ -50,25 +50,51 @@ def calculate_advanced_factors(df, sid=None):
         'str_30w_week_offset': -1, 'str_st_week_offset': -1,
         'str_break_30w': 0, 'str_uptrend': 0, 'str_high_60': 0, 'str_high_30': 0,
         'str_ma55_sup': 0, 'str_ma200_sup': 0, 'str_vix_rev': 0,
-        'str_30w_standby': 0 , # 👈 [新增這行] 預設為 0
+        'str_30w_standby': 0,
         '今日成交股數': 0.0
     }
 
-    col_map = {k: v for k, v in
-               {'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}.items() if
-               k in df.columns}
-    if col_map: df.rename(columns=col_map, inplace=True)
+    # 🔥 大表運算分離原則：優先使用還原報價進行技術分析與漲跌幅計算
+    if 'adj_close' in df.columns:
+        col_map = {
+            'adj_open': 'Open',
+            'adj_high': 'High',
+            'adj_low': 'Low',
+            'adj_close': 'Close',
+            'volume': 'Volume',
+            'close': 'Raw_Close'  # 保留原始收盤價供現價使用
+        }
+    else:
+        # 防呆相容舊快取
+        col_map = {
+            'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
+        }
+
+    # 只對應存在的欄位並重命名
+    col_map = {k: v for k, v in col_map.items() if k in df.columns}
+    if col_map:
+        df.rename(columns=col_map, inplace=True)
+
     if 'Close' not in df.columns: return None
 
-    last_close_daily = df['Close'].iloc[-1]
-    factors['現價'] = last_close_daily
+    # 防呆機制：若無原始收盤價欄位，用還原價頂替以防當機
+    if 'Raw_Close' not in df.columns:
+        df['Raw_Close'] = df['Close']
+
+    # 1️⃣ 真實市場資訊：使用「未還原」的原始股價
+    last_raw_close = df['Raw_Close'].iloc[-1]
+    factors['現價'] = last_raw_close
+
+    # 2️⃣ 技術指標基底：使用「已還原」的股價
+    adj_last_close = df['Close'].iloc[-1]
 
     if len(df) >= 2:
+        # 漲幅改用還原價格運算
         factors['漲幅1d'] = round(df['Close'].pct_change(1).iloc[-1] * 100, 2)
         if 'Volume' in df.columns:
             vol_mean = df['Volume'].tail(5).mean()
             factors['量比'] = round(df['Volume'].iloc[-1] / vol_mean, 2) if vol_mean > 0 else 0
-            factors['今日成交股數'] = float(df['Volume'].iloc[-1])  # 取得最新絕對成交股數
+            factors['今日成交股數'] = float(df['Volume'].iloc[-1])
 
     if len(df) >= 6: factors['漲幅5d'] = round(df['Close'].pct_change(5).iloc[-1] * 100, 2)
 
@@ -79,41 +105,54 @@ def calculate_advanced_factors(df, sid=None):
         bb_width_series = (4 * std20) / ma20 * 100
         factors['bb_width'] = round(bb_width_series.iloc[-1], 2) if not pd.isna(bb_width_series.iloc[-1]) else 0
 
-        factors['str_consol_5'] = int(bb_width_series.rolling(5).max().iloc[-1] < 10) if len(bb_width_series) >= 5 else 0
-        factors['str_consol_10'] = int(bb_width_series.rolling(10).max().iloc[-1] < 12) if len(bb_width_series) >= 10 else 0
-        factors['str_consol_20'] = int(bb_width_series.rolling(20).max().iloc[-1] < 15) if len(bb_width_series) >= 20 else 0
+        factors['str_consol_5'] = int(bb_width_series.rolling(5).max().iloc[-1] < 10) if len(
+            bb_width_series) >= 5 else 0
+        factors['str_consol_10'] = int(bb_width_series.rolling(10).max().iloc[-1] < 12) if len(
+            bb_width_series) >= 10 else 0
+        factors['str_consol_20'] = int(bb_width_series.rolling(20).max().iloc[-1] < 15) if len(
+            bb_width_series) >= 20 else 0
 
         try:
-            if (df['Close'].iloc[-2] < ma20.iloc[-2] and df['Close'].iloc[-1] > ma20.iloc[-1] and df['Close'].iloc[-1] > df['Open'].iloc[-1]):
+            if (df['Close'].iloc[-2] < ma20.iloc[-2] and df['Close'].iloc[-1] > ma20.iloc[-1] and df['Close'].iloc[-1] >
+                    df['Open'].iloc[-1]):
                 factors['str_fake_breakdown'] = 1
         except:
             pass
 
     if len(df) >= 61:
         factors['漲幅60d'] = round(df['Close'].pct_change(60).iloc[-1] * 100, 2)
-        factors['str_consol_60'] = int(bb_width_series.rolling(60).max().iloc[-1] < 18) if len(bb_width_series) >= 60 else 0
+        factors['str_consol_60'] = int(bb_width_series.rolling(60).max().iloc[-1] < 18) if len(
+            bb_width_series) >= 60 else 0
 
     if len(df) >= 200:
-        def check_recent(series): return int(series.tail(3).any())
+        def check_recent(series):
+            return int(series.tail(3).any())
 
         try:
             ma20 = df['Close'].rolling(20).mean()
             ma200 = df['Close'].rolling(200).mean()
             high_60 = df['High'].rolling(60).max()
-            if (last_close_daily > ma200.iloc[-1]) and (ma200.iloc[-1] > ma200.iloc[-5]) and (df['High'].tail(15) >= high_60.tail(15)).any():
+
+            # 🔥 關鍵修正：ILSS主力掃單邏輯必須統一使用「還原現價(adj_last_close)」與還原均線對比
+            if (adj_last_close > ma200.iloc[-1]) and (ma200.iloc[-1] > ma200.iloc[-5]) and (
+                    df['High'].tail(15) >= high_60.tail(15)).any():
                 low_20d = df['Low'].rolling(20).min().shift(1)
                 for i in range(3):
                     idx = -1 - i
                     s_level = min(low_20d.iloc[idx], ma20.iloc[idx]) if idx > -len(df) else 0
                     if s_level == 0: continue
                     break_depth = (s_level - df['Low'].iloc[idx]) / s_level
-                    if (df['Low'].iloc[idx] < s_level) and (0.005 < break_depth < 0.08) and (df['Volume'].iloc[idx] > (1.2 * df['Volume'].iloc[idx - 5:idx].mean())):
-                        if (last_close_daily > s_level) and (last_close_daily > df['Open'].iloc[-1]) and (last_close_daily > df['High'].iloc[idx]):
+                    if (df['Low'].iloc[idx] < s_level) and (0.005 < break_depth < 0.08) and (
+                            df['Volume'].iloc[idx] > (1.2 * df['Volume'].iloc[idx - 5:idx].mean())):
+                        if (adj_last_close > s_level) and (adj_last_close > df['Open'].iloc[-1]) and (
+                                adj_last_close > df['High'].iloc[idx]):
                             factors['str_ilss_sweep'] = 1
                             break
         except:
             pass
 
+        # === 呼叫外部 Technical 策略群 ===
+        # (由於 df 的 Open/High/Low/Close 已被替換為還原股價，策略皆自動平滑過渡)
         factors['str_break_30w'] = check_recent(TechnicalStrategies.break_30w_ma(df))
         factors['str_uptrend'] = int(TechnicalStrategies.strong_uptrend(df).iloc[-1])
         factors['str_high_60'] = check_recent(TechnicalStrategies.breakout_n_days_high(df, 60))
@@ -124,7 +163,9 @@ def calculate_advanced_factors(df, sid=None):
 
         try:
             logic = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
+            # 週線聚合也會以還原股價作為材料
             df_weekly = df.resample('W-FRI').agg(logic).dropna()
+
             if len(df_weekly) >= 10:
                 st_weekly = TechnicalStrategies.calculate_supertrend(df_weekly)
                 found_st_week = -1
@@ -143,9 +184,9 @@ def calculate_advanced_factors(df, sid=None):
                         factors['str_30w_week_offset'] = offset
                         factors['str_30w_adh'] = 1 if sig in [1, 3] else 0
                         factors['str_30w_shk'] = 1 if sig in [2, 3] else 0
-                        factors['str_30w_info'] = f"({res_30w['Adh_Info'].iloc[idx] if sig in [1, 3] else res_30w['Shk_Info'].iloc[idx]})"
+                        factors[
+                            'str_30w_info'] = f"({res_30w['Adh_Info'].iloc[idx] if sig in [1, 3] else res_30w['Shk_Info'].iloc[idx]})"
                         break
-                        # 👇 --- [新增] 偷渡計算 30W 聽牌狀態 ---
                 try:
                     standby_res = TechnicalStrategies.check_30w_standby(df_weekly)
                     factors['str_30w_standby'] = int(standby_res.iloc[-1])
@@ -153,6 +194,13 @@ def calculate_advanced_factors(df, sid=None):
                     pass
         except:
             pass
+
+        # 👇 插入此段測試日誌
+        if sid in ['6831', '4420', '2330']:
+            print(f"\n[驗證] 代號: {sid} | 原始收盤價: {last_raw_close:.2f} | 還原收盤價: {adj_last_close:.2f}")
+            print(f"      漲幅 -> 1d: {factors['漲幅1d']}%, 5d: {factors['漲幅5d']}%, 20d: {factors['漲幅20d']}%")
+            print(f"      指標 -> 布林寬度: {factors['bb_width']}%, ST買訊(週前): {factors['str_st_week_offset']}")
+        # 👆 插入到這裡結束
 
     return factors
 

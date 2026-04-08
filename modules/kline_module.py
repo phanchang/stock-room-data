@@ -121,6 +121,7 @@ class KLineModule(QWidget):
     def init_ui(self):
         self.setStyleSheet("background-color: #000000; color: #FFFFFF;")
         self.setMouseTracking(True)
+        self.use_adj = False  # 初始化：預設使用原始資料
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -148,11 +149,23 @@ class KLineModule(QWidget):
         control_layout.addWidget(self.btn_week)
         control_layout.addWidget(self.btn_month)
 
+        # 👇 新增還原/原始切換按鈕
+        self.btn_adj = QPushButton("原始")
+        self.btn_adj.setFixedSize(45, 28)
+        self.btn_adj.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_adj.setStyleSheet("""
+            QPushButton { background-color: #333; color: #FFF; border: 1px solid #555; border-radius: 3px; font-weight: bold; font-size: 13px; } 
+            QPushButton:hover { background-color: #444; }
+        """)
+        self.btn_adj.clicked.connect(self.toggle_adj)
+        control_layout.addWidget(self.btn_adj)
+
         control_layout.addStretch()
 
         self.lbl_data_date = QLabel("資料日期: --/--")
         self.lbl_data_date.setStyleSheet("color: #FF8800; font-weight: bold; font-size: 13px; margin-right: 10px;")
         control_layout.addWidget(self.lbl_data_date)
+
         self.btn_add_watchlist = QPushButton("+")
         self.btn_add_watchlist.setFixedSize(30, 30)
         self.btn_add_watchlist.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -161,6 +174,7 @@ class KLineModule(QWidget):
         self.btn_add_watchlist.setToolTip("將此股票加入自選名單")
         self.btn_add_watchlist.clicked.connect(self.show_add_watchlist_menu)
         control_layout.addWidget(self.btn_add_watchlist)
+
         btn_expand = QPushButton("⛶")
         btn_expand.setFixedSize(35, 30)
         btn_expand.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -189,12 +203,7 @@ class KLineModule(QWidget):
 
         self.warning_label = QLabel("⚠️ 資料過期，請執行 [更新下載]", self)
         self.warning_label.setStyleSheet("""
-            background-color: rgba(255, 0, 0, 180);
-            color: white;
-            font-weight: bold;
-            font-size: 14px;
-            padding: 5px 10px;
-            border-radius: 4px;
+            background-color: rgba(255, 0, 0, 180); color: white; font-weight: bold; font-size: 14px; padding: 5px 10px; border-radius: 4px;
         """)
         self.warning_label.move(60, 55)
         self.warning_label.hide()
@@ -221,6 +230,29 @@ class KLineModule(QWidget):
         btn.clicked.connect(lambda: self.change_timeframe(tf))
         self.btn_group.addButton(btn)
         return btn
+
+    def toggle_adj(self):
+        self.use_adj = not getattr(self, 'use_adj', False)
+        if self.use_adj:
+            self.btn_adj.setText("還原")
+            self.btn_adj.setStyleSheet("""
+                QPushButton { background-color: #FF8800; color: #000; border: 1px solid #FF8800; border-radius: 3px; font-weight: bold; font-size: 13px; } 
+                QPushButton:hover { background-color: #FFAA00; }
+            """)
+        else:
+            self.btn_adj.setText("原始")
+            self.btn_adj.setStyleSheet("""
+                QPushButton { background-color: #333; color: #FFF; border: 1px solid #555; border-radius: 3px; font-weight: bold; font-size: 13px; } 
+                QPushButton:hover { background-color: #444; }
+            """)
+
+        # 重新處理數據與繪圖
+        if self.raw_df is not None:
+            self.process_data()
+            self.redraw_chart()
+            if self.display_df is not None and not self.display_df.empty:
+                last_row = self.display_df.iloc[-1]
+                self.update_info_label(last_row, last_row.name)
 
     def open_war_room(self):
         if self.current_df is None or self.current_df.empty:
@@ -345,6 +377,13 @@ class KLineModule(QWidget):
         if self.raw_df is None: return
 
         df_source = self.raw_df.copy()
+
+        # 🔥 [新增] 偷天換日：若啟用還原，將 Adj_ 系列覆蓋原始 OHLC
+        if getattr(self, 'use_adj', False) and 'Adj_close' in df_source.columns:
+            df_source['Open'] = df_source['Adj_open']
+            df_source['High'] = df_source['Adj_high']
+            df_source['Low'] = df_source['Adj_low']
+            df_source['Close'] = df_source['Adj_close']
 
         if self.timeframe == 'D':
             df = df_source
@@ -593,6 +632,27 @@ class KLineModule(QWidget):
         self.y_label_text = self.ax1.text(1.01, 0, "", transform=self.ax1.get_yaxis_transform(),
                                           color='white', fontsize=10, fontweight='bold',
                                           va='center', ha='left', bbox=props, visible=False)
+
+        # === 畫除息標記 (D) ===
+        if 'Dividends' in view_df.columns:
+            # 找出這段期間內有配息的日子
+            div_mask = view_df['Dividends'] > 0
+            if div_mask.any():
+                div_indices = np.where(div_mask)[0]
+                for idx in div_indices:
+                    # 抓取該日的最低價與配息金額
+                    low_p = view_df['Low'].iloc[idx]
+                    div_val = view_df['Dividends'].iloc[idx]
+
+                    # 畫一條從底端延伸到最低價的虛線
+                    self.ax1.vlines(idx, ylim_min, low_p, color='#FFFF00', linestyles=':', lw=1.2, alpha=0.7)
+
+                    # 在虛線頂部（K線下方一點點）畫一個 D 的標籤，附帶金額
+                    bbox_props = dict(boxstyle="circle,pad=0.2", fc="#222222", ec="#FFFF00", lw=1)
+                    self.ax1.text(idx, ylim_min + (low_p - ylim_min) * 0.1, f"D\n{div_val:.1f}",
+                                  color='#FFFF00', fontsize=8, fontweight='bold',
+                                  ha='center', va='center', bbox=bbox_props, zorder=10)
+        # =======================
 
         self.canvas.draw_idle()
 

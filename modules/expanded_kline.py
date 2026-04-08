@@ -106,6 +106,8 @@ class ExpandedKLineWindow(QDialog):
         self.reposition_overlays()
 
     def init_ui(self):
+        self.use_adj = False  # 初始化預設狀態
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -129,6 +131,17 @@ class ExpandedKLineWindow(QDialog):
         toolbar.addWidget(self.btn_day)
         toolbar.addWidget(self.btn_week)
         toolbar.addWidget(self.btn_month)
+
+        # 👇 新增還原/原始切換按鈕
+        self.btn_adj = QPushButton("原始")
+        self.btn_adj.setFixedSize(45, 28)
+        self.btn_adj.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_adj.setStyleSheet("""
+            QPushButton { background-color: #333; color: #FFF; border: 1px solid #555; border-radius: 3px; font-weight: bold; font-size: 13px; } 
+            QPushButton:hover { background-color: #444; }
+        """)
+        self.btn_adj.clicked.connect(self.toggle_adj)
+        toolbar.addWidget(self.btn_adj)
 
         layout.addLayout(toolbar)
 
@@ -253,6 +266,24 @@ class ExpandedKLineWindow(QDialog):
         self.btn_group.addButton(btn)
         return btn
 
+    def toggle_adj(self):
+        self.use_adj = not getattr(self, 'use_adj', False)
+        if self.use_adj:
+            self.btn_adj.setText("還原")
+            self.btn_adj.setStyleSheet("""
+                QPushButton { background-color: #FF8800; color: #000; border: 1px solid #FF8800; border-radius: 3px; font-weight: bold; font-size: 13px; } 
+                QPushButton:hover { background-color: #FFAA00; }
+            """)
+        else:
+            self.btn_adj.setText("原始")
+            self.btn_adj.setStyleSheet("""
+                QPushButton { background-color: #333; color: #FFF; border: 1px solid #555; border-radius: 3px; font-weight: bold; font-size: 13px; } 
+                QPushButton:hover { background-color: #444; }
+            """)
+
+        if not self.df_source.empty:
+            self.update_data_frequency(self.current_tf)
+
     def update_stock_data(self, stock_id, df, stock_name=""):
         self.stock_id = stock_id
         self.stock_name = stock_name
@@ -367,16 +398,33 @@ class ExpandedKLineWindow(QDialog):
 
     def update_data_frequency(self, tf_code):
         self.current_tf = tf_code
+
+        base_df = self.df_source.copy()
+
+        # 🔥 [新增] 偷天換日：若啟用還原，將 Adj_ 系列覆蓋原始 OHLC
+        if getattr(self, 'use_adj', False) and 'Adj_close' in base_df.columns:
+            base_df['Open'] = base_df['Adj_open']
+            base_df['High'] = base_df['Adj_high']
+            base_df['Low'] = base_df['Adj_low']
+            base_df['Close'] = base_df['Adj_close']
+
         if tf_code == 'D':
-            # 直接複製原始乾淨的資料
-            self.current_df = self.df_source.copy()
+            # 直接複製處理過的 base_df
+            self.current_df = base_df
             self.ma_overlay.show()
         else:
             # 即時重採樣
             rule = 'W-FRI' if tf_code == 'W' else 'ME'
             logic = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
-            self.current_df = self.df_source.resample(rule).agg(logic).dropna()
+            self.current_df = base_df.resample(rule).agg(logic).dropna()
             self.ma_overlay.hide()
+            # 👇 新增：修正重採樣後最後一筆日期，對齊真實最後交易日 (4/2)
+            if not self.current_df.empty:
+                real_last_date = base_df.index[-1]
+                if self.current_df.index[-1] > real_last_date:
+                    idx_list = self.current_df.index.tolist()
+                    idx_list[-1] = real_last_date
+                    self.current_df.index = pd.DatetimeIndex(idx_list)
 
         self.current_df['PrevClose'] = self.current_df['Close'].shift(1)
         if not self.current_df.empty:
@@ -658,6 +706,29 @@ class ExpandedKLineWindow(QDialog):
         if len(view_df) > 0:
             self._update_sub_chart_values(total_len - 1)
             self._update_info_label(total_len - 1)
+
+        # === 畫除息標記 (D) ===
+        if 'Dividends' in view_df.columns:
+            div_mask = view_df['Dividends'] > 0
+            if div_mask.any():
+                div_indices = np.where(div_mask)[0]
+
+                # 取得當前 Y 軸的最低點，用來畫線
+                ymin, ymax = self.ax1.get_ylim()
+
+                for idx in div_indices:
+                    low_p = view_df['Low'].iloc[idx]
+                    div_val = view_df['Dividends'].iloc[idx]
+
+                    # 畫虛線
+                    self.ax1.vlines(idx, ymin, low_p, color='#FFFF00', linestyles=':', lw=1.2, alpha=0.7)
+
+                    # 畫帶有金額的 D 標籤
+                    bbox_props = dict(boxstyle="circle,pad=0.2", fc="#222222", ec="#FFFF00", lw=1)
+                    self.ax1.text(idx, ymin + (low_p - ymin) * 0.05, f"D\n{div_val:.1f}",
+                                  color='#FFFF00', fontsize=8, fontweight='bold',
+                                  ha='center', va='center', bbox=bbox_props, zorder=10)
+        # =======================
 
         self.canvas.draw_idle()
 

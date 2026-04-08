@@ -1,13 +1,15 @@
 import sys
 import os
+
+# 系統環境設定完畢後，再 import 你的自訂模組
 from pathlib import Path
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
-                             QVBoxLayout, QPushButton, QStackedWidget,
-                             QButtonGroup, QGridLayout, QTabWidget,
-                             QMessageBox, QProgressDialog, QSizePolicy)
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QStackedWidget, QGridLayout,
+                             QSizePolicy, QFrame, QPushButton, QLabel, QTabWidget)
+from PyQt6.QtCore import Qt, pyqtSignal,QTimer
 import traceback
 
+from modules.sector_dashboard import SectorDashboard
 
 def exception_hook(exctype, value, tb):
     print("💥 偵測到未捕獲的錯誤:")
@@ -35,44 +37,83 @@ from modules.strategy_module import StrategyModule
 from modules.settings_module import SettingsModule
 
 
-class SideMenu(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedWidth(70)
-        self.setStyleSheet("background-color: #111; border-right: 1px solid #222;")
+class SideMenu(QFrame):
+    menu_selected = pyqtSignal(int)
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedWidth(60)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: #1e1e1e;
+                border-right: 1px solid #333333;
+            }
+        """)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 20, 5, 20)
-        layout.setSpacing(15)
+        layout.setContentsMargins(0, 10, 0, 10)
+        layout.setSpacing(10)
 
-        self.button_group = QButtonGroup(self)
-        self.button_group.setExclusive(True)
-
-        self.btn_warroom = self._create_menu_btn("戰情", 0)
-        self.btn_strategy = self._create_menu_btn("選股", 1)
-        self.btn_market = self._create_menu_btn("市場", 2)
-        self.btn_settings = self._create_menu_btn("設定", 3)
-
-        self.btn_warroom.setChecked(True)
+        # 加入板塊按鈕
+        self.btn_warroom = self._create_nav_btn("戰情室", "chart-line", True)
+        self.btn_strategy = self._create_nav_btn("選股", "filter", False)
+        self.btn_market = self._create_nav_btn("市場", "globe", False)
+        self.btn_sector = self._create_nav_btn("板塊", "th-large", False)  # <-- 新增板塊按鈕
+        self.btn_settings = self._create_nav_btn("設定", "cog", False)
 
         layout.addWidget(self.btn_warroom)
         layout.addWidget(self.btn_strategy)
         layout.addWidget(self.btn_market)
+        layout.addWidget(self.btn_sector)  # <-- 加入 Layout
+
         layout.addStretch()
         layout.addWidget(self.btn_settings)
 
-    def _create_menu_btn(self, text, id):
+        # 將板塊按鈕加入列管，才能正常切換 highlight 狀態
+        self.nav_btns = [self.btn_warroom, self.btn_strategy, self.btn_market, self.btn_sector, self.btn_settings]
+
+        # 綁定點擊事件與對應的 Page Index
+        self.btn_warroom.clicked.connect(lambda: self._on_btn_clicked(self.btn_warroom, 0))
+        self.btn_strategy.clicked.connect(lambda: self._on_btn_clicked(self.btn_strategy, 1))
+        self.btn_market.clicked.connect(lambda: self._on_btn_clicked(self.btn_market, 2))
+        self.btn_settings.clicked.connect(lambda: self._on_btn_clicked(self.btn_settings, 3))
+        self.btn_sector.clicked.connect(lambda: self._on_btn_clicked(self.btn_sector, 4))  # <-- 對應 Page 4
+
+    def _create_nav_btn(self, text, icon_name, is_active=False):
         btn = QPushButton(text)
-        btn.setFixedSize(60, 60)
         btn.setCheckable(True)
+        btn.setChecked(is_active)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFixedHeight(50)
+
+        # 深色專業風格設定
         btn.setStyleSheet("""
-            QPushButton { 
-                background-color: #222; color: #555; border-radius: 8px; 
-                font-size: 14px; font-weight: bold; border: 1px solid #333;
+            QPushButton {
+                background-color: transparent;
+                color: #888888;
+                border: none;
+                border-left: 3px solid transparent;
+                font-size: 14px;
+                font-weight: bold;
             }
-            QPushButton:checked { background-color: #00FFFF; color: #000; }
+            QPushButton:hover {
+                color: #ffffff;
+                background-color: #2a2a2a;
+            }
+            QPushButton:checked {
+                color: #ffffff;
+                background-color: #2a2a2a;
+                border-left: 3px solid #007acc;
+            }
         """)
-        self.button_group.addButton(btn, id)
         return btn
+
+    def _on_btn_clicked(self, clicked_btn, index):
+        for btn in self.nav_btns:
+            if btn != clicked_btn:
+                btn.setChecked(False)
+        clicked_btn.setChecked(True)
+        self.menu_selected.emit(index)
 
 
 class StockWarRoomV3(QMainWindow):
@@ -97,6 +138,7 @@ class StockWarRoomV3(QMainWindow):
         QTimer.singleShot(500, self.load_initial_data)
 
     def init_ui(self):
+        """建構三窗格 UI 佈局"""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
@@ -162,6 +204,14 @@ class StockWarRoomV3(QMainWindow):
         self.settings_page = SettingsModule()
         self.pages.addWidget(self.settings_page)
 
+        # Page 4: 板塊輪動 (新增的 V9.0 模組)
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        self.sector_dashboard = SectorDashboard(project_root=current_dir)
+        self.pages.addWidget(self.sector_dashboard)
+
+        # 暫時隱藏雙擊切換功能，待 K 線引擎通暢後再來銜接
+        self.sector_dashboard.stock_double_clicked.connect(self.on_strategy_stock_clicked)
         main_layout.addWidget(self.pages)
 
     def _create_tab_widget(self):
@@ -180,7 +230,8 @@ class StockWarRoomV3(QMainWindow):
         return tabs
 
     def connect_signals(self):
-        self.side_menu.button_group.idClicked.connect(self.pages.setCurrentIndex)
+        #self.side_menu.button_group.idClicked.connect(self.pages.setCurrentIndex)
+        self.side_menu.menu_selected.connect(self.pages.setCurrentIndex)
         self.pages.currentChanged.connect(self.on_page_changed)
 
         self.list_module.stock_selected.connect(self.on_stock_changed)
@@ -239,9 +290,9 @@ class StockWarRoomV3(QMainWindow):
         self.update_visible_tabs()
 
     def on_strategy_stock_clicked(self, stock_id_full):
-        """當選股分頁雙擊股票時"""
+        """當選股分頁或板塊雙擊股票時"""
         self.current_stock_id = stock_id_full
-        clean_id = stock_id_full.split('_')[0]
+        clean_id = stock_id_full.split('_')[0].split('.')[0] # 兼顧 2330_TW 或是 2330.TW 格式
 
         stock_name = ""
         if hasattr(self.list_module, 'stock_db'):
@@ -249,14 +300,13 @@ class StockWarRoomV3(QMainWindow):
             if info: stock_name = info.get('name', '')
         self.current_stock_name = stock_name
 
-        # 🔥 背景靜默更新戰情室與擴充 K 線圖，但不切換分頁，將主控權留在選股畫面
+        # 背景靜默更新戰情室與擴充 K 線圖
         if hasattr(self, 'kline_module'):
             self.kline_module.load_stock_data(stock_id_full, stock_name)
         self.update_visible_tabs()
 
-        # [移除/註解跳轉邏輯，不再強制切到首頁]
-        self.side_menu.button_group.button(0).setChecked(True)
-        self.pages.setCurrentIndex(0)
+        # 🔥 跳轉邏輯修復：通知左側選單點擊了第一個按鈕 (Index 0 = 戰情室)
+        self.side_menu._on_btn_clicked(self.side_menu.btn_warroom, 0)
 
     def on_add_watchlist_request(self, stock_id, group_name):
         self.list_module.add_stock_to_group(stock_id, group_name)

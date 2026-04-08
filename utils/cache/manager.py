@@ -15,8 +15,8 @@ class CacheManager:
     """股票資料快取管理器"""
 
     # 快取策略設定
-    MIN_CACHE_DAYS = 250      # 最少保留 250 天（約 1 年）
-    MAX_CACHE_DAYS = 500      # 最多保留 500 天（約 2 年）
+    MIN_CACHE_DAYS = 750  # 最少保留 750 天（約 3 年）
+    MAX_CACHE_DAYS = 1000  # 最多保留 1000 天（約 4 年）
     MAX_GAP_DAYS = 10         # 資料缺口警告閾值
 
     # 必要欄位
@@ -140,14 +140,24 @@ class CacheManager:
     def load(self, symbol: str, days: Optional[int] = None) -> Optional[pd.DataFrame]:
         """
         載入股票快取資料
-
-        Args:
-            symbol: 股票代號
-            days: 載入最近幾天（None = 全部）
-
-        Returns:
-            DataFrame 或 None（若不存在或錯誤）
         """
+        # ====================================================
+        # 新增：V9.0 板塊專屬路由攔截器 (絕對路徑，不干擾既有邏輯)
+        # ====================================================
+        if symbol.startswith('IDX_'):
+            # 🔥 這裡的 import 已經被刪除了，直接使用全域的 pd 與 Path
+            sector_path = Path(
+                __file__).resolve().parent.parent.parent / 'data' / 'cache' / 'sector' / f"{symbol}.parquet"
+
+            if sector_path.exists():
+                df = pd.read_parquet(sector_path)
+                if not isinstance(df.index, pd.DatetimeIndex):
+                    df.index = pd.to_datetime(df.index)
+                if days is not None and days > 0:
+                    df = df.tail(days)
+                return df
+            return None
+
         stock_path = self._get_stock_path(symbol)
 
         if not stock_path.exists():
@@ -157,9 +167,25 @@ class CacheManager:
         try:
             df = pd.read_parquet(stock_path)
 
-            # 確保日期索引
+            # 🔥 [新增處理] 解決 parquet 跑出 Date 欄位且為 1680739200000 (毫秒) 的問題
+            if 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date'], unit='ms')
+                df.set_index('Date', inplace=True)
+
+            # 確保日期索引（如果 index 變成一長串數字，轉成時間）
             if not isinstance(df.index, pd.DatetimeIndex):
-                df.index = pd.to_datetime(df.index)
+                # 嘗試以毫秒轉換，若失敗則用一般格式轉換
+                try:
+                    if pd.api.types.is_numeric_dtype(df.index):
+                        df.index = pd.to_datetime(df.index, unit='ms')
+                    else:
+                        df.index = pd.to_datetime(df.index)
+                except:
+                    df.index = pd.to_datetime(df.index)
+
+            # 確保時間去除時區影響
+            if df.index.tz is not None:
+                df.index = df.index.tz_localize(None)
 
             # 排序
             df = df.sort_index()

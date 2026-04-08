@@ -69,7 +69,7 @@ class StockDownloader:
         os.environ['HTTPS_PROXY'] = self.proxy
 
     def download(self, symbol: str, start: Optional[str] = None,
-                 period: str = '500d') -> Optional[pd.DataFrame]:
+                 period: str = '3y') -> Optional[pd.DataFrame]:
         """
         從 yfinance 下載資料 (修正版：強制抓取原始股價)
         """
@@ -84,8 +84,8 @@ class StockDownloader:
 
             # 🔥 關鍵修正 1：強制不復權，解決小數點問題
             history_kwargs = {
-                'auto_adjust': False,  # 關閉自動復權 (關鍵!)
-                'actions': True        # 保留除權息資訊
+                'auto_adjust': False,
+                'actions': True
             }
 
             if start:
@@ -98,23 +98,49 @@ class StockDownloader:
             if df.empty:
                 self.logger.warning(f"無資料: {symbol}")
                 return None
+            # 若仍為 MultiIndex 則攤平
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
 
-            # 🔥 關鍵修正 2：移除 Adj Close 並統一欄位名稱
-            if 'Adj Close' in df.columns:
-                df = df.drop(columns=['Adj Close'])
+            # 🔥 關鍵修正 2：計算還原比例並擴充為 10 欄位
+            if 'Adj Close' not in df.columns:
+                df['Adj Close'] = df['Close']  # 防錯機制
+
+            df['ratio'] = df['Adj Close'] / df['Close']
+            df['adj_open'] = df['Open'] * df['ratio']
+            df['adj_high'] = df['High'] * df['ratio']
+            df['adj_low'] = df['Low'] * df['ratio']
+            df['adj_close'] = df['Adj Close']
 
             available_cols = df.columns.tolist()
+
+            # 配合你原本的命名習慣，全部轉為小寫
             col_mapping = {
                 'Open': 'open',
                 'High': 'high',
                 'Low': 'low',
                 'Close': 'close',
-                'Volume': 'volume'
+                'Volume': 'volume',
+                'Dividends': 'dividends',  # 🔥 [新增] 將配息資訊保留下來
+                'adj_open': 'adj_open',
+                'adj_high': 'adj_high',
+                'adj_low': 'adj_low',
+                'adj_close': 'adj_close',
+                'ratio': 'ratio'
             }
 
             selected_cols = [col for col in col_mapping.keys() if col in available_cols]
             df = df[selected_cols].copy()
             df.columns = [col_mapping[col] for col in selected_cols]
+
+            # 防呆：確保 dividends 欄位存在，且將 NaN 補為 0.0
+            if 'dividends' in df.columns:
+                df['dividends'] = df['dividends'].fillna(0.0)
+            else:
+                df['dividends'] = 0.0
+
+            if df.index.tz is not None:
+                df.index = df.index.tz_localize(None)
 
             if df.index.tz is not None:
                 df.index = df.index.tz_localize(None)
@@ -144,7 +170,7 @@ class StockDownloader:
         if existing_df is None or force:
             reason = "強制更新" if force else "首次下載"
             self.logger.info(f"{reason}，下載完整資料...")
-            df = self.download(symbol, period='500d')
+            df = self.download(symbol, period='3y')
 
         else:
             last_date = existing_df.index[-1]
@@ -189,7 +215,7 @@ class StockDownloader:
                     df = existing_df
             else:
                 self.logger.warning(f"缺失過久 ({missing_days} 天)，重新下載...")
-                df = self.download(symbol, period='500d')
+                df = self.download(symbol, period='3y')
 
         if df is not None:
             if existing_df is None or not existing_df.equals(df):
