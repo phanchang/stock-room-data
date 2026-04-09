@@ -626,9 +626,9 @@ class SettingsModule(QWidget):
             args = ["--mode", "margin"]
             mode_log = "僅抓信用資券"
 
-        self.log(f"🚀 [核心] 啟動: 深度籌碼更新 ({mode_log}) (1/3)...", True)
+        self.log(f"🚀 [核心] 啟動: 深度籌碼更新 ({mode_log}) (1/4)...", True)
         self._disable_all_buttons()
-        self.progress.setFormat("⏳ 抓取深度籌碼中 (1/3) - %p%")
+        self.progress.setFormat("⏳ 抓取深度籌碼中 (1/4) - %p%")
 
         # 啟動腳本
         self.runner_daily = ScriptRunner(self.project_root / "scripts" / "update_daily_chips_fast.py", args)
@@ -693,8 +693,8 @@ class SettingsModule(QWidget):
             self.on_pipeline_finished()
             return
 
-        self.log("📊 [核心] 啟動: 全市場估值更新 (update_market_yield.py) (2/3)...", False)
-        self.progress.setFormat("⏳ 抓取全市場估值 (2/3) - %p%")
+        self.log("📊 [核心] 啟動: 全市場估值更新 (update_market_yield.py) (2/4)...", False)
+        self.progress.setFormat("⏳ 抓取全市場估值 (2/4) - %p%")
 
         self.runner_yield = ScriptRunner(self.project_root / "scripts" / "update_market_yield.py")
         self.runner_yield.output_signal.connect(self.log)
@@ -740,14 +740,34 @@ class SettingsModule(QWidget):
     def _proceed_to_calc_factors(self):
         if hasattr(self, 'task_start_time'): self._log_duration(self.task_start_time, "資料抓取耗時")
         if not self.save_config(): return
-        self.log("⚙️ 啟動: 融合深度籌碼與策略運算 (calc_snapshot_factors.py) (3/3)...", False)
-        self.progress.setFormat("⏳ 計算策略因子 (最後階段) - %p%")
+        self.log("⚙️ 啟動: 融合深度籌碼與策略運算 (calc_snapshot_factors.py) (3/4)...", False)
+        self.progress.setFormat("⏳ 計算策略因子 - %p%")
 
         self.runner_calc = ScriptRunner(self.project_root / "scripts" / "calc_snapshot_factors.py")
         self.runner_calc.output_signal.connect(self.log)
         self.runner_calc.progress_signal.connect(self.progress.setValue)
-        self.runner_calc.finished.connect(self.on_pipeline_finished)
+        # 🔥 修改點：算完大表後，不要結束，改去呼叫 _proceed_to_build_industry
+        self.runner_calc.finished.connect(self._proceed_to_build_industry)
         self.runner_calc.start_script()
+
+    # 👇 新增：第四階段，合成板塊 K 線 👇
+    def _proceed_to_build_industry(self, exitCode):
+        if exitCode != 0:
+            self.log("❌ 策略因子計算發生錯誤，停止後續排程。")
+            self.on_pipeline_finished()
+            return
+
+        self.log("📊 啟動: 市值加權板塊合成 (build_industry_kline.py) (4/4)...", False)
+        self.progress.setFormat("⏳ 正在合成板塊 K 線 (最後階段) - %p%")
+
+        # 啟動腳本
+        self.runner_industry = ScriptRunner(self.project_root / "scripts" / "build_industry_kline.py")
+        self.runner_industry.output_signal.connect(self.log)
+        self.runner_industry.progress_signal.connect(self.progress.setValue)
+        # 結束後才呼叫 on_pipeline_finished
+        self.runner_industry.finished.connect(self.on_pipeline_finished)
+        self.runner_industry.start_script()
+    # 👆 新增結束 👆
 
     def _disable_all_buttons(self):
         self.btn_check_cloud.setEnabled(False)
@@ -964,3 +984,4 @@ class SettingsModule(QWidget):
             return True
         except:
             return False
+

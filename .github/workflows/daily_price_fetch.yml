@@ -36,15 +36,12 @@ jobs:
           echo "1. 執行下載與運算 K 線..."
           python scripts/init_cache_tw.py --auto --force
           
-          echo "2. 抓取籌碼、營收與財報底稿 (解決你過年遇到的空資料問題)..."
-          python scripts/update_chips_revenue.py
+          # echo "2. 抓取籌碼、營收與財報底稿 (解決你過年遇到的空資料問題)..." 
+          # python scripts/update_chips_revenue.py
           
-          echo "3. 執行策略運算產出快照..."
+          echo "2. 執行策略運算產出快照..."
           python scripts/calc_snapshot_factors.py
           
-          echo "4. 執行板塊指數合成運算..."  
-          python scripts/build_industry_kline.py
-
       - name: Zip Results (The Smart Way)
         run: |
           echo "📦 正在打包運算結果..."
@@ -53,7 +50,7 @@ jobs:
           
           # 2. 壓縮 (加入 temp 底稿與 strategy_results 快照)
           cd data
-          zip -r daily_data.zip cache/tw cache/sector indicators temp strategy_results stock_list.csv data_status.json
+          zip -r daily_data.zip cache/tw indicators temp strategy_results stock_list.csv data_status.json
           
           echo "打包完成: data/daily_data.zip"
 

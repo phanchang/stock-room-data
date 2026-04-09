@@ -1,6 +1,7 @@
 """
 StockWarRoom 核心數據整合器 V12.7 - 進度回報修復版
 加入 PROGRESS 關鍵字輸出，解決 SettingsModule 進度條不動的問題。
+0409更新 這支已經被chips_fast取代
 """
 
 import pandas as pd

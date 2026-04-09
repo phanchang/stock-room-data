@@ -67,6 +67,21 @@ class SectorDashboard(QWidget):
                             self.sector_members.setdefault(tag, set()).add(sid)
 
     def init_ui(self):
+        self.setStyleSheet("""
+                    QGroupBox {
+                        border: 1px solid #3E3E42;
+                        border-radius: 6px;
+                        margin-top: 18px;
+                        font-weight: bold;
+                    }
+                    QGroupBox::title {
+                        subcontrol-origin: margin;
+                        subcontrol-position: top left;
+                        padding: 0 8px;
+                        color: #FFD700; /* 使用亮金黃色，在黑底中絕對顯眼且具備層次感 */
+                        font-size: 15px;
+                    }
+                """)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(5, 5, 5, 5)
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -156,6 +171,7 @@ class SectorDashboard(QWidget):
 
         main_layout.addWidget(self.main_splitter)
 
+    # 替換整個 create_styled_table function
     def create_styled_table(self, columns):
         table = QTableWidget()
         table.setColumnCount(len(columns))
@@ -169,11 +185,30 @@ class SectorDashboard(QWidget):
         header = table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setSortIndicatorShown(True)
+        header.setMinimumSectionSize(65)
+        # 👇 修正白色斷層：強制最後一欄（檔數）填滿剩餘的右側空間
+        header.setStretchLastSection(True)
 
+        # 👇 徹底覆蓋所有邊角與底層背景為暗黑主題
         table.setStyleSheet("""
             QTableWidget { background-color: #121212; alternate-background-color: #1A1A1A; color: #E0E0E0; gridline-color: #333; border: 1px solid #333; }
             QTableWidget::item:selected { background-color: #004466; color: #FFF; }
+
+            QHeaderView { background-color: #222; border: none; }
             QHeaderView::section { background-color: #222; color: #00E5FF; padding: 4px; border: 1px solid #333; font-weight: bold; font-size: 13px;}
+
+            QScrollBar:vertical { border: none; background: #121212; width: 12px; }
+            QScrollBar::handle:vertical { background: #555; border-radius: 6px; min-height: 20px; }
+            QScrollBar::handle:vertical:hover { background: #777; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { border: none; background: none; }
+
+            QScrollBar:horizontal { border: none; background: #121212; height: 12px; }
+            QScrollBar::handle:horizontal { background: #555; border-radius: 6px; min-width: 20px; }
+            QScrollBar::handle:horizontal:hover { background: #777; }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { border: none; background: none; }
+
+            QTableCornerButton::section { background-color: #121212; border: 1px solid #333; }
+            QAbstractScrollArea::corner { background-color: #121212; border: none; }
         """)
         return table
 

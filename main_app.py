@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QStackedWidget, QGridLayout,
-                             QSizePolicy, QFrame, QPushButton, QLabel, QTabWidget)
+                             QSizePolicy, QFrame, QPushButton, QLabel, QTabWidget,QMessageBox)
 from PyQt6.QtCore import Qt, pyqtSignal,QTimer
 import traceback
 
