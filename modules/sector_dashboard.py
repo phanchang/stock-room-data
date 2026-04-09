@@ -171,6 +171,37 @@ class SectorDashboard(QWidget):
 
         main_layout.addWidget(self.main_splitter)
 
+    def reload_dashboard(self):
+        """🔄 重新載入硬碟最新數據並更新 UI (提供給外部或頁籤切換時呼叫)"""
+        # 1. 重新讀取最新的 factor_snapshot.parquet
+        self.init_data()
+
+        # 2. 重新讀取緩存資料夾內的 IDX_*.parquet 並重繪左側列表
+        self.load_sectors_to_table()
+
+        # 3. 清空右側 K 線圖，避免殘留舊板塊的畫面
+        if hasattr(self, 'kline_widget') and self.kline_widget is not None:
+            self.kline_widget.setParent(None)
+            self.kline_widget.deleteLater()
+            self.kline_widget = None
+
+        # 4. 恢復 K 線圖的 Placeholder 提示文字
+        for i in reversed(range(self.kline_layout.count())):
+            widget = self.kline_layout.itemAt(i).widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+
+        self.kline_placeholder = QLabel("請從左側選擇板塊以載入 K 線圖...")
+        self.kline_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.kline_placeholder.setStyleSheet("color: gray; font-size: 14px;")
+        self.kline_layout.addWidget(self.kline_placeholder)
+
+        # 5. 清空下方成分股列表
+        self.const_table.setRowCount(0)
+
+
+
     # 替換整個 create_styled_table function
     def create_styled_table(self, columns):
         table = QTableWidget()
@@ -360,13 +391,16 @@ class SectorDashboard(QWidget):
         self.txt_search_const.blockSignals(False)
 
     def update_kline_view(self, sector_name):
-        """🚀 終極修復：暴力對齊所有 DataFrame 欄位，確保 K 線引擎絕對不會靜默崩潰"""
+        """🚀 終極修復：暴力對齊所有 DataFrame 欄位，並強制從硬碟讀取最新資料"""
         sid = f"IDX_{sector_name}"
         try:
-            from utils.cache.manager import CacheManager
-            cache = CacheManager()
-            df = cache.load(sid)
-            if df is None or df.empty: raise ValueError("無資料")
+            # --- 修正點：直接從實體檔案讀取，繞過 CacheManager 的記憶體快取 ---
+            file_path = self.sector_dir / f"{sid}.parquet"
+            if not file_path.exists():
+                raise ValueError(f"找不到板塊資料: {file_path}")
+
+            df = pd.read_parquet(file_path)
+            # --- 修正點結束 ---
 
             # 1. 全部轉小寫處理，徹底防堵大小寫造成 KeyError
             df.columns = [str(c).lower() for c in df.columns]
