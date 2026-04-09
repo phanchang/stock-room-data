@@ -48,23 +48,29 @@ def load_sector_mappings(project_root):
 
 
 def load_issued_shares(project_root, all_sids):
-    """從 fundamentals json 中讀取最新發行股數"""
+    """從剛算好的 factor_snapshot.parquet 中讀取最新發行股數，提升穩定度與速度"""
     shares_dict = {}
-    fund_dir = project_root / 'data' / 'fundamentals'
+    snapshot_path = project_root / 'data' / 'strategy_results' / 'factor_snapshot.parquet'
 
-    for sid in all_sids:
-        json_path = fund_dir / f"{sid}.json"
-        if json_path.exists():
-            try:
-                with open(json_path, 'r', encoding='utf-8') as jf:
-                    jdata = json.load(jf)
-                    inst_data = jdata.get('institutional_investors', [])
-                    if inst_data:
-                        shares = float(inst_data[0].get('issued_shares', 0) or 0)
-                        if shares > 0:
-                            shares_dict[sid] = shares
-            except Exception:
-                pass
+    if snapshot_path.exists():
+        try:
+            df = pd.read_parquet(snapshot_path)
+            for _, row in df.iterrows():
+                sid = str(row['sid']).strip()
+                shares = float(row.get('issued_shares', 0) or 0)
+                if shares > 0:
+                    shares_dict[sid] = shares
+        except Exception as e:
+            print(f"[Error] 讀取 snapshot 失敗: {e}")
+
+    print(f"🔍 [Debug] 成功從快照取得 {len(shares_dict)} 檔股票的發行股數。")
+
+    # 防呆機制：如果真的抓不到股數，全部給予等權重 (1.0)，確保板塊依然能合成出來
+    if not shares_dict:
+        print("⚠️ [Warning] 無法取得發行股數，自動切換為『等權重平均』模式！")
+        for sid in all_sids:
+            shares_dict[sid] = 1.0
+
     return shares_dict
 
 
@@ -73,6 +79,7 @@ def main():
 
     # 1. 載入標籤與過濾
     sector_dict = load_sector_mappings(project_root)
+    print(f"🔍 [Debug] 成功讀取 {len(sector_dict)} 個板塊標籤。")
     all_needed_sids = set(sid for sids in sector_dict.values() for sid in sids)
     shares_dict = load_issued_shares(project_root, all_needed_sids)
 
