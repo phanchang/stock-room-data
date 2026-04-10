@@ -48,14 +48,23 @@ class SectorDashboard(QWidget):
                     self.snapshot_df['融資5日增(%)'] = self.snapshot_df.get('margin_diff_5d', 0)
                     self.snapshot_df['強勢特徵標籤'] = self.snapshot_df.get('強勢特徵', '')
 
-                    self.snapshot_df['30W距離'] = pd.to_numeric(self.snapshot_df.get('str_30w_week_offset', 99),
-                                                                errors='coerce').fillna(99)
-                    self.snapshot_df['ST距離'] = pd.to_numeric(self.snapshot_df.get('str_st_week_offset', 99),
-                                                               errors='coerce').fillna(99)
+                    if 'str_30w_week_offset' in self.snapshot_df.columns:
+                        self.snapshot_df['30W距離'] = pd.to_numeric(self.snapshot_df['str_30w_week_offset'],
+                                                                    errors='coerce').fillna(99)
+                    else:
+                        self.snapshot_df['30W距離'] = 99.0
+
+                    if 'str_st_week_offset' in self.snapshot_df.columns:
+                        self.snapshot_df['ST距離'] = pd.to_numeric(self.snapshot_df['str_st_week_offset'],
+                                                                   errors='coerce').fillna(99)
+                    else:
+                        self.snapshot_df['ST距離'] = 99.0
             except Exception as e:
                 pass
 
-        for file_name, col_name in [('dj_industry.csv', 'dj_sub_ind'), ('concept_tags.csv', 'sub_concepts')]:
+        self.sector_types = {}  # 新增：記錄板塊分類屬性
+        for file_name, col_name, s_type in [('dj_industry.csv', 'dj_sub_ind', '細產業'),
+                                            ('concept_tags.csv', 'sub_concepts', '概念股')]:
             path = self.project_root / 'data' / file_name
             if path.exists():
                 df = pd.read_csv(path, dtype=str)
@@ -65,6 +74,9 @@ class SectorDashboard(QWidget):
                         tag = tag.strip()
                         if tag and tag != 'nan':
                             self.sector_members.setdefault(tag, set()).add(sid)
+                            # 將該板塊標記為 細產業 或 概念股
+                            if tag not in self.sector_types:
+                                self.sector_types[tag] = s_type
 
     def init_ui(self):
         self.setStyleSheet("""
@@ -92,6 +104,14 @@ class SectorDashboard(QWidget):
         sector_search_layout = QHBoxLayout()
         sector_search_layout.setContentsMargins(0, 0, 0, 5)
 
+        # ====== 新增：板塊分類過濾選單 ======
+        self.combo_sector_type = QComboBox()
+        self.combo_sector_type.addItems(["全部板塊", "細產業", "概念股"])
+        self.combo_sector_type.setStyleSheet(
+            "background: #222; color: #FFF; border: 1px solid #444; padding: 4px; font-weight: bold;")
+        self.combo_sector_type.currentTextChanged.connect(self.filter_sectors)
+        sector_search_layout.addWidget(self.combo_sector_type)
+
         self.combo_sector_filter = QComboBox()
         self.combo_sector_filter.addItems(["-- ⚡ 尋找起漲板塊 --", "🔥30W 剛突破", "🔥ST 剛轉多"])
         self.combo_sector_filter.setStyleSheet(
@@ -107,7 +127,8 @@ class SectorDashboard(QWidget):
 
         left_layout.addLayout(sector_search_layout)
 
-        self.sector_table = self.create_styled_table(['板塊名稱', '型態', '5日(%)', '今日(%)', '量比', '檔數'])
+        # 修改：新增「分類」欄位，並將索引向後推移
+        self.sector_table = self.create_styled_table(['分類', '板塊名稱', '型態', '5日(%)', '今日(%)', '量比', '檔數'])
         self.sector_table.itemSelectionChanged.connect(self.on_sector_selected)
         left_layout.addWidget(self.sector_table)
         self.left_group.setLayout(left_layout)
@@ -268,6 +289,14 @@ class SectorDashboard(QWidget):
             item.setText(str(val))
         return item
 
+    def on_sector_quick_filter(self, text):
+        if "⚡" in text:
+            self.txt_search_sector.clear()
+        elif "30W" in text:
+            self.txt_search_sector.setText("🔥30W")
+        elif "ST" in text:
+            self.txt_search_sector.setText("🔥ST")
+
     def load_sectors_to_table(self):
         self.sector_table.setSortingEnabled(False)
         self.sector_table.setRowCount(0)
@@ -330,55 +359,79 @@ class SectorDashboard(QWidget):
                 row = self.sector_table.rowCount()
                 self.sector_table.insertRow(row)
 
+                # --- 欄位 0: 分類 ---
+                sector_type = self.sector_types.get(sector_name, "未知")
+                type_item = NumericItem(sector_type)
+                type_item.setData(Qt.ItemDataRole.UserRole, 0)
+                if sector_type == '細產業':
+                    type_item.setForeground(QBrush(QColor('#00E5FF')))  # 藍綠色區隔
+                else:
+                    type_item.setForeground(QBrush(QColor('#FF9800')))  # 橘黃色區隔
+                self.sector_table.setItem(row, 0, type_item)
+
+                # --- 欄位 1: 板塊名稱 ---
                 name_item = NumericItem(sector_name)
                 name_item.setData(Qt.ItemDataRole.UserRole, 0)
-                self.sector_table.setItem(row, 0, name_item)
+                self.sector_table.setItem(row, 1, name_item)
 
+                # --- 欄位 2: 型態 ---
                 tag_item = NumericItem(tag_str)
                 tag_item.setData(Qt.ItemDataRole.UserRole, 0)
                 tag_item.setForeground(QBrush(QColor('#FFD700')))
-                self.sector_table.setItem(row, 1, tag_item)
+                self.sector_table.setItem(row, 2, tag_item)
 
-                self.sector_table.setItem(row, 2, self.format_number_item(pct_5d, True))
-                self.sector_table.setItem(row, 3, self.format_number_item(pct_1d, True))
+                # --- 欄位 3 ~ 6: 數據 ---
+                self.sector_table.setItem(row, 3, self.format_number_item(pct_5d, True))
+                self.sector_table.setItem(row, 4, self.format_number_item(pct_1d, True))
 
                 ratio_item = self.format_number_item(vol_ratio, False)
                 if vol_ratio >= 1.2: ratio_item.setForeground(QBrush(QColor('#FFD700')))
-                self.sector_table.setItem(row, 4, ratio_item)
+                self.sector_table.setItem(row, 5, ratio_item)
 
                 count_item = self.format_number_item(member_count, False)
                 count_item.setText(str(member_count))
-                self.sector_table.setItem(row, 5, count_item)
+                self.sector_table.setItem(row, 6, count_item)
             except Exception as e:
                 pass
 
         self.sector_table.setSortingEnabled(True)
-        self.sector_table.sortItems(2, Qt.SortOrder.DescendingOrder)
+        # 注意：原本排序 5日漲幅 是第 2 欄，現在改為第 3 欄
+        self.sector_table.sortItems(3, Qt.SortOrder.DescendingOrder)
 
-    def on_sector_quick_filter(self, text):
-        if "⚡" in text:
-            self.txt_search_sector.clear()
-        elif "30W" in text:
-            self.txt_search_sector.setText("🔥30W")
-        elif "ST" in text:
-            self.txt_search_sector.setText("🔥ST")
+    def filter_sectors(self, *args):
+        # 吸收 *args 避免訊號傳遞參數型態衝突
+        search_text = self.txt_search_sector.text().lower()
+        type_filter = self.combo_sector_type.currentText()
 
-    def filter_sectors(self, text):
-        text = text.lower()
         for i in range(self.sector_table.rowCount()):
-            match = False
-            for col in [0, 1]:
-                item = self.sector_table.item(i, col)
-                if item and text in item.text().lower():
-                    match = True
-                    break
-            self.sector_table.setRowHidden(i, not match)
+            match_search = False
+            match_type = False
+
+            # 1. 檢查分類是否符合 (欄位 0)
+            type_item = self.sector_table.item(i, 0)
+            if type_filter == "全部板塊" or (type_item and type_item.text() == type_filter):
+                match_type = True
+
+            # 2. 檢查關鍵字是否符合 (欄位 1:名稱, 欄位 2:型態)
+            if not search_text:
+                match_search = True
+            else:
+                for col in [1, 2]:
+                    item = self.sector_table.item(i, col)
+                    if item and search_text in item.text().lower():
+                        match_search = True
+                        break
+
+            # 必須同時滿足分類與關鍵字條件
+            self.sector_table.setRowHidden(i, not (match_search and match_type))
 
     def on_sector_selected(self):
         selected_items = self.sector_table.selectedItems()
         if not selected_items: return
         row = selected_items[0].row()
-        sector_name = self.sector_table.item(row, 0).text()
+
+        # 注意：名稱原本在欄位 0，現在改為欄位 1
+        sector_name = self.sector_table.item(row, 1).text()
 
         self.update_kline_view(sector_name)
         self.update_constituents_table(sector_name)
@@ -506,20 +559,39 @@ class SectorDashboard(QWidget):
 
             if is_30w_special:
                 w30_item = self.const_table.item(i, 9)
-                if w30_item and float(w30_item.data(Qt.ItemDataRole.UserRole)) <= 3:
-                    match = True
+                tag_item = self.const_table.item(i, 8)
+                if w30_item and tag_item:
+                    dist = float(w30_item.data(Qt.ItemDataRole.UserRole))
+                    # 修正：距離必須介於 0~3 (排除負數異常值)，且文字標籤內確實包含 30w
+                    if 0 <= dist <= 3 and '30w' in tag_item.text().lower():
+                        match = True
             elif is_st_special:
                 st_item = self.const_table.item(i, 10)
-                if st_item and float(st_item.data(Qt.ItemDataRole.UserRole)) <= 3:
-                    match = True
+                tag_item = self.const_table.item(i, 8)
+                if st_item and tag_item:
+                    dist = float(st_item.data(Qt.ItemDataRole.UserRole))
+                    # 修正：距離必須介於 0~3，且文字標籤內確實包含 st
+                    if 0 <= dist <= 3 and 'st' in tag_item.text().lower():
+                        match = True
             elif text == "" or "-- ⚡" in text:
                 match = True
             else:
+                # 修正：擴增其他過濾條件的模糊比對，避免下拉名稱與實際 Tag 略有出入
+                search_keywords = [text]
+                if "投信認養" in text:
+                    search_keywords = ["投信"]
+                elif "突破30週" in text:
+                    search_keywords = ["30w突破", "突破30w", "30w黏貼後突破"]
+                elif "主力掃單" in text:
+                    search_keywords = ["ilss", "主力"]
+
                 for col in [0, 1, 8]:
                     item = self.const_table.item(i, col)
-                    if item and text in item.text().lower():
-                        match = True
-                        break
+                    if item:
+                        item_text = item.text().lower()
+                        if any(kw in item_text for kw in search_keywords):
+                            match = True
+                            break
 
             self.const_table.setRowHidden(i, not match)
 

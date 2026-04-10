@@ -699,7 +699,10 @@ class FrozenTableView(QTableView):
         width = 0
         for i in range(4):
             if not self.isColumnHidden(i):
-                width += self.columnWidth(i)
+                # 🔥 修正：確保 frozen_view 的每一欄寬度都與底層 main_view 保持絕對同步
+                col_w = self.columnWidth(i)
+                self.frozen_view.setColumnWidth(i, col_w)
+                width += col_w
 
         self.frozen_view.setGeometry(self.frameWidth(), self.frameWidth(),
                                      width, self.viewport().height() + self.horizontalHeader().height())
@@ -1275,6 +1278,9 @@ class StrategyModule(QWidget):
         if latest_mtime > getattr(self, 'last_load_time', 0):
             print("🔄 偵測到背景資料已更新，自動重新整理選股畫面...")
             self.load_data()
+
+        # 🔥 修正：強制在切換回本頁面時，重新呼叫佈局校準，喚醒所有欄寬設定
+        QTimer.singleShot(10, self.adjust_table_layout)
 
     def on_data_loaded(self, df):
         self.full_df = df
