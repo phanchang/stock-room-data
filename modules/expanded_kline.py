@@ -1,3 +1,4 @@
+# 檔案路徑: modules/expanded_kline.py
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -65,7 +66,7 @@ class ExpandedKLineWindow(QDialog):
             self.df_source.index = pd.to_datetime(self.df_source.index)
         self.current_df = self.df_source
 
-        self.current_indicator = "Volume"
+        self.current_indicator = "成交量"
         self.current_tf = "D"
 
         self.visible_candles = 250
@@ -106,7 +107,7 @@ class ExpandedKLineWindow(QDialog):
         self.reposition_overlays()
 
     def init_ui(self):
-        self.use_adj = False  # 初始化預設狀態
+        self.use_adj = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -132,7 +133,6 @@ class ExpandedKLineWindow(QDialog):
         toolbar.addWidget(self.btn_week)
         toolbar.addWidget(self.btn_month)
 
-        # 👇 新增還原/原始切換按鈕
         self.btn_adj = QPushButton("原始")
         self.btn_adj.setFixedSize(45, 28)
         self.btn_adj.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -206,14 +206,14 @@ class ExpandedKLineWindow(QDialog):
         sub_layout.setSpacing(10)
 
         self.combo = QComboBox()
-        self.combo.addItems(["Volume", "SuperTrend", "Vix Fix", "KD", "MACD", "RSI"])
+        self.combo.addItems(["成交量", "法人資金擴散", "營收動能", "SuperTrend", "Vix Fix", "KD", "MACD", "RSI"])
         self.combo.setCurrentText(self.current_indicator)
-        self.combo.setFixedSize(110, 20)
+        self.combo.setFixedSize(145, 20)
         self.combo.currentTextChanged.connect(self.on_indicator_changed)
         sub_layout.addWidget(self.combo)
 
         self.sub_val_label = QLabel("")
-        self.sub_val_label.setStyleSheet("font-family: 'Consolas'; font-size: 12px; font-weight: bold;")
+        self.sub_val_label.setStyleSheet("font-family: 'Consolas'; font-size: 12px; font-weight: bold; color: #E0E0E0;")
         self.sub_val_label.setTextFormat(Qt.TextFormat.RichText)
         sub_layout.addWidget(self.sub_val_label)
         sub_layout.addStretch()
@@ -291,17 +291,11 @@ class ExpandedKLineWindow(QDialog):
         self.info_title.setText(f"{self.display_id} {stock_name}")
         self.setWindowTitle(f"進階戰情室 - {self.display_id} {stock_name}")
 
-        # 這裡保存乾淨的原始日線資料，永遠不會被覆蓋污染
         self.df_source = df.copy()
         if not self.df_source.empty:
             self.df_source.index = pd.to_datetime(self.df_source.index)
 
-        # 🔥 核心修正：
-        # 不再強制跳回 "D" (日線)，而是傳入當前選取的 current_tf。
-        # 這樣就能維持「週線」或「SuperTrend」等狀態，而且因為底層資料分離，
-        # 如果使用者點了「日線」按鈕，也會完美拉出全新的日線圖。
         self.update_data_frequency(self.current_tf)
-
         self.quote_worker.set_monitoring_stocks([stock_id])
 
     def on_indicator_changed(self, name):
@@ -376,7 +370,6 @@ class ExpandedKLineWindow(QDialog):
             elif today_date == last_date:
                 current_vol = self.current_df.at[last_idx, 'Volume']
                 current_close = self.current_df.at[last_idx, 'Close']
-
                 if abs(current_close - trade_price) > 0.0001 or abs(current_vol - vol) > 0.0001:
                     self.current_df.at[last_idx, 'Open'] = open_p
                     self.current_df.at[last_idx, 'High'] = max(self.current_df.at[last_idx, 'High'], high_p)
@@ -398,10 +391,8 @@ class ExpandedKLineWindow(QDialog):
 
     def update_data_frequency(self, tf_code):
         self.current_tf = tf_code
-
         base_df = self.df_source.copy()
 
-        # 🔥 [新增] 偷天換日：若啟用還原，將 Adj_ 系列覆蓋原始 OHLC
         if getattr(self, 'use_adj', False) and 'Adj_close' in base_df.columns:
             base_df['Open'] = base_df['Adj_open']
             base_df['High'] = base_df['Adj_high']
@@ -409,16 +400,20 @@ class ExpandedKLineWindow(QDialog):
             base_df['Close'] = base_df['Adj_close']
 
         if tf_code == 'D':
-            # 直接複製處理過的 base_df
             self.current_df = base_df
             self.ma_overlay.show()
         else:
-            # 即時重採樣
             rule = 'W-FRI' if tf_code == 'W' else 'ME'
             logic = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
+
+            sector_cols = ['Legal_Diffusion', 'Rev_Diffusion', 'YoY_Median', 'YoY_Accel',
+                           'legal_diffusion', 'rev_diffusion', 'yoy_median', 'yoy_accel']
+            for c in sector_cols:
+                if c in base_df.columns:
+                    logic[c] = 'mean'
+
             self.current_df = base_df.resample(rule).agg(logic).dropna()
             self.ma_overlay.hide()
-            # 👇 新增：修正重採樣後最後一筆日期，對齊真實最後交易日 (4/2)
             if not self.current_df.empty:
                 real_last_date = base_df.index[-1]
                 if self.current_df.index[-1] > real_last_date:
@@ -449,12 +444,15 @@ class ExpandedKLineWindow(QDialog):
 
     def plot_chart_structure(self):
         self.figure.clear()
-
         gs = gridspec.GridSpec(2, 1, height_ratios=[3, 1])
         gs.update(left=0.04, right=0.96, top=0.98, bottom=0.04, hspace=0.05)
 
         self.ax1 = self.figure.add_subplot(gs[0])
         self.ax2 = self.figure.add_subplot(gs[1], sharex=self.ax1)
+
+        # 🌟 建立獨立雙 Y 軸 (解決壓縮問題)
+        self.ax3 = self.ax2.twinx()
+        self.ax3.set_visible(False)
 
         self.ax1.set_facecolor('#121212')
 
@@ -469,13 +467,17 @@ class ExpandedKLineWindow(QDialog):
                 spine.set_edgecolor('#333')
 
         self.ax1.tick_params(labelbottom=False)
-
         self.canvas.draw_idle()
         self.reposition_overlays()
 
     def draw_candles_and_indicators(self):
         self.ax1.clear()
         self.ax2.clear()
+
+        # 🌟 每次重繪前清除副軸
+        if hasattr(self, 'ax3'):
+            self.ax3.clear()
+            self.ax3.set_visible(False)
 
         self.ax1.set_facecolor('#121212')
         self.ax2.set_facecolor('#121212')
@@ -582,7 +584,7 @@ class ExpandedKLineWindow(QDialog):
                                     self.ax1.scatter(x[sig_idx], st_val * 1.01, s=80, marker='v', color='#00FF00',
                                                      edgecolors='white', zorder=6)
                         except Exception as e:
-                            print(f"ST Plot Error: {e}")
+                            pass
 
         v_h, v_l = view_df['High'].max(), view_df['Low'].min()
         if pd.notna(v_h) and pd.notna(v_l):
@@ -617,9 +619,56 @@ class ExpandedKLineWindow(QDialog):
                         self.ax1.scatter(x[sig_idx], st_val * 1.01, s=80, marker='v', color='#00FF00',
                                          edgecolors='white', zorder=6)
             except Exception as e:
-                print(f"ST Plot Error: {e}")
+                pass
 
-        if name == "Volume" or name == "SuperTrend":
+        elif name == "法人資金擴散":
+            col_legal = 'legal_diffusion' if 'legal_diffusion' in view_df.columns else 'Legal_Diffusion'
+            if col_legal in view_df.columns:
+                self.ax2.bar(x, view_df[col_legal], color='#00E5FF', width=0.6, alpha=0.7)
+                self.ax2.set_ylim(0, 105)
+                self.ax2.axhline(50, color='#555', ls='--', lw=0.8)
+            else:
+                self.ax2.text(0.5, 0.5, "僅限板塊資料", transform=self.ax2.transAxes, color='gray', ha='center')
+
+        elif name == "營收動能":
+            col_rev = 'rev_diffusion' if 'rev_diffusion' in view_df.columns else 'Rev_Diffusion'
+            col_accel = 'yoy_accel' if 'yoy_accel' in view_df.columns else 'YoY_Accel'
+
+            if col_rev in view_df.columns:
+                # 🌟 改用亮藍色 (#40C4FF) 替代原本會吃色的 #444，並提高透明度讓其顯眼
+                self.ax2.bar(x, view_df[col_rev], color='#40C4FF', width=0.7, alpha=0.6)
+                self.ax2.set_ylim(0, 105)
+                self.ax2.set_yticks([0, 50, 100])
+
+                if col_accel in view_df.columns and hasattr(self, 'ax3'):
+                    self.ax3.set_visible(True)
+                    accel_vals = view_df[col_accel].values
+
+                    self.ax3.plot(x, accel_vals, color='#FFD700', lw=2, label='YoY Accel')
+                    self.ax3.axhline(0, color='#FFF', ls='-', lw=0.5, alpha=0.5)
+
+                    # 視覺強化：正加速度區域填色
+                    self.ax3.fill_between(x, 0, accel_vals, where=(accel_vals > 0), color='#FFD700', alpha=0.15)
+
+                    # 視覺強化：向上紅箭頭 (▲)
+                    accel_diff = view_df[col_accel].diff()
+                    jump_mask = (accel_diff > 0) & (view_df[col_accel] > 0)
+                    if jump_mask.any():
+                        self.ax3.scatter(x[jump_mask], accel_vals[jump_mask], color='#FF3333', marker='^', s=80,
+                                         zorder=6)
+
+                    min_y = min(view_df[col_accel].min() - 5, -10)
+                    max_y = max(view_df[col_accel].max() + 15, 10)
+                    self.ax3.set_ylim(min_y, max_y)
+
+                    self.ax3.yaxis.tick_left()
+                    self.ax3.tick_params(axis='y', colors='#FFD700', labelsize=9, labelleft=True, labelright=False)
+                    for spine in self.ax3.spines.values():
+                        spine.set_edgecolor('none')
+            else:
+                self.ax2.text(0.5, 0.5, "僅限板塊資料", transform=self.ax2.transAxes, color='gray', ha='center')
+
+        elif name == "成交量" or name == "SuperTrend":
             colors = ['#FF3333' if c >= o else '#00FF00' for c, o in zip(view_df['Close'], view_df['Open'])]
             self.ax2.bar(x, view_df['Volume'], color=colors, width=0.6, edgecolor='#121212')
 
@@ -707,28 +756,19 @@ class ExpandedKLineWindow(QDialog):
             self._update_sub_chart_values(total_len - 1)
             self._update_info_label(total_len - 1)
 
-        # === 畫除息標記 (D) ===
         if 'Dividends' in view_df.columns:
             div_mask = view_df['Dividends'] > 0
             if div_mask.any():
                 div_indices = np.where(div_mask)[0]
-
-                # 取得當前 Y 軸的最低點，用來畫線
                 ymin, ymax = self.ax1.get_ylim()
-
                 for idx in div_indices:
                     low_p = view_df['Low'].iloc[idx]
                     div_val = view_df['Dividends'].iloc[idx]
-
-                    # 畫虛線
                     self.ax1.vlines(idx, ymin, low_p, color='#FFFF00', linestyles=':', lw=1.2, alpha=0.7)
-
-                    # 畫帶有金額的 D 標籤
                     bbox_props = dict(boxstyle="circle,pad=0.2", fc="#222222", ec="#FFFF00", lw=1)
                     self.ax1.text(idx, ymin + (low_p - ymin) * 0.05, f"D\n{div_val:.1f}",
                                   color='#FFFF00', fontsize=8, fontweight='bold',
                                   ha='center', va='center', bbox=bbox_props, zorder=10)
-        # =======================
 
         self.canvas.draw_idle()
 
@@ -748,7 +788,22 @@ class ExpandedKLineWindow(QDialog):
             trend_text = "多頭" if dir_val == 1 else "空頭"
             html_text = f"ST: {span(f'{val:.2f}', color)} ({trend_text})"
 
-        elif name == "Volume":
+        elif name == "法人資金擴散":
+            col_legal = 'legal_diffusion' if 'legal_diffusion' in self.current_df.columns else 'Legal_Diffusion'
+            val = self.current_df[col_legal].iloc[idx] if col_legal in self.current_df.columns else 0
+            c = "#00E5FF" if val > 50 else "#AAA"
+            html_text = f"法人擴散率: {span(f'{val:.1f}%', c)}"
+
+        elif name == "營收動能":
+            col_rev = 'rev_diffusion' if 'rev_diffusion' in self.current_df.columns else 'Rev_Diffusion'
+            col_accel = 'yoy_accel' if 'yoy_accel' in self.current_df.columns else 'YoY_Accel'
+
+            diff = self.current_df[col_rev].iloc[idx] if col_rev in self.current_df.columns else 0
+            accel = self.current_df[col_accel].iloc[idx] if col_accel in self.current_df.columns else 0
+            c_a = "#FFD700" if accel > 0 else "#00FF00" if accel < 0 else "#AAA"
+            html_text = f"營收廣度: {span(f'{diff:.1f}%', '#DDD')} &nbsp; 加速度: {span(f'{accel:+.2f}%', c_a)}"
+
+        elif name == "成交量":
             vol = self.current_df['Volume'].iloc[idx]
             close = self.current_df['Close'].iloc[idx]
             open_p = self.current_df['Open'].iloc[idx]

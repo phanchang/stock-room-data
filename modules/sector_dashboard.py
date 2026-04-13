@@ -113,7 +113,14 @@ class SectorDashboard(QWidget):
         sector_search_layout.addWidget(self.combo_sector_type)
 
         self.combo_sector_filter = QComboBox()
-        self.combo_sector_filter.addItems(["-- ⚡ 尋找起漲板塊 --", "🔥30W 剛突破", "🔥ST 剛轉多"])
+        self.combo_sector_filter.addItems([
+            "-- ⚡ 尋找起漲板塊 --",
+            "🔥30W 剛突破",
+            "🔥ST 剛轉多",
+            "🚀 營收資金雙殺 (全面啟動)",  # 👇 新增強勢過濾器
+            "💰 法人全面點火",
+            "📈 營收加速爆發"
+        ])
         self.combo_sector_filter.setStyleSheet(
             "background: #222; color: #FFD700; border: 1px solid #444; padding: 4px; font-weight: bold;")
         self.combo_sector_filter.currentTextChanged.connect(self.on_sector_quick_filter)
@@ -127,8 +134,9 @@ class SectorDashboard(QWidget):
 
         left_layout.addLayout(sector_search_layout)
 
-        # 修改：新增「分類」欄位，並將索引向後推移
-        self.sector_table = self.create_styled_table(['分類', '板塊名稱', '型態', '5日(%)', '今日(%)', '量比', '檔數'])
+        # 👇 更新：插入 3 個新的高階數據欄位，總計 10 個欄位
+        self.sector_table = self.create_styled_table(
+            ['分類', '板塊名稱', '型態', '法人擴散', '營收廣度', 'YoY加速', '5日(%)', '今日(%)', '量比', '檔數'])
         self.sector_table.itemSelectionChanged.connect(self.on_sector_selected)
         left_layout.addWidget(self.sector_table)
         self.left_group.setLayout(left_layout)
@@ -290,12 +298,18 @@ class SectorDashboard(QWidget):
         return item
 
     def on_sector_quick_filter(self, text):
+        self.txt_search_sector.blockSignals(True)  # 暫停文字框的連動，避免重複觸發
         if "⚡" in text:
             self.txt_search_sector.clear()
         elif "30W" in text:
             self.txt_search_sector.setText("🔥30W")
         elif "ST" in text:
             self.txt_search_sector.setText("🔥ST")
+        else:
+            self.txt_search_sector.clear()  # 若為新增的高階數值過濾，清空文字搜尋框
+
+        self.txt_search_sector.blockSignals(False)
+        self.filter_sectors()  # 強制執行過濾判定
 
     def load_sectors_to_table(self):
         self.sector_table.setSortingEnabled(False)
@@ -380,32 +394,54 @@ class SectorDashboard(QWidget):
                 tag_item.setForeground(QBrush(QColor('#FFD700')))
                 self.sector_table.setItem(row, 2, tag_item)
 
-                # --- 欄位 3 ~ 6: 數據 ---
-                self.sector_table.setItem(row, 3, self.format_number_item(pct_5d, True))
-                self.sector_table.setItem(row, 4, self.format_number_item(pct_1d, True))
+                # 👇 新增提取三個高階指標 (取最後一天的值)
+                legal_diff = df['Legal_Diffusion'].iloc[-1] if 'Legal_Diffusion' in df.columns else 0.0
+                rev_diff = df['Rev_Diffusion'].iloc[-1] if 'Rev_Diffusion' in df.columns else 0.0
+                yoy_accel = df['YoY_Accel'].iloc[-1] if 'YoY_Accel' in df.columns else 0.0
+
+                # --- 欄位 3 ~ 5: 核心高階數據 ---
+                legal_item = self.format_number_item(legal_diff, True)
+                if legal_diff >= 50: legal_item.setForeground(QBrush(QColor('#00E5FF')))
+                self.sector_table.setItem(row, 3, legal_item)
+
+                rev_item = self.format_number_item(rev_diff, True)
+                if rev_diff >= 50: rev_item.setForeground(QBrush(QColor('#40C4FF')))
+                self.sector_table.setItem(row, 4, rev_item)
+
+                accel_item = self.format_number_item(yoy_accel, True)
+                if yoy_accel > 0:
+                    accel_item.setForeground(QBrush(QColor('#FF5252')))
+                elif yoy_accel < 0:
+                    accel_item.setForeground(QBrush(QColor('#4CAF50')))
+                self.sector_table.setItem(row, 5, accel_item)
+
+                # --- 欄位 6 ~ 9: 原有數據延後 ---
+                self.sector_table.setItem(row, 6, self.format_number_item(pct_5d, True))
+                self.sector_table.setItem(row, 7, self.format_number_item(pct_1d, True))
 
                 ratio_item = self.format_number_item(vol_ratio, False)
                 if vol_ratio >= 1.2: ratio_item.setForeground(QBrush(QColor('#FFD700')))
-                self.sector_table.setItem(row, 5, ratio_item)
+                self.sector_table.setItem(row, 8, ratio_item)
 
                 count_item = self.format_number_item(member_count, False)
                 count_item.setText(str(member_count))
-                self.sector_table.setItem(row, 6, count_item)
+                self.sector_table.setItem(row, 9, count_item)
             except Exception as e:
                 pass
 
         self.sector_table.setSortingEnabled(True)
-        # 注意：原本排序 5日漲幅 是第 2 欄，現在改為第 3 欄
-        self.sector_table.sortItems(3, Qt.SortOrder.DescendingOrder)
+        # 👇 修正：因為欄位擴增，原本排 5日漲幅 的欄位從第 3 欄變成第 6 欄了
+        self.sector_table.sortItems(6, Qt.SortOrder.DescendingOrder)
 
     def filter_sectors(self, *args):
-        # 吸收 *args 避免訊號傳遞參數型態衝突
         search_text = self.txt_search_sector.text().lower()
         type_filter = self.combo_sector_type.currentText()
+        quick_filter = self.combo_sector_filter.currentText()  # 取得上方下拉選單狀態
 
         for i in range(self.sector_table.rowCount()):
             match_search = False
             match_type = False
+            match_quick = True  # 預設數值過濾過關
 
             # 1. 檢查分類是否符合 (欄位 0)
             type_item = self.sector_table.item(i, 0)
@@ -422,8 +458,28 @@ class SectorDashboard(QWidget):
                         match_search = True
                         break
 
-            # 必須同時滿足分類與關鍵字條件
-            self.sector_table.setRowHidden(i, not (match_search and match_type))
+            # 3. 檢查高階數值過濾 (若使用者有選)
+            if quick_filter == "🚀 營收資金雙殺 (全面啟動)":
+                legal_val = float(self.sector_table.item(i, 3).data(Qt.ItemDataRole.UserRole))
+                rev_val = float(self.sector_table.item(i, 4).data(Qt.ItemDataRole.UserRole))
+                accel_val = float(self.sector_table.item(i, 5).data(Qt.ItemDataRole.UserRole))
+                # 嚴格條件：資金擴散>=50% 且 營收廣度>=50% 且 營收正在加速(>0)
+                if legal_val < 50 or rev_val < 50 or accel_val <= 0:
+                    match_quick = False
+
+            elif quick_filter == "💰 法人全面點火":
+                legal_val = float(self.sector_table.item(i, 3).data(Qt.ItemDataRole.UserRole))
+                if legal_val < 50:
+                    match_quick = False
+
+            elif quick_filter == "📈 營收加速爆發":
+                rev_val = float(self.sector_table.item(i, 4).data(Qt.ItemDataRole.UserRole))
+                accel_val = float(self.sector_table.item(i, 5).data(Qt.ItemDataRole.UserRole))
+                if rev_val < 50 or accel_val <= 0:
+                    match_quick = False
+
+            # 必須同時滿足分類、關鍵字、數值快篩條件，否則隱藏該列
+            self.sector_table.setRowHidden(i, not (match_search and match_type and match_quick))
 
     def on_sector_selected(self):
         selected_items = self.sector_table.selectedItems()
