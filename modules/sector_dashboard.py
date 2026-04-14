@@ -663,12 +663,11 @@ class SectorDashboard(QWidget):
             self.kline_layout.addWidget(err)
 
     def update_l2_panel(self, sector_name):
-        """即時掃描板塊所有成分股 JSON，聚合 L2 族群健康度指標 (強化排序防呆版)"""
+        """即時掃描板塊所有成分股 JSON，聚合 L2 族群健康度指標 (修正數學邏輯與欄位精準度)"""
         sids = self.sector_members.get(sector_name, set())
         contract_liabs, eps_qoqs, inst_5d_sums, margin_5d_sums = [], [], [], []
 
-        from utils.scoring.trend_factors import TrendScorer
-        print(f"\n🕵️ [L2 面板除錯] 開始掃描 {sector_name} ({len(sids)} 檔)...")
+        print(f"\n🕵️ [L2 面板] 開始掃描 {sector_name} ({len(sids)} 檔)...")
 
         for sid in sids:
             json_path = self.project_root / "data" / "fundamentals" / f"{sid}.json"
@@ -677,100 +676,111 @@ class SectorDashboard(QWidget):
                 with open(json_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
 
-                # 1. 合約負債 (排序防呆)
+                # 1. 訂單能見度 (合約負債季增)
                 bs_list = data.get('balance_sheet', [])
                 if bs_list:
                     df = pd.DataFrame(bs_list)
-                    t_col = TrendScorer._get_time_col(df)
-                    if t_col:
-                        # 強制排序：針對 '114.4Q' 或 '114/12' 進行字串排序通常有效，除非格式不一
+                    t_col = 'quarter' if 'quarter' in df.columns else ('date' if 'date' in df.columns else None)
+                    if t_col and 'contract_liab' in df.columns:
                         df = df.sort_values(t_col).dropna(subset=['contract_liab'])
                         if len(df) >= 2:
-                            curr, prev = df['contract_liab'].iloc[-1], df['contract_liab'].iloc[-2]
-                            if prev > 0: contract_liabs.append((curr - prev) / prev * 100)
+                            curr = float(df['contract_liab'].iloc[-1])
+                            prev = float(df['contract_liab'].iloc[-2])
+                            if prev != 0:  # 加上 abs() 修正負數基期的變化率問題
+                                contract_liabs.append((curr - prev) / abs(prev) * 100)
 
-                # 2. EPS QoQ (強化驗證)
+                # 2. 盈利加速 (EPS QoQ)
                 prof_list = data.get('profitability', [])
                 if prof_list:
                     df = pd.DataFrame(prof_list)
-                    t_col = TrendScorer._get_time_col(df)
-                    if t_col:
+                    t_col = 'quarter' if 'quarter' in df.columns else ('date' if 'date' in df.columns else None)
+                    if t_col and 'eps' in df.columns:
                         df = df.sort_values(t_col).dropna(subset=['eps'])
                         if len(df) >= 2:
-                            curr, prev = df['eps'].iloc[-1], df['eps'].iloc[-2]
-                            curr_q = df[t_col].iloc[-1]
-                            if prev > 0:
-                                qoq = (curr - prev) / prev * 100
-                                eps_qoqs.append(qoq)
-                                # [除錯] 只印出前兩檔確認時間軸對不對
-                                if len(eps_qoqs) <= 2:
-                                    print(f"   [EPS對接] {sid}: {df[t_col].iloc[-2]}->{curr_q} | {prev}->{curr}")
+                            curr = float(df['eps'].iloc[-1])
+                            prev = float(df['eps'].iloc[-2])
+                            if prev != 0:  # 加上 abs() 確保虧損收斂時會算出正的成長率
+                                eps_qoqs.append((curr - prev) / abs(prev) * 100)
 
-                # 3. 法人 & 4. 融資 (使用已驗證邏輯)
+                # 3. 法人資金 (近5日淨買) - 直接抓 total_buy_sell 最準確
                 inst_list = data.get('institutional_investors', [])
                 if inst_list:
                     df = pd.DataFrame(inst_list)
-                    t_col = TrendScorer._get_time_col(df)
-                    if t_col:
-                        df = df.sort_values(t_col)
-                        net_buy = pd.Series(0.0, index=df.index)
-                        for col in df.columns:
-                            c_low = col.lower()
-                            if ('foreign' in c_low or 'trust' in c_low) and any(
-                                    x in c_low for x in ['buy_sell', 'diff', 'change']):
-                                net_buy += pd.to_numeric(df[col], errors='coerce').fillna(0)
-                        inst_5d_sums.append(net_buy.tail(5).sum())
+                    if 'date' in df.columns and 'total_buy_sell' in df.columns:
+                        df = df.sort_values('date')
+                        # 強制轉為數值後加總最後 5 筆
+                        inst_5d_sums.append(pd.to_numeric(df['total_buy_sell'], errors='coerce').tail(5).sum())
 
+                # 4. 籌碼健康 (近5日融資增減) - 直接抓 fin_change 最準確
                 margin_list = data.get('margin_trading', [])
                 if margin_list:
                     df = pd.DataFrame(margin_list)
-                    t_col = TrendScorer._get_time_col(df)
-                    if t_col:
-                        df = df.sort_values(t_col)
-                        if 'fin_balance' in df.columns:
-                            diff = df['fin_balance'].diff().tail(5).sum()
-                            if not pd.isna(diff): margin_5d_sums.append(diff)
+                    if 'date' in df.columns and 'fin_change' in df.columns:
+                        df = df.sort_values('date')
+                        margin_5d_sums.append(pd.to_numeric(df['fin_change'], errors='coerce').tail(5).sum())
+
             except Exception as e:
                 print(f"   ❌ {sid} 解析錯誤: {e}")
 
-        # 計算中位數並更新 UI
+        # 計算中位數並更新 UI (過濾掉異常值)
         import numpy as np
-        m_contract = np.median(contract_liabs) if contract_liabs else np.nan
-        m_eps = np.median(eps_qoqs) if eps_qoqs else np.nan
-        m_inst = np.median(inst_5d_sums) if inst_5d_sums else np.nan
-        m_margin = np.median(margin_5d_sums) if margin_5d_sums else np.nan
+        m_contract = np.nanmedian(contract_liabs) if contract_liabs else np.nan
+        m_eps = np.nanmedian(eps_qoqs) if eps_qoqs else np.nan
+        m_inst = np.nanmedian(inst_5d_sums) if inst_5d_sums else np.nan
+        m_margin = np.nanmedian(margin_5d_sums) if margin_5d_sums else np.nan
 
-        # 呼叫 set_card (使用你既有的樣式邏輯)
-        self.set_l2_card("訂單能見度", "訂單能見度\n(合約負債季增)", m_contract, True, 10, -5)
-        self.set_l2_card("盈利加速", "盈利加速\n(EPS QoQ)", m_eps, True, 10, -10)
-        self.set_l2_card("法人資金", "法人資金\n(近5日中位數)", m_inst, False, 500, -500)
-        self.set_l2_card("籌碼健康", "籌碼健康\n(融資5日中位數)", m_margin, False, -100, 500, reverse_red=True)
+        # 呼叫 set_l2_card (傳入明確的好壞門檻)
+        self.set_l2_card("訂單能見度", "訂單能見度\n(合約負債季增)", m_contract, is_pct=True, good_thresh=5.0,
+                         bad_thresh=-5.0, lower_is_better=False)
+        self.set_l2_card("盈利加速", "盈利加速\n(EPS QoQ)", m_eps, is_pct=True, good_thresh=10.0, bad_thresh=-10.0,
+                         lower_is_better=False)
+        self.set_l2_card("法人資金", "法人資金\n(近5日中位數)", m_inst, is_pct=False, good_thresh=500, bad_thresh=-500,
+                         lower_is_better=False)
+        # 融資是籌碼，越低(大減)越好，因此 lower_is_better=True
+        self.set_l2_card("籌碼健康", "籌碼健康\n(融資5日中位數)", m_margin, is_pct=False, good_thresh=-100,
+                         bad_thresh=500, lower_is_better=True)
 
-        print(f"🕵️ [L2 面板計算完成] 中位數 - EPS:{m_eps:.2f}% | 法人:{m_inst:.0f} | 融資:{m_margin:.0f}")
-
-    def set_l2_card(self, key, title, val, is_pct, threshold_green, threshold_red, reverse_red=False):
-        """輔助函數：更新 UI 燈號顏色 (拆分出來避免代碼冗長)"""
+    def set_l2_card(self, key, title, val, is_pct, good_thresh, bad_thresh, lower_is_better=False):
+        """控制 L2 燈號與文字顏色，強制執行台股邏輯(紅好綠壞)與暗黑高亮對比"""
         lbl = self.l2_labels.get(key)
         if not lbl: return
+
+        # 無資料防呆，使用灰色
         if pd.isna(val):
             lbl.setText(f"{title}\n無資料")
-            lbl.setStyleSheet("background-color: #1A1A1A; color: #888; border: 1px solid #444; border-radius: 6px;")
+            lbl.setStyleSheet("background-color: #1A1A1A; color: #888888; border: 1px solid #444; border-radius: 6px;")
             return
 
         val_str = f"{val:+.1f}%" if is_pct else f"{int(val):+d} 張"
-        color, border = "#E0E0E0", "#444"
-        is_green = (val <= threshold_green) if reverse_red else (val >= threshold_green)
-        is_red = (val >= threshold_red) if reverse_red else (val <= threshold_red)
 
-        if is_green:
-            color, border = "#69F0AE", "#2E7D32"
-        elif is_red:
-            color, border = "#FF5252", "#C62828"
+        # 預設中性色 (亮灰色)
+        color = "#E0E0E0"
+        border = "#555555"
+
+        # 判斷邏輯：lower_is_better 專門用來處理「融資」這種越低越好的數據
+        is_good = False
+        is_bad = False
+
+        if lower_is_better:
+            is_good = val <= good_thresh  # 融資大減 -> 好
+            is_bad = val >= bad_thresh  # 融資大增 -> 壞
+        else:
+            is_good = val >= good_thresh  # EPS/法人買超大增 -> 好
+            is_bad = val <= bad_thresh  # EPS/法人買超大減 -> 壞
+
+        # 上色 (採用高亮度螢光紅與螢光綠，解決暗底看不清的問題)
+        if is_good:
+            color = "#FF4D4D"  # 亮紅色 (表示多頭/健康)
+            border = "#D32F2F"
+        elif is_bad:
+            color = "#00E676"  # 亮綠色 (表示空頭/不健康)
+            border = "#2E7D32"
 
         lbl.setText(f"{title}\n{val_str}")
         lbl.setStyleSheet(
-            f"background-color: #1A1A1A; color: {color}; border: 1px solid {border}; border-radius: 6px; font-weight: bold;")
-
+            f"background-color: #1A1A1A; color: {color}; border: 1px solid {border}; "
+            f"border-radius: 6px; font-weight: bold; font-size: 13px;"
+        )
 
     def update_constituents_table(self, sector_name):
         self.const_table.setSortingEnabled(False)

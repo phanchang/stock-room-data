@@ -412,7 +412,9 @@ class ExpandedKLineWindow(QDialog):
                 if c in base_df.columns:
                     logic[c] = 'mean'
 
-            self.current_df = base_df.resample(rule).agg(logic).dropna()
+            # 修正：只針對 OHLC 進行 dropna，避免因為擴散/營收等輔助指標有 NaN 導致整根 K 棒被刪除，救回 30W 訊號
+            self.current_df = base_df.resample(rule).agg(logic)
+            self.current_df = self.current_df.dropna(subset=['Open', 'High', 'Low', 'Close'])
             self.ma_overlay.hide()
             if not self.current_df.empty:
                 real_last_date = base_df.index[-1]
