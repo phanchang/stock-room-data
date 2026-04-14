@@ -1,13 +1,49 @@
 # 檔案路徑: modules/sector_dashboard.py
 import os
+import json
+from utils.scoring.l3_score import L3Scorer
 import pandas as pd
 from pathlib import Path
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
                              QTableWidget, QTableWidgetItem, QHeaderView,
-                             QGroupBox, QLabel, QAbstractItemView, QLineEdit, QComboBox)
+                             QGroupBox, QLabel, QAbstractItemView, QLineEdit, QComboBox,
+                             QStyledItemDelegate, QStyle)
+from PyQt6.QtGui import QColor, QBrush, QPainter
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QBrush
 
+
+# 👇 新增：負責繪製儲存格背景進度條的 Delegate
+class DataBarDelegate(QStyledItemDelegate):
+    def __init__(self, color_hex, parent=None):
+        super().__init__(parent)
+        self.bar_color = QColor(color_hex)
+        # 設定微光透明度，避免遮擋文字，在黑底更具質感
+        self.bar_color.setAlpha(60)
+
+    def paint(self, painter, option, index):
+        painter.save()
+
+        # 1. 繪製被選中時的底層高光色，保留原生選取體驗
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(option.rect, QColor('#004466'))
+
+        # 2. 讀取真實數值 (UserRole) 並繪製橫向背景進度條
+        try:
+            val = float(index.data(Qt.ItemDataRole.UserRole))
+            pct = max(0.0, min(100.0, val)) / 100.0
+            if pct > 0:
+                from PyQt6.QtCore import QRect
+                bar_rect = QRect(option.rect.x(), option.rect.y(), int(option.rect.width() * pct), option.rect.height())
+                painter.fillRect(bar_rect, self.bar_color)
+        except (ValueError, TypeError):
+            pass
+
+        painter.restore()
+
+        # 3. 呼叫父類方法繪製文字與既有樣式
+        # 關鍵技巧：清空預設背景筆刷，避免父類將我們剛畫好的進度條蓋掉
+        option.backgroundBrush = QBrush(Qt.GlobalColor.transparent)
+        super().paint(painter, option, index)
 
 class NumericItem(QTableWidgetItem):
     def __lt__(self, other):
@@ -90,8 +126,15 @@ class SectorDashboard(QWidget):
                         subcontrol-origin: margin;
                         subcontrol-position: top left;
                         padding: 0 8px;
-                        color: #FFD700; /* 使用亮金黃色，在黑底中絕對顯眼且具備層次感 */
+                        color: #FFD700;
                         font-size: 15px;
+                    }
+                    /* 🔥 新增：強制將所有懸停提示改為黑底與暗色邊框 */
+                    QToolTip {
+                        background-color: #1A1A1A;
+                        color: #E0E0E0;
+                        border: 1px solid #555555;
+                        font-family: Arial, sans-serif;
                     }
                 """)
         main_layout = QVBoxLayout(self)
@@ -104,7 +147,6 @@ class SectorDashboard(QWidget):
         sector_search_layout = QHBoxLayout()
         sector_search_layout.setContentsMargins(0, 0, 0, 5)
 
-        # ====== 新增：板塊分類過濾選單 ======
         self.combo_sector_type = QComboBox()
         self.combo_sector_type.addItems(["全部板塊", "細產業", "概念股"])
         self.combo_sector_type.setStyleSheet(
@@ -117,7 +159,7 @@ class SectorDashboard(QWidget):
             "-- ⚡ 尋找起漲板塊 --",
             "🔥30W 剛突破",
             "🔥ST 剛轉多",
-            "🚀 營收資金雙殺 (全面啟動)",  # 👇 新增強勢過濾器
+            "🚀 營收資金雙殺 (全面啟動)",
             "💰 法人全面點火",
             "📈 營收加速爆發"
         ])
@@ -134,16 +176,43 @@ class SectorDashboard(QWidget):
 
         left_layout.addLayout(sector_search_layout)
 
-        # 👇 更新：插入 3 個新的高階數據欄位，總計 10 個欄位
-        self.sector_table = self.create_styled_table(
-            ['分類', '板塊名稱', '型態', '法人擴散', '營收廣度', 'YoY加速', '5日(%)', '今日(%)', '量比', '檔數'])
+        # 👇 更新：型態移至檔數前，總計 11 個欄位
+        cols = ['評級', '分類', '板塊名稱', '法人擴散', '營收廣度', 'YoY加速', '5日(%)', '今日(%)', '量比', '型態',
+                '檔數']
+        self.sector_table = self.create_styled_table(cols)
+
+        # 👇 修正 Data Bar 綁定欄位 (平移至 3 與 4)
+        self.legal_delegate = DataBarDelegate('#00E5FF', self.sector_table)
+        self.rev_delegate = DataBarDelegate('#FF9800', self.sector_table)
+        self.sector_table.setItemDelegateForColumn(3, self.legal_delegate)
+        self.sector_table.setItemDelegateForColumn(4, self.rev_delegate)
+
         self.sector_table.itemSelectionChanged.connect(self.on_sector_selected)
         left_layout.addWidget(self.sector_table)
         self.left_group.setLayout(left_layout)
 
         self.right_splitter = QSplitter(Qt.Orientation.Vertical)
+        # 🔥 新增：L2 族群健康度面板 (4 燈號)
+        self.l2_group = QGroupBox("🩺 Layer 2 族群健康度 (族群中位數)")
+        self.l2_group.setFixedHeight(95)
+        self.l2_layout = QHBoxLayout()
+        self.l2_labels = {}
+
+        headers = ["訂單能見度\n(合約負債季增)", "盈利加速\n(EPS QoQ)", "法人資金\n(近5日淨買)",
+                   "籌碼健康\n(近5日融資)"]
+        for title in headers:
+            lbl = QLabel(f"{title}\n-")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet(
+                "background-color: #1A1A1A; color: #E0E0E0; border: 1px solid #444; border-radius: 6px; padding: 4px; font-size: 13px;")
+            self.l2_layout.addWidget(lbl)
+            self.l2_labels[title.split('\n')[0]] = lbl
+
+        self.l2_group.setLayout(self.l2_layout)
+        # 🔥 新增結束
 
         self.kline_group = QGroupBox("📊 板塊專屬 K 線 (市值加權合成)")
+
         self.kline_layout = QVBoxLayout()
         self.kline_placeholder = QLabel("請從左側選擇板塊以載入 K 線圖...")
         self.kline_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -178,10 +247,21 @@ class SectorDashboard(QWidget):
 
         constituents_layout.addLayout(search_layout)
 
-        cols = ['代號', '名稱', '收盤價', '今日(%)', '5日(%)', '法人5日增(%)', '融資5日增(%)', 'RS強度', '強勢特徵',
-                '30W距離', 'ST距離']
-        self.const_table = self.create_styled_table(cols)
+        # 增加 L3Score 與黑馬欄位
+        cols_const = ['代號', '名稱', '收盤價', '今日(%)', '5日(%)', '法人5日增(%)', '融資5日增(%)', 'RS強度',
+                      '強勢特徵', '30W距離', 'ST距離', 'L3Score', '黑馬']
+        self.const_table = self.create_styled_table(cols_const)
         self.const_table.cellDoubleClicked.connect(self.on_stock_double_clicked)
+
+        # 針對 L3Score (Col 11) 掛上深紫色進度條視覺
+        self.l3_delegate = DataBarDelegate('#7B1FA2', self.const_table)
+        self.const_table.setItemDelegateForColumn(11, self.l3_delegate)
+
+        # 🔥 新增：強制固定並加寬 L3Score 與黑馬欄位，避免文字被擠壓
+        self.const_table.horizontalHeader().setSectionResizeMode(11, QHeaderView.ResizeMode.Fixed)
+        self.const_table.setColumnWidth(11, 100)  # 給予 100px 寬裕空間
+        self.const_table.horizontalHeader().setSectionResizeMode(12, QHeaderView.ResizeMode.Fixed)
+        self.const_table.setColumnWidth(12, 50)
 
         self.const_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
         self.const_table.setColumnHidden(9, True)
@@ -199,6 +279,10 @@ class SectorDashboard(QWidget):
         self.main_splitter.setSizes([380, 820])
 
         main_layout.addWidget(self.main_splitter)
+        self.right_splitter.addWidget(self.l2_group)  # 🔥 加入 L2 面板
+        self.right_splitter.addWidget(self.kline_group)
+        self.right_splitter.addWidget(self.constituents_group)
+        self.right_splitter.setSizes([95, 450, 450])  # 調整比例
 
     def reload_dashboard(self):
         """🔄 重新載入硬碟最新數據並更新 UI (提供給外部或頁籤切換時呼叫)"""
@@ -373,39 +457,53 @@ class SectorDashboard(QWidget):
                 row = self.sector_table.rowCount()
                 self.sector_table.insertRow(row)
 
-                # --- 欄位 0: 分類 ---
-                sector_type = self.sector_types.get(sector_name, "未知")
-                type_item = NumericItem(sector_type)
-                type_item.setData(Qt.ItemDataRole.UserRole, 0)
-                if sector_type == '細產業':
-                    type_item.setForeground(QBrush(QColor('#00E5FF')))  # 藍綠色區隔
-                else:
-                    type_item.setForeground(QBrush(QColor('#FF9800')))  # 橘黃色區隔
-                self.sector_table.setItem(row, 0, type_item)
-
-                # --- 欄位 1: 板塊名稱 ---
-                name_item = NumericItem(sector_name)
-                name_item.setData(Qt.ItemDataRole.UserRole, 0)
-                self.sector_table.setItem(row, 1, name_item)
-
-                # --- 欄位 2: 型態 ---
-                tag_item = NumericItem(tag_str)
-                tag_item.setData(Qt.ItemDataRole.UserRole, 0)
-                tag_item.setForeground(QBrush(QColor('#FFD700')))
-                self.sector_table.setItem(row, 2, tag_item)
-
-                # 👇 新增提取三個高階指標 (取最後一天的值)
                 legal_diff = df['Legal_Diffusion'].iloc[-1] if 'Legal_Diffusion' in df.columns else 0.0
                 rev_diff = df['Rev_Diffusion'].iloc[-1] if 'Rev_Diffusion' in df.columns else 0.0
                 yoy_accel = df['YoY_Accel'].iloc[-1] if 'YoY_Accel' in df.columns else 0.0
 
-                # --- 欄位 3 ~ 5: 核心高階數據 ---
+                # --- 欄位 0: AI 熱力評級燈號 (新增 Hint) ---
+                rating = ""
+                if legal_diff >= 80 and rev_diff >= 80 and yoy_accel > 0:
+                    rating = "👑"
+                elif yoy_accel > 15:
+                    rating = "⚡"
+                elif legal_diff >= 80 or rev_diff >= 80:
+                    rating = "🔥"
+
+                rating_item = NumericItem(rating)
+                rating_item.setData(Qt.ItemDataRole.UserRole, 0)
+                rating_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                # 👇 新增 Hint 說明
+                rating_item.setToolTip(
+                    "👑: 法人與營收 >= 80% 且 YoY加速 > 0\n⚡: YoY加速極度暴力 (> 15%)\n🔥: 法人或營收 >= 80%")
+                self.sector_table.setItem(row, 0, rating_item)
+
+                # --- 欄位 1: 分類 ---
+                sector_type = self.sector_types.get(sector_name, "未知")
+                type_item = NumericItem(sector_type)
+                type_item.setData(Qt.ItemDataRole.UserRole, 0)
+                if sector_type == '細產業':
+                    type_item.setForeground(QBrush(QColor('#00E5FF')))
+                else:
+                    type_item.setForeground(QBrush(QColor('#FF9800')))
+                self.sector_table.setItem(row, 1, type_item)
+
+                # --- 欄位 2: 板塊名稱 ---
+                name_item = NumericItem(sector_name)
+                name_item.setData(Qt.ItemDataRole.UserRole, 0)
+                self.sector_table.setItem(row, 2, name_item)
+
+                # --- 欄位 3 ~ 5: 核心高階數據 (修正字體亮度並加粗) ---
                 legal_item = self.format_number_item(legal_diff, True)
-                if legal_diff >= 50: legal_item.setForeground(QBrush(QColor('#00E5FF')))
+                legal_item.setForeground(QBrush(QColor('#FFFFFF')))  # 強制亮白
+                font = legal_item.font()
+                font.setBold(True)
+                legal_item.setFont(font)
                 self.sector_table.setItem(row, 3, legal_item)
 
                 rev_item = self.format_number_item(rev_diff, True)
-                if rev_diff >= 50: rev_item.setForeground(QBrush(QColor('#40C4FF')))
+                rev_item.setForeground(QBrush(QColor('#FFFFFF')))  # 強制亮白
+                rev_item.setFont(font)
                 self.sector_table.setItem(row, 4, rev_item)
 
                 accel_item = self.format_number_item(yoy_accel, True)
@@ -415,7 +513,7 @@ class SectorDashboard(QWidget):
                     accel_item.setForeground(QBrush(QColor('#4CAF50')))
                 self.sector_table.setItem(row, 5, accel_item)
 
-                # --- 欄位 6 ~ 9: 原有數據延後 ---
+                # --- 欄位 6 ~ 8: 價量數據 ---
                 self.sector_table.setItem(row, 6, self.format_number_item(pct_5d, True))
                 self.sector_table.setItem(row, 7, self.format_number_item(pct_1d, True))
 
@@ -423,47 +521,53 @@ class SectorDashboard(QWidget):
                 if vol_ratio >= 1.2: ratio_item.setForeground(QBrush(QColor('#FFD700')))
                 self.sector_table.setItem(row, 8, ratio_item)
 
+                # --- 欄位 9: 型態 (搬移至此) ---
+                tag_item = NumericItem(tag_str)
+                tag_item.setData(Qt.ItemDataRole.UserRole, 0)
+                tag_item.setForeground(QBrush(QColor('#FFD700')))
+                self.sector_table.setItem(row, 9, tag_item)
+
+                # --- 欄位 10: 檔數 ---
                 count_item = self.format_number_item(member_count, False)
                 count_item.setText(str(member_count))
-                self.sector_table.setItem(row, 9, count_item)
+                self.sector_table.setItem(row, 10, count_item)
             except Exception as e:
                 pass
 
         self.sector_table.setSortingEnabled(True)
-        # 👇 修正：因為欄位擴增，原本排 5日漲幅 的欄位從第 3 欄變成第 6 欄了
+        # 5日漲幅現在位於 Index 6
         self.sector_table.sortItems(6, Qt.SortOrder.DescendingOrder)
 
     def filter_sectors(self, *args):
         search_text = self.txt_search_sector.text().lower()
         type_filter = self.combo_sector_type.currentText()
-        quick_filter = self.combo_sector_filter.currentText()  # 取得上方下拉選單狀態
+        quick_filter = self.combo_sector_filter.currentText()
 
         for i in range(self.sector_table.rowCount()):
             match_search = False
             match_type = False
-            match_quick = True  # 預設數值過濾過關
+            match_quick = True
 
-            # 1. 檢查分類是否符合 (欄位 0)
-            type_item = self.sector_table.item(i, 0)
+            # 1. 檢查分類是否符合 (欄位 1)
+            type_item = self.sector_table.item(i, 1)
             if type_filter == "全部板塊" or (type_item and type_item.text() == type_filter):
                 match_type = True
 
-            # 2. 檢查關鍵字是否符合 (欄位 1:名稱, 欄位 2:型態)
+            # 2. 檢查關鍵字是否符合 (名稱改為 2, 型態改為 9)
             if not search_text:
                 match_search = True
             else:
-                for col in [1, 2]:
+                for col in [2, 9]:
                     item = self.sector_table.item(i, col)
                     if item and search_text in item.text().lower():
                         match_search = True
                         break
 
-            # 3. 檢查高階數值過濾 (若使用者有選)
+            # 3. 檢查高階數值過濾 (欄位再度平移對應)
             if quick_filter == "🚀 營收資金雙殺 (全面啟動)":
                 legal_val = float(self.sector_table.item(i, 3).data(Qt.ItemDataRole.UserRole))
                 rev_val = float(self.sector_table.item(i, 4).data(Qt.ItemDataRole.UserRole))
                 accel_val = float(self.sector_table.item(i, 5).data(Qt.ItemDataRole.UserRole))
-                # 嚴格條件：資金擴散>=50% 且 營收廣度>=50% 且 營收正在加速(>0)
                 if legal_val < 50 or rev_val < 50 or accel_val <= 0:
                     match_quick = False
 
@@ -478,7 +582,6 @@ class SectorDashboard(QWidget):
                 if rev_val < 50 or accel_val <= 0:
                     match_quick = False
 
-            # 必須同時滿足分類、關鍵字、數值快篩條件，否則隱藏該列
             self.sector_table.setRowHidden(i, not (match_search and match_type and match_quick))
 
     def on_sector_selected(self):
@@ -486,9 +589,9 @@ class SectorDashboard(QWidget):
         if not selected_items: return
         row = selected_items[0].row()
 
-        # 注意：名稱原本在欄位 0，現在改為欄位 1
-        sector_name = self.sector_table.item(row, 1).text()
-
+        # 👇 板塊名稱欄位已平移至 Index 2
+        sector_name = self.sector_table.item(row, 2).text()
+        self.update_l2_panel(sector_name)
         self.update_kline_view(sector_name)
         self.update_constituents_table(sector_name)
 
@@ -559,6 +662,116 @@ class SectorDashboard(QWidget):
             err.setStyleSheet("color: #FF5252; font-size: 14px;")
             self.kline_layout.addWidget(err)
 
+    def update_l2_panel(self, sector_name):
+        """即時掃描板塊所有成分股 JSON，聚合 L2 族群健康度指標 (強化排序防呆版)"""
+        sids = self.sector_members.get(sector_name, set())
+        contract_liabs, eps_qoqs, inst_5d_sums, margin_5d_sums = [], [], [], []
+
+        from utils.scoring.trend_factors import TrendScorer
+        print(f"\n🕵️ [L2 面板除錯] 開始掃描 {sector_name} ({len(sids)} 檔)...")
+
+        for sid in sids:
+            json_path = self.project_root / "data" / "fundamentals" / f"{sid}.json"
+            if not json_path.exists(): continue
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+
+                # 1. 合約負債 (排序防呆)
+                bs_list = data.get('balance_sheet', [])
+                if bs_list:
+                    df = pd.DataFrame(bs_list)
+                    t_col = TrendScorer._get_time_col(df)
+                    if t_col:
+                        # 強制排序：針對 '114.4Q' 或 '114/12' 進行字串排序通常有效，除非格式不一
+                        df = df.sort_values(t_col).dropna(subset=['contract_liab'])
+                        if len(df) >= 2:
+                            curr, prev = df['contract_liab'].iloc[-1], df['contract_liab'].iloc[-2]
+                            if prev > 0: contract_liabs.append((curr - prev) / prev * 100)
+
+                # 2. EPS QoQ (強化驗證)
+                prof_list = data.get('profitability', [])
+                if prof_list:
+                    df = pd.DataFrame(prof_list)
+                    t_col = TrendScorer._get_time_col(df)
+                    if t_col:
+                        df = df.sort_values(t_col).dropna(subset=['eps'])
+                        if len(df) >= 2:
+                            curr, prev = df['eps'].iloc[-1], df['eps'].iloc[-2]
+                            curr_q = df[t_col].iloc[-1]
+                            if prev > 0:
+                                qoq = (curr - prev) / prev * 100
+                                eps_qoqs.append(qoq)
+                                # [除錯] 只印出前兩檔確認時間軸對不對
+                                if len(eps_qoqs) <= 2:
+                                    print(f"   [EPS對接] {sid}: {df[t_col].iloc[-2]}->{curr_q} | {prev}->{curr}")
+
+                # 3. 法人 & 4. 融資 (使用已驗證邏輯)
+                inst_list = data.get('institutional_investors', [])
+                if inst_list:
+                    df = pd.DataFrame(inst_list)
+                    t_col = TrendScorer._get_time_col(df)
+                    if t_col:
+                        df = df.sort_values(t_col)
+                        net_buy = pd.Series(0.0, index=df.index)
+                        for col in df.columns:
+                            c_low = col.lower()
+                            if ('foreign' in c_low or 'trust' in c_low) and any(
+                                    x in c_low for x in ['buy_sell', 'diff', 'change']):
+                                net_buy += pd.to_numeric(df[col], errors='coerce').fillna(0)
+                        inst_5d_sums.append(net_buy.tail(5).sum())
+
+                margin_list = data.get('margin_trading', [])
+                if margin_list:
+                    df = pd.DataFrame(margin_list)
+                    t_col = TrendScorer._get_time_col(df)
+                    if t_col:
+                        df = df.sort_values(t_col)
+                        if 'fin_balance' in df.columns:
+                            diff = df['fin_balance'].diff().tail(5).sum()
+                            if not pd.isna(diff): margin_5d_sums.append(diff)
+            except Exception as e:
+                print(f"   ❌ {sid} 解析錯誤: {e}")
+
+        # 計算中位數並更新 UI
+        import numpy as np
+        m_contract = np.median(contract_liabs) if contract_liabs else np.nan
+        m_eps = np.median(eps_qoqs) if eps_qoqs else np.nan
+        m_inst = np.median(inst_5d_sums) if inst_5d_sums else np.nan
+        m_margin = np.median(margin_5d_sums) if margin_5d_sums else np.nan
+
+        # 呼叫 set_card (使用你既有的樣式邏輯)
+        self.set_l2_card("訂單能見度", "訂單能見度\n(合約負債季增)", m_contract, True, 10, -5)
+        self.set_l2_card("盈利加速", "盈利加速\n(EPS QoQ)", m_eps, True, 10, -10)
+        self.set_l2_card("法人資金", "法人資金\n(近5日中位數)", m_inst, False, 500, -500)
+        self.set_l2_card("籌碼健康", "籌碼健康\n(融資5日中位數)", m_margin, False, -100, 500, reverse_red=True)
+
+        print(f"🕵️ [L2 面板計算完成] 中位數 - EPS:{m_eps:.2f}% | 法人:{m_inst:.0f} | 融資:{m_margin:.0f}")
+
+    def set_l2_card(self, key, title, val, is_pct, threshold_green, threshold_red, reverse_red=False):
+        """輔助函數：更新 UI 燈號顏色 (拆分出來避免代碼冗長)"""
+        lbl = self.l2_labels.get(key)
+        if not lbl: return
+        if pd.isna(val):
+            lbl.setText(f"{title}\n無資料")
+            lbl.setStyleSheet("background-color: #1A1A1A; color: #888; border: 1px solid #444; border-radius: 6px;")
+            return
+
+        val_str = f"{val:+.1f}%" if is_pct else f"{int(val):+d} 張"
+        color, border = "#E0E0E0", "#444"
+        is_green = (val <= threshold_green) if reverse_red else (val >= threshold_green)
+        is_red = (val >= threshold_red) if reverse_red else (val <= threshold_red)
+
+        if is_green:
+            color, border = "#69F0AE", "#2E7D32"
+        elif is_red:
+            color, border = "#FF5252", "#C62828"
+
+        lbl.setText(f"{title}\n{val_str}")
+        lbl.setStyleSheet(
+            f"background-color: #1A1A1A; color: {color}; border: 1px solid {border}; border-radius: 6px; font-weight: bold;")
+
+
     def update_constituents_table(self, sector_name):
         self.const_table.setSortingEnabled(False)
         self.const_table.setRowCount(0)
@@ -572,7 +785,10 @@ class SectorDashboard(QWidget):
             row = self.const_table.rowCount()
             self.const_table.insertRow(row)
 
-            sid_item = NumericItem(str(row_data.get('股票代號', '')))
+            sid = str(row_data.get('股票代號', ''))
+
+            # --- 1. 原有基礎欄位寫入 ---
+            sid_item = NumericItem(sid)
             sid_item.setData(Qt.ItemDataRole.UserRole, 0)
             self.const_table.setItem(row, 0, sid_item)
 
@@ -585,7 +801,9 @@ class SectorDashboard(QWidget):
             self.const_table.setItem(row, 4, self.format_number_item(row_data.get('5日漲幅(%)', 0), True))
             self.const_table.setItem(row, 5, self.format_number_item(row_data.get('法人5日增(%)', 0), True))
             self.const_table.setItem(row, 6, self.format_number_item(row_data.get('融資5日增(%)', 0), True))
-            self.const_table.setItem(row, 7, self.format_number_item(row_data.get('RS強度', 0)))
+
+            rs_val = row_data.get('RS強度', 0)
+            self.const_table.setItem(row, 7, self.format_number_item(rs_val))
 
             tags = str(row_data.get('強勢特徵標籤', ''))
             tag_item = NumericItem(tags)
@@ -596,8 +814,91 @@ class SectorDashboard(QWidget):
             self.const_table.setItem(row, 9, self.format_number_item(row_data.get('30W距離', 99)))
             self.const_table.setItem(row, 10, self.format_number_item(row_data.get('ST距離', 99)))
 
-        self.const_table.setSortingEnabled(True)
-        self.const_table.sortItems(7, Qt.SortOrder.DescendingOrder)
+            # --- 2. 即時載入該股的 JSON 與 K 線資料供 L3 評分使用 ---
+            fundamental_data = {}
+            json_path = self.project_root / "data" / "fundamentals" / f"{sid}.json"
+            if json_path.exists():
+                try:
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        fundamental_data = json.load(f)
+                except:
+                    pass
+
+            kline_df = pd.DataFrame()
+            parquet_tw = self.project_root / "data" / "cache" / "tw" / f"{sid}_TW.parquet"
+            parquet_two = self.project_root / "data" / "cache" / "tw" / f"{sid}_TWO.parquet"
+            kline_path = parquet_tw if parquet_tw.exists() else (parquet_two if parquet_two.exists() else None)
+
+            if kline_path:
+                try:
+                    kline_df = pd.read_parquet(kline_path)
+                    kline_df.columns = [str(c).lower() for c in kline_df.columns]
+                    if isinstance(kline_df.index, pd.DatetimeIndex):
+                        kline_df['date'] = kline_df.index
+                    elif 'date' not in kline_df.columns and 'timestamp' in kline_df.columns:
+                        kline_df['date'] = pd.to_datetime(kline_df['timestamp'], unit='ms')
+                except:
+                    pass
+
+            # --- 3. 計算 L3Score 與 黑馬標記 ---
+            l3_score_val = 0.0
+            is_dark_horse = False
+            tooltip_html = ""
+            name_str = str(row_data.get('股票名稱', ''))
+
+            if not kline_df.empty and fundamental_data:
+                boll_width = row_data.get('布林寬度(%)', 50.0)
+                try:
+                    l3_result = L3Scorer.calculate_score(float(rs_val), fundamental_data, kline_df, tags,
+                                                         float(boll_width))
+                    l3_score_val = l3_result.get('L3Score', 0.0)
+                    is_dark_horse = l3_result.get('is_dark_horse', False)
+
+                    # 💎 萃取 V3 核心資訊組成 HTML Tooltip
+                    vwap = l3_result.get('vwap_info', {})
+                    rev = l3_result.get('rev_info', {})
+                    prof = l3_result.get('prof_info', {})
+
+                    # 使用 HTML 語法建立高質感的懸停資訊卡
+                    tooltip_html = f"""
+                                <div style='font-family: Arial, sans-serif; font-size: 13px; color: #E0E0E0;'>
+                                    <b style='color: #FFD700; font-size: 14px;'>{sid} {name_str}</b> | L3Score: <b>{l3_score_val}</b> {'★黑馬' if is_dark_horse else ''}<br>
+                                    <hr style='background-color: #555; height: 1px; border: none; margin: 4px 0;'>
+                                    <b style='color: #00E5FF;'>[法人成本]</b> {vwap.get('status', '')}<br>
+                                    均價: {vwap.get('vwap', 0)} | 乖離率: <b style='color: #FF5252;'>{vwap.get('bias_pct', 0)}%</b><br>
+                                    <br>
+                                    <b style='color: #FF9800;'>[營收動能]</b> {rev.get('status', '')} (斜率: {rev.get('slope', 0)}%)<br>
+                                    <b style='color: #69F0AE;'>[獲利純度]</b> {prof.get('status', '')} (OP季增: {prof.get('qoq', 0)}%)<br>
+                                    <br>
+                                    <b style='color: #E0E0E0;'>[技術特徵]</b> RS: {rs_val} | 布林: {boll_width}%
+                                </div>
+                                """
+                except Exception as e:
+                    pass
+
+            # 寫入 L3Score (Col 11)
+            l3_item = self.format_number_item(l3_score_val, False)
+            font = l3_item.font()
+            font.setBold(True)
+            l3_item.setFont(font)
+            l3_item.setForeground(QBrush(QColor('#FFFFFF')))
+            if tooltip_html: l3_item.setToolTip(tooltip_html)  # 🔥 掛載懸停提示
+            self.const_table.setItem(row, 11, l3_item)
+
+            # 寫入 黑馬標記 (Col 12)
+            horse_str = "★" if is_dark_horse else ""
+            horse_item = NumericItem(horse_str)
+            horse_item.setData(Qt.ItemDataRole.UserRole, 1 if is_dark_horse else 0)
+            horse_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if is_dark_horse:
+                horse_item.setForeground(QBrush(QColor('#FFD700')))
+            if tooltip_html: horse_item.setToolTip(tooltip_html)  # 🔥 讓星星也有懸停提示
+            self.const_table.setItem(row, 12, horse_item)
+
+            # 🔥 順便讓代號與名稱欄位也有 Tooltip，方便滑鼠一掃過去就能看到
+            if tooltip_html:
+                sid_item.setToolTip(tooltip_html)
+                name_item.setToolTip(tooltip_html)
 
     def on_quick_filter_changed(self, text):
         if "⚡" in text:
