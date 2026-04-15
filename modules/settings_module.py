@@ -631,7 +631,7 @@ class SettingsModule(QWidget):
         self.progress.setFormat("⏳ 抓取深度籌碼中 (1/4) - %p%")
 
         # 啟動腳本
-        self.runner_daily = ScriptRunner(self.project_root / "scripts" / "update_daily_chips_fast.py", args)
+        self.runner_daily = ScriptRunner(self.project_root / "scripts" / "update_daily_chips_v2.py", args)
 
         # 攔截輸出以判斷是否有新資料
         self.runner_daily.output_signal.connect(self._check_if_no_data)
