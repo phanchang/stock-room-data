@@ -96,9 +96,9 @@ FULL_FILTER_SPECS = [
     {'category': '📈 技術面', 'key': 'bb_width', 'label': '布林寬(%)', 'min': 0, 'max': 50, 'step': 0.5, 'suffix': '%'},
     {'category': '📈 技術面', 'key': '量比', 'label': '量比(倍)', 'min': 0, 'max': 50, 'step': 0.5, 'suffix': ''},
     {'category': '📈 技術面', 'key': 'str_30w_week_offset', 'label': '30W起漲週數(前)', 'min': -1, 'max': 52, 'step': 1,
-     'suffix': '週'},
+     'suffix': '週', 'quick_zero': True},
     {'category': '📈 技術面', 'key': 'str_st_week_offset', 'label': 'ST買訊(前)', 'min': -1, 'max': 26, 'step': 1,
-     'suffix': '週'},
+     'suffix': '週', 'quick_zero': True},
 
     {'category': '💰 籌碼面', 'key': 't_streak', 'label': '投信連買(日)', 'min': 0, 'max': 30, 'step': 1, 'suffix': ''},
     {'category': '💰 籌碼面', 'key': 't_net_today', 'label': '投信今日(張)', 'min': -20000, 'max': 20000, 'step': 100,
@@ -251,6 +251,187 @@ class DataLoaderThread(QThread):
             self.error_occurred.emit(str(e))
 
 
+class StockDetailCard(QDialog):
+    def __init__(self, row_data, parent=None):
+        super().__init__(parent)
+        self.row_data = row_data
+        self.sid = str(row_data.get('sid', ''))
+        self.name = str(row_data.get('name', ''))
+
+        self.setWindowTitle(f"📊 數據透視卡 - {self.sid} {self.name}")
+        self.setMinimumSize(950, 650)
+
+        # 🌟 修正 1 & 2：修復標題遮擋，並大幅提升字體亮度與對比度
+        self.setStyleSheet("""
+            QDialog { background-color: #0A0F16; border: 2px solid #00E5FF; }
+            QGroupBox { 
+                color: #00E5FF; font-weight: bold; font-size: 18px; 
+                border: 1px solid #333; border-radius: 8px; 
+                margin-top: 25px; padding-top: 15px; 
+                background-color: #11151C;
+            }
+            QGroupBox::title { 
+                subcontrol-origin: margin; subcontrol-position: top left; 
+                left: 15px; top: 0px; padding: 0 5px; background: #0A0F16;
+            }
+            QLabel.key { color: #A0B0CC; font-size: 16px; font-weight: bold; }
+            QLabel.val { color: #FFFFFF; font-size: 17px; font-weight: bold; background: #1A2332; padding: 6px; border-radius: 4px;}
+        """)
+        self.init_ui()
+
+    def format_value(self, col_key, value):
+        if pd.isna(value): return "無", ""
+
+        color_style = ""
+        # 決定顏色 (紅綠標示)
+        if isinstance(value, (int, float)):
+            if any(x in col_key for x in ['漲幅', 'yoy', 'qoq', 'sum', 'net', 'diff', 'cash_flow']):
+                if value > 0:
+                    color_style = "color: #FF5252;"  # 更明亮的紅
+                elif value < 0:
+                    color_style = "color: #00E676;"  # 更明亮的綠
+
+        if isinstance(value, (int, float)):
+            if col_key == '現價': return f"{value:,.2f}".rstrip('0').rstrip('.'), color_style
+            if any(x in col_key for x in
+                   ['漲幅', 'yield', 'width', 'yoy', 'qoq', 'diff']): return f"{value:.2f}%", color_style
+            if any(x in col_key for x in ['sum', 'net', 'cash_flow']): return f"{value:,.0f}", color_style
+            if any(x in col_key for x in ['streak', 'offset']): return f"{int(value)}", color_style
+            return f"{value:,.2f}", color_style
+
+        return str(value), color_style
+
+    # 🌟 修正 3：將逗號分隔的字串，轉換為精美的 HTML 標籤
+    def get_tag_html(self, text):
+        if pd.isna(text) or not str(text).strip(): return "<span style='color: #666;'>無</span>"
+        items = [t.strip() for t in str(text).split(',') if t.strip()]
+
+        # 🌟 修正：利用 &nbsp; 來製造物理 padding 與 margin，解決 Qt 忽略 CSS 間距的問題
+        html = "<div style='line-height: 2.0;'>"
+        for item in items:
+            # 內部 &nbsp; 撐開底色當作 Padding，外部 &nbsp; 當作標籤之間的 Margin
+            html += f"<span style='background-color: #0A2533; color: #00E5FF; font-weight: bold;'>&nbsp;&nbsp;{item}&nbsp;&nbsp;</span>&nbsp;&nbsp;&nbsp;&nbsp;"
+        html += "</div>"
+        return html
+
+    def init_ui(self):
+        main_layout = QVBoxLayout(self)
+
+        title = QLabel(f"{self.sid} {self.name} - 深度數據總覽")
+        title.setStyleSheet(
+            "font-size: 26px; font-weight: bold; color: #FFF; background: transparent; border-bottom: 2px solid #00E5FF; padding-bottom: 5px;")
+        main_layout.addWidget(title)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("border: none; background: transparent;")
+        content = QWidget()
+        vbox = QVBoxLayout(content)
+        vbox.setSpacing(15)
+
+        categories = {
+            "📈 技術面數據": ['現價', '漲幅1d', '漲幅5d', '漲幅20d', '漲幅60d', 'RS強度', 'bb_width', '量比',
+                             'str_30w_week_offset', 'str_st_week_offset'],
+            "💰 籌碼與法人": ['invest_trust_hold_pct', 'foreign_hold_pct', 't_net_today', 't_sum_5d', 't_sum_20d',
+                             't_streak', 'f_net_today', 'f_sum_5d', 'f_sum_20d', 'f_streak', 'm_net_today', 'm_sum_5d',
+                             'legal_diff_5d', 'legal_diff_20d', 'margin_diff_5d', 'margin_diff_20d'],
+            "📖 基本與估值": ['rev_yoy', 'rev_cum_yoy', 'fund_eps_cum', 'pe', 'pbr', 'yield', 'fund_contract_qoq',
+                             'fund_inventory_qoq', 'fund_op_cash_flow'],
+            "🔥 產業與特徵": ['industry', 'dj_main_ind', 'dj_sub_ind', 'sub_concepts', '強勢特徵']
+        }
+
+        for cat_name, keys in categories.items():
+            group = QGroupBox(cat_name)
+            grid = QGridLayout(group)
+            grid.setSpacing(10)
+
+            row, col = 0, 0
+            for key in keys:
+                if key not in FULL_COLUMN_SPECS or key not in self.row_data: continue
+
+                cfg = FULL_COLUMN_SPECS[key]
+                lbl_k = QLabel(cfg['name'])
+                lbl_k.setProperty("class", "key")
+
+                # 判斷是否為長字串標籤
+                is_tag = key in ['sub_concepts', '強勢特徵', 'dj_sub_ind', 'industry', 'dj_main_ind']
+
+                lbl_v = QLabel()
+                lbl_v.setProperty("class", "val")
+
+                if is_tag:
+                    lbl_v.setText(self.get_tag_html(self.row_data[key]))
+                    lbl_v.setTextFormat(Qt.TextFormat.RichText)  # 啟用 HTML 渲染
+                    lbl_v.setStyleSheet("background: transparent;")  # 標籤自己有底色
+                else:
+                    val_str, color_style = self.format_value(key, self.row_data[key])
+                    lbl_v.setText(val_str)
+                    if color_style: lbl_v.setStyleSheet(f"QLabel.val {{ {color_style} }}")
+
+                if is_tag:
+                    lbl_v.setWordWrap(True)
+                    grid.addWidget(lbl_k, row, 0)
+                    grid.addWidget(lbl_v, row, 1, 1, 5)  # 橫跨多列
+                    row += 1;
+                    col = 0
+                else:
+                    grid.addWidget(lbl_k, row, col * 2)
+                    grid.addWidget(lbl_v, row, col * 2 + 1)
+                    col += 1
+                    if col >= 3:
+                        col = 0;
+                        row += 1
+
+            vbox.addWidget(group)
+
+        vbox.addStretch()
+        scroll.setWidget(content)
+        main_layout.addWidget(scroll)
+
+        btn_close = QPushButton("關閉卡片 (Esc)")
+        btn_close.setStyleSheet("""
+            QPushButton { background-color: #222; color: #FFF; border: 1px solid #444; padding: 10px; border-radius: 4px; font-weight: bold; font-size: 16px;}
+            QPushButton:hover { background-color: #D32F2F; border: 1px solid #FF5252; }
+        """)
+        btn_close.clicked.connect(self.close)
+        main_layout.addWidget(btn_close)
+
+
+class DarkMessageDialog(QDialog):
+    def __init__(self, title, message, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumWidth(350)
+
+        # 🚀 殺手鐧 1：在 Stylesheet 載入前，直接用 Palette 物理塗黑底層，徹底消滅 Windows 白閃爍
+        palette = self.palette()
+        palette.setColor(self.backgroundRole(), QColor("#111111"))
+        self.setPalette(palette)
+        self.setAutoFillBackground(True) # 強制優先畫背景
+
+        # 🚀 殺手鐧 2：移除系統預設對話框的問號圖示與殘留白邊
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+
+        # 徹底強制黑色底
+        self.setStyleSheet("""
+            QDialog { background-color: #111; border: 1px solid #444; }
+            QLabel { color: #00E5FF; font-size: 15px; font-weight: bold; margin: 10px; }
+            QPushButton { background-color: #222; color: #FFF; border: 1px solid #444; padding: 8px 20px; border-radius: 4px; font-size: 14px; font-weight: bold;}
+            QPushButton:hover { background-color: #0066CC; border: 1px solid #00E5FF; }
+        """)
+
+        layout = QVBoxLayout(self)
+
+        lbl = QLabel(message)
+        lbl.setWordWrap(True)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        btn_box.accepted.connect(self.accept)
+        btn_box.setCenterButtons(True)
+        layout.addWidget(btn_box)
+
 class FilterSelectionDialog(QDialog):
     def __init__(self, all_filters, active_keys, parent=None):
         super().__init__(parent)
@@ -352,31 +533,55 @@ class RangeFilterWidget(QWidget):
         self.key = config['key']
         self.config = config
         self.setStyleSheet("background: transparent;")
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 2, 0, 2)
 
+        # 改用垂直佈局
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 2, 0, 2)
+        main_layout.setSpacing(2)
+
+        # 第一排：標籤與輸入框
+        row1 = QHBoxLayout()
+        row1.setContentsMargins(0, 0, 0, 0)
         self.lbl_name = QLabel(config['label'])
         self.lbl_name.setStyleSheet("color: #DDD; font-size: 14px; border:none;")
-        # 🚀 寬度由 115 增加至 140，確保長文字如「30W起漲週數(前)」不被遮住
-        self.lbl_name.setFixedWidth(140)
-        layout.addWidget(self.lbl_name)
+        self.lbl_name.setFixedWidth(125)
+        row1.addWidget(self.lbl_name)
 
         self.spin_min = QDoubleSpinBox()
         self.setup_spin(self.spin_min, config['min'], config['suffix'])
-        self.spin_min.setMinimumWidth(90) # 🚀 確保輸入框夠寬
-        layout.addWidget(self.spin_min)
+        self.spin_min.setMinimumWidth(80)
+        row1.addWidget(self.spin_min)
 
         lbl_tilde = QLabel("~")
         lbl_tilde.setStyleSheet("color:#555; border:none;")
         lbl_tilde.setFixedWidth(12)
         lbl_tilde.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(lbl_tilde)
+        row1.addWidget(lbl_tilde)
 
         self.spin_max = QDoubleSpinBox()
         self.setup_spin(self.spin_max, config['max'], config['suffix'])
-        self.spin_max.setMinimumWidth(90) # 🚀 確保輸入框夠寬
-        layout.addWidget(self.spin_max)
-        layout.addStretch()
+        self.spin_max.setMinimumWidth(80)
+        row1.addWidget(self.spin_max)
+        row1.addStretch()
+
+        main_layout.addLayout(row1)
+
+        # 第二排：如果有設定 quick_zero，就產生快捷 Checkbox 在下方
+        if config.get('quick_zero', False):
+            row2 = QHBoxLayout()
+            row2.setContentsMargins(0, 0, 0, 0)
+            row2.addSpacing(130)  # 為了對齊上面的輸入框
+            self.chk_quick = QCheckBox("🎯 限定當週(0)")
+            self.chk_quick.setStyleSheet(
+                "color: #00E5FF; font-size: 13px; font-weight: bold; background: #1A1A1A; padding: 2px 6px; border-radius: 4px;")
+            self.chk_quick.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.chk_quick.toggled.connect(self.on_quick_zero_toggled)
+            row2.addWidget(self.chk_quick)
+            row2.addStretch()
+            main_layout.addLayout(row2)
+
+            self.spin_min.valueChanged.connect(self.check_manual_override)
+            self.spin_max.valueChanged.connect(self.check_manual_override)
 
     def setup_spin(self, spin, default_val, suffix):
         spin.setRange(-999999999, 999999999)
@@ -384,13 +589,28 @@ class RangeFilterWidget(QWidget):
         spin.setSingleStep(self.config['step'])
         spin.setSuffix(suffix)
         spin.setValue(default_val)
-
-        # 🚀 優化 1：關閉鍵盤追蹤。
-        # 當使用者在框內「打字」時，不會每輸入一個字就觸發篩選，
-        # 而是在使用者按 Enter 或點擊滑鼠離開輸入框後才執行，大幅減少 Hang。
         spin.setKeyboardTracking(False)
-
         spin.valueChanged.connect(self.emit_change)
+
+    def on_quick_zero_toggled(self, checked):
+        self.spin_min.blockSignals(True)
+        self.spin_max.blockSignals(True)
+        if checked:
+            self.spin_min.setValue(0)
+            self.spin_max.setValue(0)
+        else:
+            self.spin_min.setValue(self.config['min'])
+            self.spin_max.setValue(self.config['max'])
+        self.spin_min.blockSignals(False)
+        self.spin_max.blockSignals(False)
+        self.emit_change()
+
+    def check_manual_override(self):
+        if hasattr(self, 'chk_quick') and self.chk_quick.isChecked():
+            if self.spin_min.value() != 0 or self.spin_max.value() != 0:
+                self.chk_quick.blockSignals(True)
+                self.chk_quick.setChecked(False)
+                self.chk_quick.blockSignals(False)
 
     def emit_change(self):
         self.value_changed.emit()
@@ -406,6 +626,10 @@ class RangeFilterWidget(QWidget):
         self.spin_max.setValue(self.config['max'])
         self.spin_min.blockSignals(False)
         self.spin_max.blockSignals(False)
+        if hasattr(self, 'chk_quick'):
+            self.chk_quick.blockSignals(True)
+            self.chk_quick.setChecked(False)
+            self.chk_quick.blockSignals(False)
         self.emit_change()
 
 
@@ -1055,12 +1279,17 @@ class StrategyModule(QWidget):
         # ==========================================
         # 建立右側表格區塊 (頂部 AI 智慧指揮列 + 表格)
         # ==========================================
+
+        # 🌟 確保 ai_queue 存在 (放在這裡最安全)
+        if not hasattr(self, 'ai_queue'):
+            self.ai_queue = {}
+
         table_widget = QWidget()
         table_layout = QVBoxLayout(table_widget)
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.setSpacing(0)
 
-        # 🚀 頂部 AI 智慧指揮列 (絕對不會被筆電下方截斷)
+        # 🚀 頂部 AI 智慧指揮列
         self.ai_command_bar = QWidget()
         self.ai_command_bar.setStyleSheet("background-color: #0A0F16; border-bottom: 2px solid #2B3544;")
         self.ai_command_bar.setFixedHeight(50)
@@ -1068,9 +1297,18 @@ class StrategyModule(QWidget):
         ai_layout.setContentsMargins(15, 5, 15, 5)
 
         self.lbl_table_status = QLabel("篩選結果: 0 檔  |  已勾選: 0 檔")
-        self.lbl_table_status.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 16px; border: none;")
+        self.lbl_table_status.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 15px; border: none;")
         self.btn_select_all = QPushButton("☑️全選")
         self.btn_deselect_all = QPushButton("🔲全不選")
+
+        # 🌟 新增：批量加入 AI 佇列按鈕
+        self.btn_add_to_ai = QPushButton("📥 將勾選加入 AI 備援")
+        self.btn_add_to_ai.setStyleSheet("""
+                    QPushButton { background-color: #004D40; color: #00E676; border: 1px solid #00695C; font-weight: bold; border-radius: 4px; padding: 4px 10px;}
+                    QPushButton:hover { background-color: #00695C; color: #FFF; }
+                """)
+        self.btn_add_to_ai.clicked.connect(self.add_checked_to_ai_queue)
+
         for btn in [self.btn_select_all, self.btn_deselect_all]:
             btn.setStyleSheet("""
                         QPushButton { background: transparent; color: #AAA; border: 1px solid #444; border-radius: 3px; padding: 2px 6px; font-size: 13px; font-weight: bold;}
@@ -1079,28 +1317,39 @@ class StrategyModule(QWidget):
         self.btn_select_all.clicked.connect(self.select_all_rows)
         self.btn_deselect_all.clicked.connect(self.deselect_all_rows)
 
-        self.btn_ai_run = QPushButton("🚀 啟動 AI 聯網深掘")
-        self.btn_ai_copy = QPushButton("📋 複製備援 (限 10 檔)")
-        self.btn_ai_copy.clicked.connect(self.copy_ai_prompt_to_clipboard)
-        self.btn_ai_history = QPushButton("📂 歷史戰報")
-
-        for btn in [self.btn_ai_run, self.btn_ai_copy, self.btn_ai_history]:
-            btn.setStyleSheet("""
-                        QPushButton { background-color: #151A22; color: #666; border: 1px solid #333; padding: 6px 15px; font-weight: bold; border-radius: 4px; font-size: 14px;}
-                        QPushButton:enabled { background-color: #1A237E; color: #00E5FF; border: 1px solid #3F51B5; }
-                        QPushButton:enabled:hover { background-color: #283593; color: #FFF; }
-                    """)
-            if btn != self.btn_ai_history:
-                btn.setEnabled(False)
-
         ai_layout.addWidget(self.lbl_table_status)
-        ai_layout.addSpacing(15)  # 加一點小間距
+        ai_layout.addSpacing(10)
         ai_layout.addWidget(self.btn_select_all)
         ai_layout.addWidget(self.btn_deselect_all)
+        ai_layout.addSpacing(15)
+        ai_layout.addWidget(self.btn_add_to_ai)
+
         ai_layout.addStretch()
-        ai_layout.addWidget(self.btn_ai_history)
+
+        # 🌟 AI 佇列專屬控制區塊
+        self.lbl_ai_queue = QLabel("🤖 AI 佇列: 0 / 10")
+        self.lbl_ai_queue.setStyleSheet("color: #FFD700; font-weight: bold; font-size: 15px; border: none;")
+
+        self.btn_clear_ai = QPushButton("🧹 清空佇列")
+        self.btn_clear_ai.setStyleSheet("""
+                    QPushButton { background-color: #3E2723; color: #FF8A65; border: 1px solid #5D4037; padding: 4px 10px; font-weight: bold; border-radius: 4px;}
+                    QPushButton:hover { background-color: #5D4037; color: #FFF; }
+                """)
+        self.btn_clear_ai.clicked.connect(self.clear_ai_queue)
+
+        self.btn_ai_copy = QPushButton("📋 複製 AI 提示詞")
+        self.btn_ai_copy.clicked.connect(self.copy_ai_prompt_to_clipboard)
+        self.btn_ai_copy.setStyleSheet("""
+                    QPushButton { background-color: #1A237E; color: #00E5FF; border: 1px solid #3F51B5; padding: 6px 15px; font-weight: bold; border-radius: 4px; font-size: 14px;}
+                    QPushButton:disabled { background-color: #151A22; color: #666; border: 1px solid #333; }
+                    QPushButton:enabled:hover { background-color: #283593; color: #FFF; }
+                """)
+        self.btn_ai_copy.setEnabled(False)
+
+        ai_layout.addWidget(self.lbl_ai_queue)
+        ai_layout.addSpacing(10)
+        ai_layout.addWidget(self.btn_clear_ai)
         ai_layout.addWidget(self.btn_ai_copy)
-        ai_layout.addWidget(self.btn_ai_run)
 
         table_layout.addWidget(self.ai_command_bar)
 
@@ -1643,27 +1892,90 @@ class StrategyModule(QWidget):
         self.stock_clicked_signal.emit(f"{sid}_{market}")
 
     def open_context_menu(self, pos):
-        checked_count = len(self.model.checked_sids)
-        if checked_count == 0:
-            QMessageBox.warning(self, "提示", "請先在表格左側「選」欄位勾選要加入的股票！")
+        current_idx = self.table_view.selectionModel().currentIndex()
+        if not current_idx.isValid():
             return
 
+        src_idx = self.proxy_model.mapToSource(current_idx)
+        row_data = self.display_df.iloc[src_idx.row()]
+        sid = str(row_data['sid'])
+        name = str(row_data['name'])
+
         menu = QMenu(self)
-        # 🌟 加上深色 CSS 樣式，解決字跟底色一樣被吃掉的問題
         menu.setStyleSheet("""
             QMenu { background-color: #1A1A1A; color: #00E5FF; border: 1px solid #00E5FF; font-size: 15px; font-weight: bold; }
             QMenu::item { padding: 8px 25px; background-color: transparent; }
             QMenu::item:selected { background-color: #0066CC; color: #FFF; }
+            QMenu::item:disabled { color: #555; }
         """)
 
-        add_menu = QMenu(f"➕ 將勾選的 {checked_count} 檔加入自選", self)
-        for g in self.watchlist_data.keys():
-            action = QAction(g, self)
-            action.triggered.connect(lambda _, group=g: self.add_to_watchlist(group))
-            add_menu.addAction(action)
+        # 1. 開啟數據大卡
+        #action_card = QAction(f"📋 查看 {sid} {name} 完整數據卡", self)
+        #action_card.triggered.connect(lambda: StockDetailCard(row_data, self).exec())
+        #menu.addAction(action_card)
+        #menu.addSeparator()
 
-        menu.addMenu(add_menu)
+        # 2. 加入獨立的 AI 備援佇列
+        is_in_queue = sid in self.ai_queue
+        queue_count = len(self.ai_queue)
+        action_ai = QAction(f"🤖 將 {sid} 加入 AI 備援 ({queue_count}/10)", self)
+
+        if is_in_queue:
+            action_ai.setText(f"✅ {sid} 已在 AI 佇列中")
+            action_ai.setEnabled(False)
+        elif queue_count >= 10:
+            action_ai.setText("⚠️ AI 佇列已滿 (10/10)")
+            action_ai.setEnabled(False)
+        else:
+            action_ai.triggered.connect(lambda: self.add_single_to_ai_queue(sid, row_data))
+
+        menu.addAction(action_ai)
+        menu.addSeparator()
+
+        # 3. 原始加入自選群組功能
+        checked_count = len(self.model.checked_sids)
+        if checked_count > 0:
+            add_menu = QMenu(f"➕ 將勾選的 {checked_count} 檔加入自選", self)
+            for g in self.watchlist_data.keys():
+                action = QAction(g, self)
+                action.triggered.connect(lambda _, group=g: self.add_to_watchlist(group))
+                add_menu.addAction(action)
+            menu.addMenu(add_menu)
+        else:
+            action_warn = QAction("⚠️ 若要加入自選，請先在表格打勾", self)
+            action_warn.setEnabled(False)
+            menu.addAction(action_warn)
+
         menu.exec(QCursor.pos())
+
+    # --- AI 佇列專屬功能 ---
+    def add_single_to_ai_queue(self, sid, row_data):
+        self.ai_queue[sid] = row_data
+        self.update_ai_command_bar()
+
+        # 🚀 優化 UX：不再彈出干擾視窗，改為上方狀態列綠字無縫提示，2秒後自動恢復
+        self.lbl_table_status.setText(f"✅ 成功：已將 {sid} 加入 AI 備援佇列！")
+        self.lbl_table_status.setStyleSheet("color: #00E676; font-weight: bold; font-size: 15px; border: none;")
+        QTimer.singleShot(2000, self.update_ai_command_bar)
+
+    def clear_ai_queue(self):
+        self.ai_queue.clear()
+        self.update_ai_command_bar()
+
+    def update_ai_command_bar(self, *args):
+        # 🚀 恢復狀態列預設的藍色與文字
+        total_count = len(self.display_df)
+        checked_count = len(self.model.checked_sids)
+        self.lbl_table_status.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 15px; border: none;")
+        self.lbl_table_status.setText(f"篩選結果: {total_count} 檔  |  已勾選: {checked_count} 檔")
+
+        # 更新 AI 狀態
+        q_count = len(self.ai_queue)
+        self.lbl_ai_queue.setText(f"🤖 AI 佇列: {q_count} / 10")
+        self.btn_ai_copy.setEnabled(q_count > 0)
+        self.btn_ai_copy.setText(f"📋 複製 AI 提示詞 ({q_count} 檔)" if q_count > 0 else "📋 複製 AI 提示詞")
+
+
 
     def add_to_watchlist(self, group_name):
         if not self.model.checked_sids:
@@ -1678,31 +1990,6 @@ class StrategyModule(QWidget):
         self.deselect_all_rows()
         QMessageBox.information(self, "完成", f"已成功將 {count} 檔股票加入「{group_name}」。\n您可以切換至戰情室查看。")
 
-    def update_ai_command_bar(self, top_left=None, bottom_right=None, roles=None):
-        """動態更新頂部 AI 指揮列的數量與按鈕狀態"""
-        total_count = len(self.display_df)
-        checked_count = len(self.model.checked_sids)
-
-        # 狀態文字更新
-        self.lbl_table_status.setText(f"篩選結果: {total_count} 檔  |  已勾選: {checked_count} 檔")
-
-        # 按鈕燈號邏輯 (1~5走API，1~10走備援)
-        if checked_count == 0:
-            self.btn_ai_run.setEnabled(False)
-            self.btn_ai_copy.setEnabled(False)
-            self.btn_ai_run.setText("🚀 啟動 AI 聯網深掘")
-        elif 1 <= checked_count <= 5:
-            self.btn_ai_run.setEnabled(True)
-            self.btn_ai_copy.setEnabled(True)
-            self.btn_ai_run.setText(f"🚀 啟動 AI 聯網深掘 ({checked_count} 檔)")
-        elif 6 <= checked_count <= 10:
-            self.btn_ai_run.setEnabled(False)  # 為了保護 API 額度反灰
-            self.btn_ai_copy.setEnabled(True)
-            self.btn_ai_run.setText("⚠️ 超過 5 檔，請使用備援")
-        else:
-            self.btn_ai_run.setEnabled(False)
-            self.btn_ai_copy.setEnabled(False)
-            self.btn_ai_run.setText("⛔ 數量過多，請減少勾選")
 
     def select_all_rows(self):
         """一鍵全選當前畫面上篩選出的所有股票"""
@@ -1740,73 +2027,81 @@ class StrategyModule(QWidget):
         self.model.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.CheckStateRole])
         self.update_ai_command_bar()
 
-    def copy_ai_prompt_to_clipboard(self):
-        """組裝打勾股票的數據，產生防幻覺提示詞，複製到剪貼簿並開啟 Gemini 網頁版"""
+    # 🌟 使用我們剛剛建立的純黑對話框，徹底消滅白閃爍
+    def show_dark_message(self, title, text):
+        dialog = DarkMessageDialog(title, text, self)
+        dialog.exec()
+
+    def add_checked_to_ai_queue(self):
         if not self.model.checked_sids:
-            QMessageBox.warning(self, "警告", "請先在表格左側勾選至少一檔股票！")
+            # 錯誤操作時才需要彈窗警告 (這時已修復不會白閃爍了)
+            self.show_dark_message("⚠️ 提示", "請先在表格打勾要加入的股票！")
             return
 
-        # 1. 取得畫面上被打勾的股票資料
-        selected_df = self.display_df[self.display_df['sid'].astype(str).isin(self.model.checked_sids)]
+        added = 0
+        for sid in self.model.checked_sids:
+            if sid not in self.ai_queue:
+                if len(self.ai_queue) >= 10:
+                    self.show_dark_message("⚠️ 已達上限", f"AI 佇列最多 10 檔！已為您加入前 {added} 檔。")
+                    break
+                row_data = self.display_df[self.display_df['sid'].astype(str) == sid].iloc[0]
+                self.ai_queue[sid] = row_data
+                added += 1
 
-        # 2. 組裝個股數據字串
-        stock_info_str = ""
-        for _, row in selected_df.iterrows():
-            sid = str(row.get('sid', ''))
-            name = str(row.get('name', ''))
-            ind = str(row.get('industry', ''))
-            dj_sub = str(row.get('dj_sub_ind', ''))
-            tags = str(row.get('強勢特徵', ''))
-            bbw = row.get('bb_width', 0)
+        self.deselect_all_rows()
+        self.update_ai_command_bar()
 
-            # 安全抓取可能有或沒有的數值
-            legal_diff = row.get('legal_diff_20d', 0) if 'legal_diff_20d' in selected_df.columns else 0
-            margin_diff = row.get('margin_diff_20d', 0) if 'margin_diff_20d' in selected_df.columns else 0
-            rev_qoq = row.get('fund_contract_qoq', 0) if 'fund_contract_qoq' in selected_df.columns else 0
+        # 🚀 優化 UX：批量加入成功也不彈窗，改為狀態列綠字提示
+        if added > 0:
+            self.lbl_table_status.setText(f"✅ 成功：已將 {added} 檔股票批次加入 AI 佇列！")
+            self.lbl_table_status.setStyleSheet("color: #00E676; font-weight: bold; font-size: 15px; border: none;")
+            QTimer.singleShot(2000, self.update_ai_command_bar)
 
-            stock_info_str += f"- 【{sid} {name}】 產業別: {ind} ({dj_sub})\n"
-            stock_info_str += f"  * 內部量化特徵: {tags if tags else '無明顯特徵'}\n"
-            stock_info_str += f"  * 關鍵數據: 布林寬度 {bbw:.1f}%, 法人20日增減 {legal_diff}%, 融資20日增減 {margin_diff}%, 合約負債季增 {rev_qoq}%\n\n"
+    # 🌟 這個必須是檔案中「唯一」的 copy_ai_prompt_to_clipboard
+    def copy_ai_prompt_to_clipboard(self):
+            # 如果 AI 佇列是空的，直接擋掉
+            if not hasattr(self, 'ai_queue') or not self.ai_queue:
+                self.show_dark_message("⚠️ 提示", "目前 AI 佇列是空的，請先加入股票！")
+                return
 
-        # 3. 組合黃金防護提示詞
-        prompt = f"""[角色與核心紀律]
-你是一位擁有 20 年經驗的頂尖台股量化與產業分析師。
-你的任務是針對我提供的股票清單進行深度聯網查證與潛力評估。
+            stock_info_str = ""
+            for sid, row in self.ai_queue.items():
+                name = str(row.get('name', ''))
+                ind = str(row.get('industry', ''))
+                dj_sub = str(row.get('dj_sub_ind', ''))
+                tags = str(row.get('強勢特徵', ''))
+                bbw = row.get('bb_width', 0)
 
-⚠️ 嚴格禁令： 
-1. 絕不允許產生幻覺或捏造資訊。引用數據做推理與研究必須使用 Google search，並做多方來源交叉查證，不自己產生真實數據。
-2. 所有外部題材、法說會內容、法人報告或營收消息，優先參考 MoneyDJ、CNYES鉅亨網、Yahoo股市、UDN、玩股網、Goodinfo 等權威網站。
-3. 引用數據做呈現或計算必須附上來源網站資料與確切日期。
-4. 若查無近期明確消息，請誠實回報「查無近期重大催化劑」，不可硬編理由。
+                stock_info_str += f"- 【{sid} {name}】 產業別: {ind} ({dj_sub})\n"
+                stock_info_str += f"  * 內部量化特徵: {tags if tags else '無明顯特徵'}\n"
+                stock_info_str += f"  * 關鍵數據: 布林寬度 {bbw:.1f}%\n\n"
 
-[輸入數據 - 內部量化嚴選名單]
-{stock_info_str}
-[輸出格式要求]
-請以 Markdown 格式輸出，並包含以下三大區塊：
+            prompt = f"""[角色與核心紀律]
+    你是一位擁有 20 年經驗的頂尖台股量化與產業分析師。
+    你的任務是針對我提供的股票清單進行深度聯網查證與潛力評估。
 
-### 第一部分：個股客觀查證與短評
-針對每一檔股票，請嚴格比對內部數據與你查證的外部資訊。
-* **內部數據解讀**：簡述目前籌碼與型態結構。
-* **外部聯網查證**：詳述近兩週的產業鏈動態、法說會重點或產品利多。
-* **來源依據**：[網站名稱] (發布日期)
+    ⚠️ 嚴格禁令：絕不允許產生幻覺或捏造資訊。引用數據做推理必須使用 Google search。
 
-### 第二部分：綜合總結
-總觀這幾檔股票，資金板塊是否有共同流向某個特定細產業的趨勢？目前的盤面氣氛適合積極進場還是耐心潛伏？
+    [輸入數據 - 內部量化嚴選名單]
+    {stock_info_str}
 
-### 第三部分：潛力爆發排名與理由
-請將這幾檔股票進行排名（由最具爆發潛力到最末），並給出具體排名的理由。排名需綜合考量「技術面聽牌完整度」與「題材爆發力」。
-"""
+    [輸出格式要求]
+    請以 Markdown 格式輸出：
+    1. **個股短評**：比對內部數據與近期利多/法說會。
+    2. **資金趨勢**：這些股票是否具備共同的族群效應？
+    3. **爆發排名**：根據題材與型態給出優先順序。
+    """
+            # 複製到剪貼簿
+            QApplication.clipboard().setText(prompt)
 
-        # 4. 寫入作業系統剪貼簿
-        QApplication.clipboard().setText(prompt)
+            # 開啟瀏覽器
+            try:
+                import webbrowser
+                webbrowser.open("https://gemini.google.com/app")
+            except Exception as e:
+                print("無法開啟瀏覽器:", e)
 
-        # 5. 自動開啟 Gemini 網頁版
-        try:
-            webbrowser.open("https://gemini.google.com/app")
-        except:
-            pass  # 若開啟失敗(某些作業系統限制)，不影響剪貼簿功能
-
-        # 6. 彈出成功通知
-        QMessageBox.information(self, "✅ 備援提示詞已複製",
-                                f"已成功將 {len(selected_df)} 檔股票的深度查證提示詞複製到剪貼簿！\n\n"
-                                "已為您開啟 Gemini 網頁版，請直接貼上 (Ctrl+V) 即可進行深度分析。")
+            # 跳出純黑成功訊息
+            self.show_dark_message("✅ 已複製",
+                                   f"已成功將 {len(self.ai_queue)} 檔股票的提示詞複製到剪貼簿！\n\n"
+                                   "已為您開啟 Gemini，請直接貼上 (Ctrl+V) 即可進行分析。")

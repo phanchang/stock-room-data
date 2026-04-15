@@ -431,6 +431,8 @@ class ActiveETFModule(QWidget):
     def plot_changes(self, df, data_date):
         self.fig_change.clear()
         ax = self.fig_change.add_subplot(111)
+        ax.set_facecolor('#0E0E0E')  # 🔥 統一背景顏色
+
         self.bar_data = df.reset_index(drop=True)
 
         if self.bar_data.empty:
@@ -494,7 +496,7 @@ class ActiveETFModule(QWidget):
         trend_data = self.current_df[self.current_df['stock_id'] == str(stock_id)].copy()
         if trend_data.empty: return
 
-        # 🔥 功能 1 修復: 如果這檔股票被清空了，最新日期會缺少這筆，我們手動補上 0 的數據讓曲線下跌
+        # 功能 1 修復: 如果這檔股票被清空了，最新日期會缺少這筆，我們手動補上 0 的數據讓曲線下跌
         if trend_data['date'].max() < global_max_date:
             new_row = trend_data.iloc[-1].copy()
             new_row['date'] = global_max_date
@@ -521,6 +523,8 @@ class ActiveETFModule(QWidget):
 
         self.fig_trend.clear()
         ax1 = self.fig_trend.add_subplot(111)
+        ax1.set_facecolor('#0E0E0E')  # 🔥 統一背景顏色
+
         ax2 = ax1.twinx()
         ax3 = ax1.twinx()
 
@@ -530,14 +534,6 @@ class ActiveETFModule(QWidget):
         ax3.set_zorder(1)
         ax1.patch.set_visible(False)
         ax2.patch.set_visible(False)
-
-        self.line_data = {
-            'etf': trend_data,
-            'price': price_data,
-            'ax1': ax1,
-            'ax2': ax2,
-            'ax3': ax3
-        }
 
         l3, = ax3.plot(trend_data['date'], trend_data['shares'], color='#FFFFFF', linewidth=0.8, alpha=0.6,
                        linestyle='-', label='庫存股數(細線)')
@@ -552,6 +548,7 @@ class ActiveETFModule(QWidget):
             ax1.set_ylim(max(0, min_w - margin), max_w + margin)
 
         l2 = None
+        l4 = None
         if not price_data.empty:
             l2, = ax2.plot(price_data.index, price_data['Close'], color='#FFD700', linewidth=1.5, linestyle='--',
                            alpha=0.9, label='股價(右)')
@@ -559,31 +556,47 @@ class ActiveETFModule(QWidget):
             avg_cost = 0.0
             total_shares = 0
             total_cost = 0.0
+            daily_costs = []  # 🔥 存放每天的成本
 
             for _, row in trend_data.iterrows():
                 d = row['date']
                 shares = row['shares']
+                current_cost = 0.0
 
                 try:
                     p_idx = price_data.index.get_indexer([d], method='ffill')[0]
                     if p_idx != -1:
                         price = price_data['Close'].iloc[p_idx]
                     else:
-                        continue
+                        price = 0
                 except:
-                    continue
+                    price = 0
 
-                if shares > total_shares:
-                    added = shares - total_shares
-                    total_cost += added * price
-                    total_shares = shares
-                elif shares < total_shares:
-                    if shares == 0:
-                        total_shares = 0
-                        total_cost = 0.0
-                    else:
-                        total_cost = total_cost * (shares / total_shares)
+                if price > 0:
+                    if shares > total_shares:
+                        added = shares - total_shares
+                        total_cost += added * price
                         total_shares = shares
+                    elif shares < total_shares:
+                        if shares == 0:
+                            total_shares = 0
+                            total_cost = 0.0
+                        else:
+                            total_cost = total_cost * (shares / total_shares)
+                            total_shares = shares
+
+                if total_shares > 0:
+                    current_cost = total_cost / total_shares
+
+                daily_costs.append(current_cost)
+
+            # 🔥 將每日成本存回 dataframe，並繪製動態成本點與線
+            trend_data['avg_cost'] = daily_costs
+            cost_mask = trend_data['shares'] > 0  # 只在有持股時畫成本線
+            if cost_mask.any():
+                l4, = ax2.plot(trend_data.loc[cost_mask, 'date'], trend_data.loc[cost_mask, 'avg_cost'],
+                               color='#FF00FF', linestyle=':', marker='o', markersize=4,
+                               linewidth=1.5, alpha=0.7, label='動態成本')
 
             if total_shares > 0:
                 avg_cost = total_cost / total_shares
@@ -596,8 +609,9 @@ class ActiveETFModule(QWidget):
             ax2.text(last_date, last_price, f" {last_price:.1f}", color='#FFD700',
                      fontsize=10, fontweight='bold', va='center', ha='left', bbox=bbox_price)
 
+            # 🔥 固定產出最後的成本價格 (保持原本邏輯)
             if avg_cost > 0:
-                ax2.axhline(avg_cost, color='#FF00FF', linestyle=':', linewidth=2, alpha=0.7)
+                ax2.axhline(avg_cost, color='#FF00FF', linestyle='--', linewidth=1, alpha=0.4)
 
                 ymin, ymax = ax2.get_ylim()
                 if ymin == 0 and ymax == 1:
@@ -616,6 +630,15 @@ class ActiveETFModule(QWidget):
             ax2.text(0.5, 0.5, f"無本地股價 ({stock_id}_{market})", transform=ax2.transAxes, color='#555', ha='center',
                      va='center')
 
+        # 寫回更新過的 dataframe 以供 hover 使用
+        self.line_data = {
+            'etf': trend_data,
+            'price': price_data,
+            'ax1': ax1,
+            'ax2': ax2,
+            'ax3': ax3
+        }
+
         ax1.yaxis.set_major_formatter(mtick.PercentFormatter())
         ax1.set_ylabel("持股權重 %", color='#00E5FF')
         ax2.set_ylabel(f"{stock_name} 股價", color='#FFD700')
@@ -633,7 +656,10 @@ class ActiveETFModule(QWidget):
             for spine in ax.spines.values():
                 spine.set_visible(False)
 
-        lines = [l1] + ([l2] if l2 else []) + [l3]
+        lines = [l1]
+        if l2: lines.append(l2)
+        lines.append(l3)
+        if l4: lines.append(l4)
         ax1.legend(handles=lines, loc='upper left', frameon=False, labelcolor='white')
 
         self.canvas_trend.draw()
@@ -692,12 +718,18 @@ class ActiveETFModule(QWidget):
             except:
                 pass
 
+        # 🔥 抓取計算好的動態成本
+        cost_val = "--"
+        if 'avg_cost' in row and row['avg_cost'] > 0:
+            cost_val = f"{row['avg_cost']:.1f}"
+
         html = (
             f"<span style='color:#DDD;'>{row['date'].strftime('%Y-%m-%d')}</span> | "
             f"<span style='color:#00E5FF;'>權重:{row['weight']}%</span> | "
             f"<span style='color:#FFF;'>持股:{int(row['shares'] / 1000):,}張</span>"
             f"{change_text} | "
-            f"<span style='color:#FFD700;'>股價:{price_val}</span>"
+            f"<span style='color:#FFD700;'>股價:{price_val}</span> | "
+            f"<span style='color:#FF00FF;'>成本:{cost_val}</span>"
         )
         self.info_label.setText(html)
 

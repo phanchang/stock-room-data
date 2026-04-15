@@ -70,9 +70,18 @@ class SectorDashboard(QWidget):
         self.load_sectors_to_table()
 
     def init_data(self):
+        # 🔥 新增：紀錄硬碟檔案的修改時間，以便後續動態比對更新
+        try:
+            self._last_snapshot_mtime = self.snapshot_path.stat().st_mtime if self.snapshot_path.exists() else 0
+        except:
+            self._last_snapshot_mtime = 0
+
         if self.snapshot_path.exists():
             try:
-                self.snapshot_df = pd.read_parquet(self.snapshot_path)
+                # 🔥 強制清除舊有記憶體參照，並使用 .copy() 斷開 PyArrow 的底層記憶體映射鎖定
+                self.snapshot_df = None
+                self.snapshot_df = pd.read_parquet(self.snapshot_path).copy()
+
                 if 'sid' in self.snapshot_df.columns:
                     self.snapshot_df['股票代號'] = self.snapshot_df['sid'].astype(str)
                     self.snapshot_df['股票名稱'] = self.snapshot_df.get('name', '')
@@ -96,9 +105,9 @@ class SectorDashboard(QWidget):
                     else:
                         self.snapshot_df['ST距離'] = 99.0
             except Exception as e:
-                pass
+                print(f"Error loading snapshot: {e}")
 
-        self.sector_types = {}  # 新增：記錄板塊分類屬性
+        self.sector_types = {}  # 記錄板塊分類屬性
         for file_name, col_name, s_type in [('dj_industry.csv', 'dj_sub_ind', '細產業'),
                                             ('concept_tags.csv', 'sub_concepts', '概念股')]:
             path = self.project_root / 'data' / file_name
@@ -286,7 +295,8 @@ class SectorDashboard(QWidget):
 
     def reload_dashboard(self):
         """🔄 重新載入硬碟最新數據並更新 UI (提供給外部或頁籤切換時呼叫)"""
-        # 1. 重新讀取最新的 factor_snapshot.parquet
+        # 🔥 強制清空 DataFrame，確保 init_data 會重新從硬碟讀取最新鮮的資料
+        self.snapshot_df = None
         self.init_data()
 
         # 2. 重新讀取緩存資料夾內的 IDX_*.parquet 並重繪左側列表
@@ -783,6 +793,15 @@ class SectorDashboard(QWidget):
         )
 
     def update_constituents_table(self, sector_name):
+        # 🔥 新增防呆：即時檢查硬碟大表時間戳。若外部腳本剛算完，UI 應立即刷新記憶體，實現無縫接軌！
+        try:
+            current_mtime = self.snapshot_path.stat().st_mtime if self.snapshot_path.exists() else 0
+            last_mtime = getattr(self, '_last_snapshot_mtime', 0)
+            if current_mtime > last_mtime or self.snapshot_df is None:
+                self.init_data()
+        except Exception:
+            pass
+
         self.const_table.setSortingEnabled(False)
         self.const_table.setRowCount(0)
 
@@ -869,7 +888,6 @@ class SectorDashboard(QWidget):
                     rev = l3_result.get('rev_info', {})
                     prof = l3_result.get('prof_info', {})
 
-                    # 使用 HTML 語法建立高質感的懸停資訊卡
                     tooltip_html = f"""
                                 <div style='font-family: Arial, sans-serif; font-size: 13px; color: #E0E0E0;'>
                                     <b style='color: #FFD700; font-size: 14px;'>{sid} {name_str}</b> | L3Score: <b>{l3_score_val}</b> {'★黑馬' if is_dark_horse else ''}<br>
@@ -892,7 +910,7 @@ class SectorDashboard(QWidget):
             font.setBold(True)
             l3_item.setFont(font)
             l3_item.setForeground(QBrush(QColor('#FFFFFF')))
-            if tooltip_html: l3_item.setToolTip(tooltip_html)  # 🔥 掛載懸停提示
+            if tooltip_html: l3_item.setToolTip(tooltip_html)
             self.const_table.setItem(row, 11, l3_item)
 
             # 寫入 黑馬標記 (Col 12)
@@ -902,10 +920,9 @@ class SectorDashboard(QWidget):
             horse_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             if is_dark_horse:
                 horse_item.setForeground(QBrush(QColor('#FFD700')))
-            if tooltip_html: horse_item.setToolTip(tooltip_html)  # 🔥 讓星星也有懸停提示
+            if tooltip_html: horse_item.setToolTip(tooltip_html)
             self.const_table.setItem(row, 12, horse_item)
 
-            # 🔥 順便讓代號與名稱欄位也有 Tooltip，方便滑鼠一掃過去就能看到
             if tooltip_html:
                 sid_item.setToolTip(tooltip_html)
                 name_item.setToolTip(tooltip_html)
