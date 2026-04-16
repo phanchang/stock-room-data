@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import sys
+import argparse
 import os
 import warnings
 from datetime import datetime
@@ -586,5 +587,112 @@ def main():
     output_df.to_csv(strategy_dir / '戰情室今日快照_全中文版.csv', encoding='utf-8-sig', index=False)
     print(f"[System] 存檔完成: {strategy_dir}")
 
+
+import argparse  # 記得在檔案最上方加入
+
+
+# ... (保留你原本的所有計算邏輯，不更動) ...
+
+# ==========================================
+# 🚀 極速熱更新 (Hot-Patch)：不重算 K 線，僅注入最新 JSON 籌碼
+# ==========================================
+def run_fast_patch():
+    print(f"[System] 啟動極速熱更新模式 (僅注入最新 JSON 籌碼) | {datetime.now():%H:%M:%S}")
+
+    parquet_path = project_root / 'data' / 'strategy_results' / 'factor_snapshot.parquet'
+    if not parquet_path.exists():
+        print("[Error] 找不到舊的大表，請先執行一次完整更新。")
+        return
+
+    # 1. 讀取今日已經算好技術面的大表
+    df = pd.read_parquet(parquet_path)
+    if 'sid' not in df.columns: return
+
+    # 將舊表設為 index，方便稍後無縫覆寫
+    df.set_index('sid', inplace=True)
+    target_sids = df.index.astype(str).tolist()
+
+    print(f"📊 正在將 {len(target_sids)} 檔股票的最新籌碼注入大表...")
+
+    # 2. 讀取本機的 market_yield.json (估值)
+    valuation_dict = {}
+    yield_path = project_root / 'data' / 'market_yield.json'
+    if yield_path.exists():
+        try:
+            with open(yield_path, 'r', encoding='utf-8') as f:
+                valuation_dict = json.load(f)
+        except:
+            pass
+
+    # 3. 快速讀取所有 JSON 籌碼/基本面資料 (純 I/O 極快)
+    updated_rows = []
+    for sid in target_sids:
+        j_factors = calculate_json_factors(sid)
+        v_data = valuation_dict.get(sid, {'pe': 0.0, 'pbr': 0.0, 'yield': 0.0})
+        # 將籌碼與估值打包
+        updated_rows.append({'sid': sid, **j_factors, **v_data})
+
+    df_new_chips = pd.DataFrame(updated_rows)
+    df_new_chips.set_index('sid', inplace=True)
+
+    # 4. 🔥 核心：用 Pandas 的 update 直接覆寫！這會保留所有的 K 線技術指標
+    df.update(df_new_chips)
+    df.reset_index(inplace=True)
+
+    # 5. 重新判定強勢特徵 (因為有些標籤如「土洋對作」需要看最新的籌碼)
+    df['強勢特徵'] = df.apply(get_strong_tags, axis=1)
+    df['is_tu_yang'] = df['強勢特徵'].apply(lambda x: 1 if '土洋對作' in str(x) else 0)
+
+    # 6. 存檔覆蓋
+    strategy_dir = project_root / 'data' / 'strategy_results'
+    df.to_parquet(strategy_dir / 'factor_snapshot.parquet')
+
+    # 更新 CSV 給外部參考
+    chinese_map = {
+        'sid': '股票代號', 'name': '股票名稱', 'industry': '產業別',
+        'sub_concepts': '概念股標籤', 'dj_main_ind': 'MDJ主產業', 'dj_sub_ind': 'MDJ細產業',
+        'rev_ym': '最新營收月', 'rev_yoy': '營收YoY(%)', 'rev_cum_yoy': '累計營收YoY(%)',
+        'fund_eps_year': 'EPS年度', 'fund_eps_cum': '最新EPS(累)', 'eps_latest_q': '最新EPS季',
+        'eps_latest_val': '單季EPS(元)', 'eps_qoq': 'EPS季增率_QoQ(%)', 'eps_yoy': 'EPS年增率_YoY(%)',
+        'eps_cum_yoy': '累計EPS_YoY(%)',
+        'legal_diff_5d': '法人5日增減(%)', 'margin_diff_5d': '融落5日增減(%)',
+        'legal_diff_20d': '法人20日增減(%)', 'margin_diff_20d': '融資20日增減(%)',
+        't_net_today': '投信買賣超(今)', 't_sum_5d': '投信買賣超(5日)', 't_sum_10d': '投信買賣超(10日)',
+        't_sum_20d': '投信買賣超(20日)', 't_streak': '投信連買天數',
+        'f_net_today': '外資買賣超(今)', 'f_sum_5d': '外資買賣超(5日)', 'f_sum_10d': '外資買賣超(10日)',
+        'f_sum_20d': '外資買賣超(20日)', 'f_streak': '外資連買天數',
+        'invest_trust_hold_pct': '投信持股(%)', 'foreign_hold_pct': '外資持股(%)',
+        'm_net_today': '融資增減(今)', 'm_sum_5d': '融資增減(5日)', 'm_sum_10d': '融資增減(10日)',
+        'm_sum_20d': '融資增減(20日)',
+        'fund_contract_qoq': '合約負債季增(%)', 'fund_inventory_qoq': '庫存季增(%)',
+        'fund_op_cash_flow': '最新營業現金流',
+        'pe': '本益比', 'yield': '殖利率(%)', 'pbr': '股價淨值比',
+        '現價': '今日收盤價', '漲幅1d': '今日漲幅(%)', '漲幅5d': '5日漲幅(%)', '漲幅20d': '20日漲幅(%)',
+        '漲幅60d': '3個月漲幅(%)',
+        'bb_width': '布林寬度(%)', '量比': '成交量比', 'RS強度': 'RS強度', '強勢特徵': '強勢特徵標籤',
+        'str_30w_week_offset': '30W起漲週數(前)', 'str_st_week_offset': 'ST買訊(週)'
+    }
+    final_cols = [c for c in df.columns if c in chinese_map]
+    output_df = df[final_cols].rename(columns=chinese_map)
+    output_df.to_csv(strategy_dir / '戰情室今日快照_全中文版.csv', encoding='utf-8-sig', index=False)
+
+    print(f"[System] 熱更新完成！耗時極短。")
+    print("PROGRESS: 100")
+
+
+# ==========================================
+# 修改主入口
+# ==========================================
 if __name__ == "__main__":
-    main()
+    import multiprocessing
+
+    multiprocessing.freeze_support()
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--fast', action='store_true', help='啟用極速熱更新模式')
+    args = parser.parse_args()
+
+    if args.fast:
+        run_fast_patch()
+    else:
+        main()

@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import sys
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+import multiprocessing
 
 # 設定專案根目錄
 current_file = Path(__file__).resolve()
@@ -14,9 +16,13 @@ if str(project_root) not in sys.path:
 
 from utils.cache.manager import CacheManager
 
+# ── 效能優化 1：月份字串轉日期加上快取，避免每筆營收記錄重複計算 ────────────
+_tw_month_cache = {}
 
 def convert_tw_month_to_date(tw_month_str):
-    """將民國年月 '115/03' 轉換為西元月底日期 '2026-03-31'，方便與日線對齊"""
+    """將民國年月 '115/03' 轉換為西元月底日期；結果快取避免重複計算"""
+    if tw_month_str in _tw_month_cache:
+        return _tw_month_cache[tw_month_str]
     try:
         y, m = tw_month_str.split('/')
         year = int(y) + 1911
@@ -25,9 +31,11 @@ def convert_tw_month_to_date(tw_month_str):
             next_month = datetime(year + 1, 1, 1)
         else:
             next_month = datetime(year, month + 1, 1)
-        return next_month - pd.Timedelta(days=1)
+        result = next_month - pd.Timedelta(days=1)
     except:
-        return pd.NaT
+        result = pd.NaT
+    _tw_month_cache[tw_month_str] = result
+    return result
 
 
 def load_sector_mappings(project_root):
@@ -91,8 +99,190 @@ def load_issued_shares(project_root, all_sids):
     return shares_dict
 
 
+# ── 效能優化 2：JSON 預載改為多執行緒並行 I/O ────────────────────────────────
+def _load_one_json(args):
+    """單一 JSON 讀取工作，供 ThreadPoolExecutor 呼叫"""
+    sid, path = args
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return sid, json.load(f)
+    except Exception:
+        return sid, None
+
+
+def load_all_fundamentals(json_dir, all_sids, max_workers=16):
+    """用執行緒池並行讀取所有 JSON，I/O 密集型任務效果顯著"""
+    tasks = [(sid, json_dir / f"{sid}.json")
+             for sid in all_sids if (json_dir / f"{sid}.json").exists()]
+    result = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for sid, data in pool.map(_load_one_json, tasks):
+            if data is not None:
+                result[sid] = data
+    return result
+
+
+# ── 效能優化 3：單一板塊合成邏輯獨立成頂層函式，供多進程呼叫 ────────────────
+def build_one_sector(args):
+    """
+    計算單一板塊的 IDX parquet，回傳 (tag, True/None)。
+    頂層函式才能被 ProcessPoolExecutor pickle。
+    """
+    import pandas as pd
+    import numpy as np
+    import json
+    from pathlib import Path
+
+    tag, sids, stock_dfs_records, stock_fundamentals, output_dir_str = args
+
+    # 月份快取在子進程內重新建立
+    _local_month_cache = {}
+    def _tw_month(s):
+        if s in _local_month_cache:
+            return _local_month_cache[s]
+        try:
+            from datetime import datetime as dt
+            y, m = s.split('/')
+            year = int(y) + 1911
+            month = int(m)
+            if month == 12:
+                nxt = dt(year + 1, 1, 1)
+            else:
+                nxt = dt(year, month + 1, 1)
+            res = nxt - pd.Timedelta(days=1)
+        except:
+            res = pd.NaT
+        _local_month_cache[s] = res
+        return res
+
+    try:
+        # 還原 stock_dfs
+        stock_dfs = {}
+        for sid, (recs, cols) in stock_dfs_records.items():
+            df = pd.DataFrame(recs, columns=cols)
+            df['Date'] = pd.to_datetime(df['Date'])
+            df = df.set_index('Date')
+            stock_dfs[sid] = df
+
+        dfs_to_concat = [stock_dfs[sid] for sid in sids if sid in stock_dfs]
+        if not dfs_to_concat:
+            return tag, None
+
+        # ── 1. 合成加權 K 線 ─────────────────────────────────────────────────
+        all_dates = pd.DatetimeIndex(
+            sorted(set().union(*[set(df.index) for df in dfs_to_concat]))
+        )
+        aligned = []
+        for df in dfs_to_concat:
+            df = df[~df.index.duplicated(keep='last')]
+            df = df.reindex(all_dates)
+            df[['adj_open', 'adj_high', 'adj_low', 'adj_close']] = \
+                df[['adj_open', 'adj_high', 'adj_low', 'adj_close']].ffill()
+            df['volume'] = df['volume'].fillna(0)
+            df['shares'] = df['shares'].ffill().bfill()
+            aligned.append(df)
+
+        sector_df = pd.concat(aligned)
+        for col in ['adj_open', 'adj_high', 'adj_low', 'adj_close']:
+            sector_df[f'w_{col}'] = sector_df[col] * sector_df['shares']
+
+        daily = sector_df.groupby(sector_df.index).agg(
+            w_adj_open=('w_adj_open', 'sum'),
+            w_adj_high=('w_adj_high', 'sum'),
+            w_adj_low=('w_adj_low', 'sum'),
+            w_adj_close=('w_adj_close', 'sum'),
+            shares=('shares', 'sum'),
+            volume=('volume', 'sum'),
+        )
+        daily = daily[daily['shares'] > 0]
+
+        result_df = pd.DataFrame(index=daily.index)
+        result_df.index.name = 'Date'
+        for col in ['open', 'high', 'low', 'close']:
+            val = (daily[f'w_adj_{col}'] / daily['shares']).round(2)
+            result_df[col] = val
+            result_df[f'adj_{col}'] = val
+        result_df['volume'] = daily['volume'].astype(int)
+        result_df['dividends'] = 0.0
+        result_df.sort_index(inplace=True)
+
+        # ── 2. 等權平均漲幅 ──────────────────────────────────────────────────
+        pct_cols = {}
+        for sid in [s for s in sids if s in stock_dfs]:
+            s_close = stock_dfs[sid]['adj_close']
+            pct_cols[sid] = s_close.pct_change(fill_method=None) * 100
+
+        if pct_cols:
+            eq_df = pd.DataFrame(pct_cols)
+            result_df['Equal_Pct_1d'] = eq_df.mean(axis=1).reindex(result_df.index).round(4).fillna(0.0)
+            # ── 效能優化 4：NumPy 向量化複利計算，取代 rolling.apply + lambda ──
+            ep = result_df['Equal_Pct_1d'].values
+            log1p = np.log1p(ep / 100.0)
+            roll5 = np.array([np.sum(log1p[max(0, k-4):k+1]) for k in range(len(log1p))])
+            result_df['Equal_Pct_5d'] = np.round(np.expm1(roll5) * 100, 4)
+            result_df['Equal_Pct_5d'] = result_df['Equal_Pct_5d'].fillna(0.0)
+        else:
+            result_df['Equal_Pct_1d'] = 0.0
+            result_df['Equal_Pct_5d'] = 0.0
+
+        # ── 3. 基本面籌碼擴散率 ──────────────────────────────────────────────
+        actual_sids = [s for s in sids if s in stock_dfs and s in stock_fundamentals]
+        daily_inst = []
+        monthly_rev = []
+
+        for sid in actual_sids:
+            jdata = stock_fundamentals[sid]
+            for row in jdata.get('institutional_investors', []):
+                dt_val = pd.to_datetime(row.get('date'))
+                if pd.isna(dt_val): continue
+                is_buying = 1 if (float(row.get('foreign_buy_sell', 0)) +
+                                  float(row.get('invest_trust_buy_sell', 0)) > 0) else 0
+                daily_inst.append({'Date': dt_val, 'is_buying': is_buying})
+
+            for row in jdata.get('revenue', []):
+                dt_val = _tw_month(row.get('month', ''))
+                if pd.isna(dt_val): continue
+                yoy = float(row.get('rev_yoy', 0))
+                monthly_rev.append({'Date': dt_val, 'rev_yoy': yoy,
+                                    'is_growing': 1 if yoy > 0 else 0})
+
+        if daily_inst:
+            df_inst = pd.DataFrame(daily_inst)
+            inst_agg = (df_inst.groupby('Date')['is_buying'].mean() * 100).round(2).rename('Legal_Diffusion')
+            result_df = result_df.join(inst_agg, how='left')
+        result_df['Legal_Diffusion'] = result_df.get('Legal_Diffusion', pd.Series(0.0, index=result_df.index)).fillna(0.0)
+
+        if monthly_rev:
+            df_rev = pd.DataFrame(monthly_rev)
+            rev_agg = df_rev.groupby('Date').agg(
+                Rev_Diffusion=('is_growing', 'mean'),
+                YoY_Median=('rev_yoy', 'median')
+            )
+            rev_agg['Rev_Diffusion'] = (rev_agg['Rev_Diffusion'] * 100).round(2)
+            rev_agg['YoY_Median'] = rev_agg['YoY_Median'].round(2)
+            rev_agg['YoY_Accel'] = rev_agg['YoY_Median'].diff().round(2)
+            full_idx = pd.date_range(start=result_df.index.min(), end=result_df.index.max(), freq='D')
+            rev_daily = rev_agg.reindex(full_idx).ffill()
+            rev_daily.index.name = 'Date'
+            result_df = result_df.join(rev_daily, how='left')
+            result_df[['Rev_Diffusion', 'YoY_Median', 'YoY_Accel']] = \
+                result_df[['Rev_Diffusion', 'YoY_Median', 'YoY_Accel']].ffill().fillna(0.0)
+        else:
+            result_df['Rev_Diffusion'] = 0.0
+            result_df['YoY_Median'] = 0.0
+            result_df['YoY_Accel'] = 0.0
+
+        # ── 4. 存檔 ──────────────────────────────────────────────────────────
+        save_path = Path(output_dir_str) / f"IDX_{tag}.parquet"
+        result_df.to_parquet(save_path)
+        return tag, True
+
+    except Exception as e:
+        return tag, None
+
+
 def main():
-    print(f"[System] 板塊 K 線合成作業啟動 (V9.3 - 融合高階基本面) | {datetime.now():%H:%M:%S}")
+    print(f"[System] 板塊 K 線合成作業啟動 (V9.4 - 並行加速版) | {datetime.now():%H:%M:%S}")
 
     sector_dict = load_sector_mappings(project_root)
     all_needed_sids = set(sid for sids in sector_dict.values() for sid in sids)
@@ -104,179 +294,74 @@ def main():
         if len(valid_sids) >= 5:
             valid_sectors[tag] = valid_sids
 
-    print("⏳ 正在將 K 線與基本面資料載入記憶體 (CacheManager & JSON)...")
-    cache = CacheManager()
-
-    # --- 預載 JSON 基礎面資料 ---
+    # ── 效能優化 2：並行讀取 JSON ────────────────────────────────────────────
+    print("⏳ 並行載入基本面 JSON (16 執行緒)...")
+    t0 = datetime.now()
     json_dir = project_root / 'data' / 'fundamentals'
-    stock_fundamentals = {}
-    for sid in all_needed_sids:
-        j_path = json_dir / f"{sid}.json"
-        if j_path.exists():
-            try:
-                with open(j_path, 'r', encoding='utf-8') as f:
-                    stock_fundamentals[sid] = json.load(f)
-            except:
-                pass
+    stock_fundamentals = load_all_fundamentals(json_dir, all_needed_sids, max_workers=16)
+    print(f"   完成，耗時 {(datetime.now()-t0).total_seconds():.1f}s，共 {len(stock_fundamentals)} 筆")
 
+    # ── K 線讀取（維持單執行緒，CacheManager 不保證 thread-safe）───────────
+    print("⏳ 載入 K 線資料...")
+    t1 = datetime.now()
+    cache = CacheManager()
     stock_dfs = {}
     for sid in all_needed_sids:
         df = cache.load(f"{sid}.TW")
         if df is None or df.empty:
             df = cache.load(f"{sid}.TWO")
-
         if df is not None and not df.empty:
             if 'Date' not in df.columns:
                 df = df.reset_index()
-
             need_cols = ['Date', 'adj_open', 'adj_high', 'adj_low', 'adj_close', 'volume']
-            missing = [c for c in need_cols if c not in df.columns]
-
-            if missing:
-                for c in missing:
-                    raw_col = c.replace('adj_', '')
-                    if raw_col in df.columns:
-                        df[c] = df[raw_col]
-                    else:
-                        df[c] = 0.0
-
+            for c in need_cols:
+                if c not in df.columns:
+                    raw = c.replace('adj_', '')
+                    df[c] = df[raw] if raw in df.columns else 0.0
             df_subset = df[need_cols].copy()
             df_subset['shares'] = shares_dict.get(sid, 0)
             df_subset['Date'] = pd.to_datetime(df_subset['Date'])
             stock_dfs[sid] = df_subset
+    print(f"   完成，耗時 {(datetime.now()-t1).total_seconds():.1f}s，共 {len(stock_dfs)} 檔")
 
     output_dir = project_root / 'data' / 'cache' / 'sector'
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    total = len(valid_sectors)
+    # ── 效能優化 3：序列化後多進程並行合成 ──────────────────────────────────
+    print("⏳ 序列化 K 線資料...")
+    stock_dfs_records = {
+        sid: (df.reset_index().to_dict('records'), list(df.reset_index().columns))
+        for sid, df in stock_dfs.items()
+    }
+
+    n_workers = min(multiprocessing.cpu_count(), len(valid_sectors), 8)
+    print(f"⚡ 啟動 {n_workers} 個子進程並行合成 {len(valid_sectors)} 個板塊...")
+
+    task_args = [
+        (tag, sids,
+         {sid: stock_dfs_records[sid] for sid in sids if sid in stock_dfs_records},
+         {sid: stock_fundamentals.get(sid, {}) for sid in sids},
+         str(output_dir))
+        for tag, sids in valid_sectors.items()
+    ]
+
+    t2 = datetime.now()
+    done = 0
+    total = len(task_args)
     last_pct = -1
 
-    for i, (tag, sids) in enumerate(valid_sectors.items()):
-        progress_pct = int(((i + 1) / total) * 100)
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(build_one_sector, arg): arg[0] for arg in task_args}
+        for future in as_completed(futures):
+            tag_done, ok = future.result()
+            done += 1
+            pct = int(done / total * 100)
+            if pct > last_pct:
+                print(f"\rPROGRESS: {pct} | ✅ {done}/{total} [{tag_done}]{' '*15}", end="", flush=True)
+                last_pct = pct
 
-        if progress_pct > last_pct:
-            print(f"\rPROGRESS: {progress_pct} | ⏳ 正在合成: {i + 1}/{total} [{tag}]...{' ' * 10}", end="", flush=True)
-            last_pct = progress_pct
-
-        dfs_to_concat = [stock_dfs[sid] for sid in sids if sid in stock_dfs]
-        if not dfs_to_concat:
-            continue
-
-        # --- 1. 合成價格與成交量 K 線 (維持既有邏輯) ---
-        all_dates = pd.Index([])
-        for df in dfs_to_concat:
-            all_dates = all_dates.union(df['Date'])
-        all_dates = all_dates.sort_values()
-
-        aligned_dfs = []
-        for df in dfs_to_concat:
-            df_indexed = df.set_index('Date')
-            df_indexed = df_indexed[~df_indexed.index.duplicated(keep='last')]
-            df_reindexed = df_indexed.reindex(all_dates)
-
-            for col in ['adj_open', 'adj_high', 'adj_low', 'adj_close']:
-                df_reindexed[col] = df_reindexed[col].ffill()
-
-            df_reindexed['volume'] = df_reindexed['volume'].fillna(0)
-            df_reindexed['shares'] = df_reindexed['shares'].ffill().bfill()
-
-            df_reindexed.index.name = 'Date'
-            df_reindexed = df_reindexed.reset_index()
-            aligned_dfs.append(df_reindexed)
-
-        sector_df = pd.concat(aligned_dfs, ignore_index=True)
-
-        for col in ['adj_open', 'adj_high', 'adj_low', 'adj_close']:
-            sector_df[f'weighted_{col}'] = sector_df[col] * sector_df['shares']
-
-        agg_logic = {
-            'weighted_adj_open': 'sum',
-            'weighted_adj_high': 'sum',
-            'weighted_adj_low': 'sum',
-            'weighted_adj_close': 'sum',
-            'shares': 'sum',
-            'volume': 'sum'
-        }
-
-        daily_sector = sector_df.groupby('Date').agg(agg_logic).reset_index()
-        daily_sector = daily_sector[daily_sector['shares'] > 0].copy()
-
-        result_df = pd.DataFrame()
-        result_df['Date'] = daily_sector['Date']
-
-        for col in ['open', 'high', 'low', 'close']:
-            val = daily_sector[f'weighted_adj_{col}'] / daily_sector['shares']
-            result_df[col] = val.round(2)
-            result_df[f'adj_{col}'] = val.round(2)
-
-        result_df['volume'] = daily_sector['volume'].astype(int)
-        result_df['dividends'] = 0.0
-        result_df.set_index('Date', inplace=True)
-        result_df.sort_index(inplace=True)
-
-        # --- 2. 結合基本面與籌碼擴散率 ---
-        daily_inst_records = []
-        monthly_rev_records = []
-
-        # 只取有在 K 線計算內的成分股
-        actual_sids = [sid for sid in sids if sid in stock_dfs and sid in stock_fundamentals]
-
-        for sid in actual_sids:
-            jdata = stock_fundamentals[sid]
-
-            # 法人籌碼
-            for row in jdata.get('institutional_investors', []):
-                dt = pd.to_datetime(row.get('date'))
-                if pd.isna(dt): continue
-                is_buying = 1 if (float(row.get('foreign_buy_sell', 0)) + float(
-                    row.get('invest_trust_buy_sell', 0)) > 0) else 0
-                daily_inst_records.append({'Date': dt, 'sid': sid, 'is_buying': is_buying})
-
-            # 月營收
-            for row in jdata.get('revenue', []):
-                dt = convert_tw_month_to_date(row.get('month', ''))
-                if pd.isna(dt): continue
-                yoy = float(row.get('rev_yoy', 0))
-                monthly_rev_records.append({'Date': dt, 'sid': sid, 'rev_yoy': yoy, 'is_growing': 1 if yoy > 0 else 0})
-
-        # 彙整日頻率籌碼
-        if daily_inst_records:
-            df_inst = pd.DataFrame(daily_inst_records)
-            inst_agg = df_inst.groupby('Date')['is_buying'].mean().reset_index()
-            inst_agg['Legal_Diffusion'] = (inst_agg['is_buying'] * 100).round(2)
-            inst_agg = inst_agg.set_index('Date')[['Legal_Diffusion']]
-            result_df = result_df.join(inst_agg, how='left')
-
-        result_df['Legal_Diffusion'] = result_df.get('Legal_Diffusion', 0.0).fillna(0.0)
-
-        # 彙整月頻率營收並前向填充 (ffill) 至日線
-        if monthly_rev_records:
-            df_rev = pd.DataFrame(monthly_rev_records)
-            rev_agg = df_rev.groupby('Date').agg(Rev_Diffusion=('is_growing', 'mean'), YoY_Median=('rev_yoy', 'median'))
-            rev_agg['Rev_Diffusion'] = (rev_agg['Rev_Diffusion'] * 100).round(2)
-            rev_agg['YoY_Median'] = rev_agg['YoY_Median'].round(2)
-            rev_agg = rev_agg.sort_index()
-            rev_agg['YoY_Accel'] = rev_agg['YoY_Median'].diff().round(2)
-
-            # 將月營收重新索引到 K 線的日期長度，並往下填充
-            full_idx = pd.date_range(start=result_df.index.min(), end=result_df.index.max(), freq='D')
-            rev_daily = rev_agg.reindex(full_idx).ffill()
-            rev_daily.index.name = 'Date'
-
-            result_df = result_df.join(rev_daily, how='left')
-            # 填充還沒有營收公布之前的早期空缺
-            result_df[['Rev_Diffusion', 'YoY_Median', 'YoY_Accel']] = result_df[
-                ['Rev_Diffusion', 'YoY_Median', 'YoY_Accel']].ffill().fillna(0.0)
-        else:
-            result_df['Rev_Diffusion'] = 0.0
-            result_df['YoY_Median'] = 0.0
-            result_df['YoY_Accel'] = 0.0
-
-        # --- 3. 存檔 ---
-        save_path = output_dir / f"IDX_{tag}.parquet"
-        result_df.to_parquet(save_path)
-
-    print(f"\n[System] 板塊合成作業完成！共產出 {total} 個 IDX_*.parquet 檔案 (含基本面)。")
+    elapsed = (datetime.now() - t2).total_seconds()
+    print(f"\n[System] 板塊合成完成！共 {total} 個 IDX_*.parquet (含基本面 + 等權漲幅)，合成耗時 {elapsed:.1f}s。")
     print("PROGRESS: 100", flush=True)
 
 

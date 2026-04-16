@@ -642,20 +642,48 @@ class SettingsModule(QWidget):
         self.runner_daily.start_script()
 
     def _handle_daily_finished(self, exitCode):
-        """處理籌碼抓取結束後的邏輯"""
         if exitCode != 0:
             self.log("❌ 籌碼抓取腳本發生錯誤 (Crash)，已自動終止排程。")
             self.on_pipeline_finished()
             return
 
-        # 如果 _check_if_no_data 偵測到沒有新資料
         if not getattr(self, 'found_new_data', False):
             self.log("🛑 偵測到今日無新籌碼，自動取消後續運算。")
             self.on_pipeline_finished()
             return
 
-        # 若一切正常且有新資料，繼續下一步
-        self._proceed_to_market_yield()
+        mode_idx = self.combo_chips_mode.currentIndex()
+
+        if mode_idx == 1:
+            # 🕒 【下午 17:00 模式：僅抓法人】
+            self.log("✅ 三大法人已更新完畢！")
+            self.log("⚡ 啟動極速熱更新：將最新法人資料注入戰情室大表 (不重算 K 線)...")
+            self.progress.setFormat("⏳ 極速注入籌碼資料中...")
+
+            # 呼叫 --fast 極速注入，算完直接結束
+            self.runner_calc = ScriptRunner(self.project_root / "scripts" / "calc_snapshot_factors.py", ["--fast"])
+            self.runner_calc.output_signal.connect(self.log)
+            self.runner_calc.progress_signal.connect(self.progress.setValue)
+            self.runner_calc.finished.connect(self.on_pipeline_finished)
+            self.runner_calc.start_script()
+
+        elif mode_idx == 2:
+            # 🌙 【晚上 21:30 模式：僅抓資券】
+            self.log("✅ 信用資券已更新完畢！")
+            self.log("⚡ 啟動極速熱更新：將最新資券資料注入戰情室大表 (不重算 K 線)...")
+            self.progress.setFormat("⏳ 極速注入籌碼資料中...")
+
+            # 呼叫 --fast 極速注入，算完直接結束 (因為產業板塊 K 線跟資券無關，不需要每天重配)
+            self.runner_calc = ScriptRunner(self.project_root / "scripts" / "calc_snapshot_factors.py", ["--fast"])
+            self.runner_calc.output_signal.connect(self.log)
+            self.runner_calc.progress_signal.connect(self.progress.setValue)
+            self.runner_calc.finished.connect(self.on_pipeline_finished)
+            self.runner_calc.start_script()
+
+        elif mode_idx == 0:
+            # 🌑 【深夜：完整更新】(如果你有幾天沒開電腦，要從頭跑的時候用)
+            self.log("✅ 雙籌碼已更新完畢！準備執行晚間最終結算...")
+            self._proceed_to_market_yield()
 
     def _check_if_no_data(self, text):
         """攔截腳本日誌，判斷執行狀態"""

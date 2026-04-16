@@ -190,6 +190,11 @@ class SectorDashboard(QWidget):
                 '檔數']
         self.sector_table = self.create_styled_table(cols)
 
+        # 👇 為今日%與5日%欄位加上 Tooltip，說明採用等權平均算法
+        _eq_tip = "等權平均漲幅：所有成分股漲幅的簡單平均\n反映族群廣度，不受高價股或大市值股主導\n（K 線圖仍使用市值加權合成）"
+        self.sector_table.horizontalHeaderItem(6).setToolTip(_eq_tip)
+        self.sector_table.horizontalHeaderItem(7).setToolTip(_eq_tip)
+
         # 👇 修正 Data Bar 綁定欄位 (平移至 3 與 4)
         self.legal_delegate = DataBarDelegate('#00E5FF', self.sector_table)
         self.rev_delegate = DataBarDelegate('#FF9800', self.sector_table)
@@ -422,8 +427,18 @@ class SectorDashboard(QWidget):
                 close_1d = df['adj_close'].iloc[-2]
                 close_5d = df['adj_close'].iloc[-6]
 
-                pct_1d = ((close_today - close_1d) / close_1d) * 100
-                pct_5d = ((close_today - close_5d) / close_5d) * 100
+                # K 線圖仍使用加權合成價格（保留原始邏輯，供技術分析用）
+                # 左側龍虎榜改用等權平均漲幅，反映族群廣度而非大市值主導
+                if 'Equal_Pct_1d' in df.columns and df['Equal_Pct_1d'].iloc[-1] != 0.0:
+                    pct_1d = float(df['Equal_Pct_1d'].iloc[-1])
+                else:
+                    # 等權欄位不存在（舊版 parquet）時，退回加權算法並標記
+                    pct_1d = ((close_today - close_1d) / close_1d) * 100
+
+                if 'Equal_Pct_5d' in df.columns and df['Equal_Pct_5d'].iloc[-1] != 0.0:
+                    pct_5d = float(df['Equal_Pct_5d'].iloc[-1])
+                else:
+                    pct_5d = ((close_today - close_5d) / close_5d) * 100
 
                 vol_today = df['volume'].iloc[-1]
                 vol_5d_avg = df['volume'].iloc[-6:-1].mean()
