@@ -25,7 +25,7 @@ STYLES = """
     QLabel#Label { font-size: 16px; color: #FFFFFF; font-weight: bold; }
     QLabel#Value { font-size: 16px; font-weight: bold; color: #00E5FF; }
     QLabel#Warning { font-size: 16px; font-weight: bold; color: #FF5252; }
-    QLabel#Success { font-size: 16px; font-weight: bold; color: #00E676; }
+    QLabel#Success { font-size: 16px; font-weight: bold; color: #00E676; } 
     QLabel#Desc { font-size: 14px; color: #BBBBBB; font-style: normal; }
     QLabel#StrategyTime { font-size: 14px; color: #FFEB3B; font-weight: bold; margin-right: 10px; }
 
@@ -49,7 +49,7 @@ STYLES = """
         font-size: 14px;
     }
 """
-
+#
 BTN_ACTION = """
     QPushButton { background-color: #0066CC; border: 2px solid #004C99; border-radius: 6px; padding: 10px 15px; font-size: 16px; color: white; font-weight: bold; }
     QPushButton:hover { background-color: #3399FF; border: 2px solid #FFFFFF; }
