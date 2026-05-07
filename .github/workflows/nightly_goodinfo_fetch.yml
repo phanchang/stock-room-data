@@ -1,0 +1,46 @@
+name: Nightly Goodinfo Fetch
+on:
+  schedule:
+    - cron: '0 20 * * *' # 台北 04:00
+  workflow_dispatch:
+
+jobs:
+  fetch-goodinfo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with: {python-version: '3.11'}
+
+      - name: Install dependencies
+        run: pip install pandas numpy selenium webdriver-manager beautifulsoup4 python-dotenv requests lxml html5lib
+
+      - name: Revenue High (Critical Timeout)
+        continue-on-error: true
+        run: python scripts/crawler_goodinfo_revenue_high.py --mode fetch
+
+      - name: Holder Change
+        continue-on-error: true
+        run: python scripts/crawler_goodinfo_holder_change.py --mode fetch
+
+      - name: Commit and Push Results
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 1. 加入檔案
+          git add -f data/goodinfo/
+          
+          # 2. 提交 (如果沒變更就略過)
+          git commit -m "Auto: Update Goodinfo Data" || echo "No changes to commit"
+          
+          # 🟢 關鍵修正：強制清理未提交的垃圾檔案 (如 pycache)，確保目錄乾淨
+          git reset --hard HEAD
+          
+          # 3. 拉取遠端更新 (Rebase)
+          git pull --rebase -X theirs origin main
+          
+          # 4. 推送
+          git push origin main

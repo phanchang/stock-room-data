@@ -1,0 +1,36 @@
+name: Test Git Fix (Fast)
+on: workflow_dispatch
+
+jobs:
+  test-git:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Simulate Data Generation
+        run: |
+          # 1. 建立我們要的資料 (模擬 K 線)
+          mkdir -p data/cache/tw
+          echo "Important Data $(date)" > data/cache/tw/test_data.parquet
+          
+          # 2. 建立我們不要的雜檔 (模擬 __pycache__ 或 log)
+          echo "Junk Data" > junk_file.log
+          
+      - name: Commit and Push (The Fix)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # --- 步驟 A: 只加入我們要的檔案 ---
+          git add -f data/cache/tw/
+          
+          # --- 步驟 B: 提交 (存檔) ---
+          git commit -m "Test: Verify Git Fix" || echo "Nothing to commit"
+          
+          # --- 步驟 C: 關鍵修正！清除剩下的雜檔 (junk_file.log 會被刪除) ---
+          # 這樣工作區就會變乾淨，pull --rebase 就不會報錯
+          git reset --hard
+          
+          # --- 步驟 D: 同步與上傳 ---
+          git pull --rebase origin main
+          git push origin main
