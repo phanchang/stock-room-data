@@ -4,7 +4,7 @@ on:
     # 方案二：一日兩更
     # UTC 07:37 = 台北 15:30 (先看 K線與法人土洋對作)
     # UTC 14:30 = 台北 22:30
-    - cron: '37 7,12 * * 1-5'
+    - cron: '37 6,10 * * 1-5'
   workflow_dispatch:
 
 permissions:
