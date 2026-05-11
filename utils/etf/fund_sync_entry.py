@@ -62,6 +62,13 @@ def main():
             'parser_cls': EZMoneyParser
         },
         {
+            'company': 'ezmoney',
+            'code': '63YTW',
+            'name': '00403A',
+            'scraper_cls': EZMoneyScraper,
+            'parser_cls': EZMoneyParser
+        },
+        {
             'company': 'fhtrust',
             'code': 'ETF23',
             'name': '00991A',

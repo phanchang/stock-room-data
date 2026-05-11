@@ -92,6 +92,7 @@ class ActiveETFModule(QWidget):
 
         self.mapping = {
             "00981A": ("ezmoney", "統一-00981A (統一台股增長)"),
+            "00403A": ("ezmoney", "統一-00403A (統一台灣高息優選)"),
             "00991A": ("fhtrust", "復華-00991A (復華未來50)"),
             "00982A": ("capitalfund", "群益-00982A (台灣精選強棒)")
         }

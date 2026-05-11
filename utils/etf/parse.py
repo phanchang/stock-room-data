@@ -21,7 +21,8 @@ PARSERS = {
     'ezmoney': {
         'class': EZMoneyParser,
         'funds': [
-            {'name': '00981A', 'raw_dir': RAW_DIR / 'ezmoney' / '00981A', 'clean_dir': CLEAN_DIR / 'ezmoney'}
+            {'name': '00981A', 'raw_dir': RAW_DIR / 'ezmoney' / '00981A', 'clean_dir': CLEAN_DIR / 'ezmoney'},
+            {'name': '00403A', 'raw_dir': RAW_DIR / 'ezmoney' / '00403A', 'clean_dir': CLEAN_DIR / 'ezmoney'}
         ]
     },
     'fhtrust': {

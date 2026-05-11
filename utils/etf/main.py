@@ -27,7 +27,10 @@ PROXY = f"{PROXY_HOST}:{PROXY_PORT}" if PROXY_HOST and PROXY_PORT else None
 SCRAPERS = {
     'ezmoney': {
         'class': EZMoneyScraper,
-        'funds': [{'code': '49YTW', 'name': '00981A', 'dir': 'ezmoney/00981A'}],
+        'funds': [
+            {'code': '49YTW', 'name': '00981A', 'dir': 'ezmoney/00981A'},
+            {'code': '63YTW', 'name': '00403A', 'dir': 'ezmoney/00403A'}
+        ],
         'schedule_time': '15:30'
     },
     'fhtrust': {
