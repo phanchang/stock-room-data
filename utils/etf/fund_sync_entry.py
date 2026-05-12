@@ -107,7 +107,12 @@ def main():
 
         if files_after > files_before:
             print(f"✨ 偵測到新檔案 ({files_before} -> {files_after})！開始解析...")
-            parser = t['parser_cls'](raw_dir=str(save_dir), clean_dir=str(CLEAN_DIR / t['company']))
+            # ✨ 加上 etf_code 參數，避免 parser 使用預設值導致檔名覆寫錯亂
+            parser = t['parser_cls'](
+                raw_dir=str(save_dir),
+                clean_dir=str(CLEAN_DIR / t['company']),
+                etf_code=t['name']
+            )
             parser.parse_all_files()
             any_new_data = True
         else:

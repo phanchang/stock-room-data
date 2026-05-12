@@ -62,9 +62,11 @@ def parse_all():
                 print(f"⚠️ 原始資料目錄不存在：{fund['raw_dir']}")
                 continue
 
+            # ✨ 修正：加入 etf_code 參數
             parser = parser_class(
                 raw_dir=fund['raw_dir'],
-                clean_dir=fund['clean_dir']
+                clean_dir=fund['clean_dir'],
+                etf_code=fund['name']
             )
 
             try:
@@ -92,9 +94,11 @@ def parse_specific(company):
             print(f"⚠️ 原始資料目錄不存在：{fund['raw_dir']}")
             continue
 
+        # ✨ 修正：加入 etf_code 參數
         parser = parser_class(
             raw_dir=fund['raw_dir'],
-            clean_dir=fund['clean_dir']
+            clean_dir=fund['clean_dir'],
+            etf_code=fund['name']
         )
 
         try:
