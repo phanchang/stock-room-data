@@ -47,6 +47,8 @@ class EPSModule(QWidget):
         self.current_stock_name = ""
         self.stock_changed.connect(self.load_eps_data)
         self.plot_df = None
+        self.raw_df = None  # 👑 新增：保存處理完的原始資料以便切換
+        self.view_mode = "quarter"  # 👑 新增：預設顯示季 EPS
         self.init_ui()
 
     def init_ui(self):
@@ -76,8 +78,8 @@ class EPSModule(QWidget):
         sep.setStyleSheet("color: #444; font-size: 16px;")
 
         # 標題
-        title = QLabel("每股盈餘 (EPS) 季度趨勢")
-        title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 16px;")
+        self.lbl_title = QLabel("每股盈餘 (EPS) 季度趨勢")
+        self.lbl_title.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 16px;")
 
         # 資料日期
         self.lbl_update_date = QLabel("")
@@ -85,7 +87,17 @@ class EPSModule(QWidget):
             "color: #FF8800; font-size: 12px; border: 1px solid #555; padding: 2px 4px; border-radius: 3px;")
         self.lbl_update_date.setVisible(False)
 
-        # 切換按鈕
+        # 👑 新增：季/年 切換按鈕
+        self.btn_toggle_period = QPushButton("切換為年EPS")
+        self.btn_toggle_period.setFixedSize(90, 26)
+        self.btn_toggle_period.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_toggle_period.setStyleSheet("""
+            QPushButton { background: #333; color: #CCC; border: 1px solid #555; border-radius: 3px; font-size: 12px; }
+            QPushButton:hover { background: #555; color: white; }
+        """)
+        self.btn_toggle_period.clicked.connect(self.toggle_period_mode)
+
+        # 切換圖表按鈕
         self.btn_toggle_chart = QPushButton("切換視圖")
         self.btn_toggle_chart.setFixedSize(80, 26)
         self.btn_toggle_chart.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -97,17 +109,17 @@ class EPSModule(QWidget):
 
         row1_layout.addWidget(self.lbl_stock_info)
         row1_layout.addWidget(sep)
-        row1_layout.addWidget(title)
+        row1_layout.addWidget(self.lbl_title)
         row1_layout.addStretch()
         row1_layout.addWidget(self.lbl_update_date)
+        row1_layout.addWidget(self.btn_toggle_period)
         row1_layout.addWidget(self.btn_toggle_chart)
 
-        # 🔥 [Row 2] 滑鼠浮動數據 與 👑 新增的固定累計數據
+        # 🔥 [Row 2] 滑鼠浮動數據 與 固定累計數據
         self.info_label = QLabel("移動滑鼠查看數據...")
         self.info_label.setStyleSheet("font-family: 'Consolas'; font-size: 13px; color: #888;")
         self.info_label.setFixedWidth(350)
 
-        # 👑 新增：顯示最新一期累計資料的 Label
         self.lbl_cumulative_info = QLabel("")
         self.lbl_cumulative_info.setStyleSheet("font-family: 'Consolas', 'Microsoft JhengHei'; font-size: 14px;")
 
@@ -140,6 +152,26 @@ class EPSModule(QWidget):
 
         self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
 
+    def toggle_period_mode(self):
+        """👑 切換顯示 年/季 模式並重新繪製 UI"""
+        if self.view_mode == "quarter":
+            self.view_mode = "year"
+            self.lbl_title.setText("每股盈餘 (EPS) 年度累計趨勢")
+            self.btn_toggle_period.setText("切換為季EPS")
+            self.btn_toggle_period.setStyleSheet("background: #550000; color: white; border: 1px solid #FF3333;")
+            self.table.horizontalHeaderItem(0).setText("年度")
+        else:
+            self.view_mode = "quarter"
+            self.lbl_title.setText("每股盈餘 (EPS) 季度趨勢")
+            self.btn_toggle_period.setText("切換為年EPS")
+            self.btn_toggle_period.setStyleSheet("""
+                QPushButton { background: #333; color: #CCC; border: 1px solid #555; border-radius: 3px; font-size: 12px; }
+                QPushButton:hover { background: #555; color: white; }
+            """)
+            self.table.horizontalHeaderItem(0).setText("季度")
+
+        self.update_ui()
+
     def toggle_chart_visibility(self):
         is_visible = self.canvas.isVisible()
         self.canvas.setVisible(not is_visible)
@@ -170,7 +202,7 @@ class EPSModule(QWidget):
         self.canvas.draw()
         self.table.setRowCount(0)
 
-        # 2. 安全處理舊的 Worker：斷開訊號而非終止執行緒
+        # 2. 安全處理舊的 Worker
         if hasattr(self, 'worker') and self.worker is not None:
             try:
                 self.worker.data_loaded.disconnect()
@@ -191,18 +223,18 @@ class EPSModule(QWidget):
             df = df.rename(columns={'季別': 'Quarter'})
             df['EPS'] = pd.to_numeric(df['EPS'], errors='coerce').fillna(0)
 
-            # 👑 新增：從季別字串解析出 年份(Year) 與 季度(Q) 用於累計運算
+            # 從季別字串解析出 年份(Year) 與 季度(Q) 用於累計運算
             def extract_yq(x):
                 m = re.findall(r'\d+', str(x))
                 if len(m) >= 2:
-                    return int(m[0]), int(m[-1])  # 支援 114.4Q 或 2024Q3 各種格式
+                    return int(m[0]), int(m[-1])
                 return 0, 0
 
             yq_df = pd.DataFrame(df['Quarter'].apply(extract_yq).tolist(), columns=['Year', 'Q'])
             df['Year'] = yq_df['Year'].values
             df['Q'] = yq_df['Q'].values
 
-            # 更新資料日期 (取最新的季度)
+            # 更新資料日期
             if not df.empty:
                 sorted_quarters = sorted(df['Quarter'].astype(str), reverse=True)
                 if sorted_quarters:
@@ -217,36 +249,31 @@ class EPSModule(QWidget):
             final_df = df_calc.iloc[::-1].copy().fillna(0)
 
             self.info_label.setText("✅ 更新完成")
-
-            # 👑 執行累加標籤計算
             self.update_cumulative_label(df)
 
-            self.update_ui(final_df)
+            # 👑 將完整資料存下，再交由 update_ui 自行決定年/季呈現
+            self.raw_df = final_df.copy()
+            self.update_ui()
 
         except Exception as e:
             print(f"❌ [EPS] 處理錯誤: {e}")
             self.info_label.setText("❌ 數據解析錯誤")
 
-    # 👑 新增：計算最新一季度的同年度累加與去年同期的比較
     def update_cumulative_label(self, df):
         try:
             valid_df = df[df['Year'] > 0]
             if valid_df.empty: return
 
-            # 抓取最新資料的年/季
             latest_year = valid_df['Year'].max()
             latest_q = valid_df[valid_df['Year'] == latest_year]['Q'].max()
 
-            # 計算今年 1 ~ 最新季度的加總
             curr_mask = (valid_df['Year'] == latest_year) & (valid_df['Q'] <= latest_q)
             curr_sum = valid_df[curr_mask]['EPS'].sum()
 
-            # 計算去年 1 ~ 最新季度的加總
             prev_year = latest_year - 1
             prev_mask = (valid_df['Year'] == prev_year) & (valid_df['Q'] <= latest_q)
             prev_sum = valid_df[prev_mask]['EPS'].sum()
 
-            # EPS 經常有負轉正的情況，因此分母取絕對值
             if prev_sum != 0:
                 yoy = ((curr_sum - prev_sum) / abs(prev_sum)) * 100
             else:
@@ -259,7 +286,28 @@ class EPSModule(QWidget):
         except Exception as e:
             print(f"Cumulative EPS error: {e}")
 
-    def update_ui(self, df):
+    def update_ui(self):
+        """👑 根據 current view_mode 計算要顯示的表格與圖表數據"""
+        if self.raw_df is None or self.raw_df.empty: return
+
+        if self.view_mode == "quarter":
+            df = self.raw_df.copy()
+        else:
+            # 🔥 將季資料以年份群組累加
+            year_df = self.raw_df.groupby('Year', as_index=False)['EPS'].sum()
+            year_df = year_df[year_df['Year'] > 0].sort_values('Year', ascending=False)
+            year_df['Quarter'] = year_df['Year'].astype(str) + "年"
+
+            # 🔥 計算年度 YoY
+            year_calc = year_df.iloc[::-1].copy()
+            year_calc['YoY'] = year_calc['EPS'].pct_change() * 100
+            year_calc['QoQ'] = 0.0  # 年度沒有季增率
+
+            df = year_calc.iloc[::-1].copy().fillna(0)
+
+            # 🔥 印出年度數據加以驗證
+            print("📊 [年 EPS 運算驗證]:\n", df[['Quarter', 'EPS', 'YoY']].head())
+
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         ax.set_facecolor('#000000')
@@ -285,17 +333,23 @@ class EPSModule(QWidget):
 
         self.table.setRowCount(len(df))
         for i, (idx, row) in enumerate(df.iterrows()):
+            # 👑 若為年模式，強制隱藏季增率
+            qoq_str = "-" if self.view_mode == "year" or row['QoQ'] == 0 else f"{row['QoQ']:+.2f}%"
+            yoy_str = "-" if row['YoY'] == 0 else f"{row['YoY']:+.2f}%"
+
             items = [
                 QTableWidgetItem(str(row['Quarter'])),
                 QTableWidgetItem(f"{row['EPS']:.2f}元"),
-                QTableWidgetItem(f"{row['QoQ']:+.2f}%" if row['QoQ'] != 0 else "-"),
-                QTableWidgetItem(f"{row['YoY']:+.2f}%" if row['YoY'] != 0 else "-")
+                QTableWidgetItem(qoq_str),
+                QTableWidgetItem(yoy_str)
             ]
 
             items[1].setForeground(QColor("#FFCC00"))
             items[1].setFont(QFont("Consolas", 12, QFont.Weight.Bold))
-            items[2].setForeground(QColor("#FF3333" if row['QoQ'] >= 0 else "#00FF00"))
-            items[3].setForeground(QColor("#FF3333" if row['YoY'] >= 0 else "#00FF00"))
+
+            # 顏色動態設定：如果是 "-" 顯示白色，否則判斷正紅負綠
+            items[2].setForeground(QColor("#FFFFFF" if qoq_str == "-" else "#FF3333" if row['QoQ'] >= 0 else "#00FF00"))
+            items[3].setForeground(QColor("#FFFFFF" if yoy_str == "-" else "#FF3333" if row['YoY'] >= 0 else "#00FF00"))
 
             for j, item in enumerate(items):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -309,11 +363,15 @@ class EPSModule(QWidget):
             q = row['Quarter']
             eps = row['EPS']
             yoy = row['YoY']
-            color = "#FF3333" if eps >= 0 else "#00FF00"
+
+            # 分別設定 EPS 與 YoY 的顏色 (正紅負綠，0 為白色)
+            eps_color = "#FF3333" if eps >= 0 else "#00FF00"
+            yoy_color = "#FFFFFF" if yoy == 0 else ("#FF3333" if yoy > 0 else "#00FF00")
+
             html = (
                 f"<span style='color:#DDD;'>{q}</span> | "
-                f"<span style='color:{color}; font-weight:bold;'>■ EPS:{eps:.2f}元</span> | "
-                f"<span style='color:#FFF;'>YoY: {yoy:+.2f}%</span>"
+                f"<span style='color:{eps_color}; font-weight:bold;'>■ EPS:{eps:.2f}元</span> | "
+                f"YoY: <span style='color:{yoy_color}; font-weight:bold;'>{yoy:+.2f}%</span>"
             )
             self.info_label.setText(html)
 

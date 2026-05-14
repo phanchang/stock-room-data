@@ -2,21 +2,236 @@ import sys
 import json
 import datetime
 import pandas as pd
+import copy  # <-- 新增這行 (用於深拷貝字典)
 from pathlib import Path
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem,
-                             QHeaderView, QAbstractItemView, QLineEdit,
-                             QHBoxLayout, QPushButton, QCompleter, QMenu, QComboBox, QMessageBox)
 from PyQt6.QtCore import pyqtSignal, Qt, QStringListModel, QTimer
 from PyQt6.QtGui import QColor, QAction, QFont, QBrush
 
 from utils.data_downloader import DataDownloader
 from utils.quote_worker import QuoteWorker
 from PyQt6.QtWidgets import QStyledItemDelegate, QStyle
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem,
+                             QHeaderView, QAbstractItemView, QLineEdit,
+                             QHBoxLayout, QPushButton, QCompleter, QMenu, QComboBox,
+                             QMessageBox, QDialog, QInputDialog, QListWidget)
 
 DEFAULT_WATCHLISTS = {
     "我的持股": ["2330", "2317", "2603"],
     "觀察名單": []
 }
+
+
+class WatchlistEditDialog(QDialog):
+    def __init__(self, watchlists, stock_db, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("編輯群組與持股名單")
+        self.setMinimumSize(500, 400)
+        # 使用深拷貝，避免在按下取消時修改到原本的資料
+        self.watchlists = copy.deepcopy(watchlists)
+        self.stock_db = stock_db
+        self.current_group = None
+        self.init_ui()
+
+    def init_ui(self):
+        self.setStyleSheet("""
+            QDialog { background-color: #222; color: #FFF; }
+            QLabel { color: #FFF; font-weight: bold; }
+            QLineEdit { background-color: #111; color: #FFF; border: 1px solid #444; padding: 4px; }
+            QListWidget { background-color: #111; color: #FFF; border: 1px solid #444; font-family: 'Consolas', 'Microsoft JhengHei'; font-size: 14px; }
+            QListWidget::item { padding: 4px; }
+            QListWidget::item:selected { background-color: #444; }
+            QPushButton { background: #333; color: #FFF; border: 1px solid #555; padding: 4px; border-radius: 2px;}
+            QPushButton:hover { background: #555; }
+            QPushButton:pressed { background: #222; }
+        """)
+
+        main_layout = QVBoxLayout(self)
+        h_layout = QHBoxLayout()
+
+        # ====== 左側：群組列表 ======
+        left_layout = QVBoxLayout()
+        self.group_list = QListWidget()
+        self.group_list.addItems(list(self.watchlists.keys()))
+        self.group_list.currentRowChanged.connect(self.on_group_selected)
+
+        btn_add_group = QPushButton("➕ 新增群組")
+        btn_rename_group = QPushButton("✏️ 重新命名")
+        btn_del_group = QPushButton("🗑️ 刪除群組")
+
+        btn_add_group.clicked.connect(self.add_group)
+        btn_rename_group.clicked.connect(self.rename_group)
+        btn_del_group.clicked.connect(self.delete_group)
+
+        left_layout.addWidget(self.group_list)
+        left_layout.addWidget(btn_add_group)
+        left_layout.addWidget(btn_rename_group)
+        left_layout.addWidget(btn_del_group)
+
+        # ====== 右側：持股列表 ======
+        right_layout = QVBoxLayout()
+
+        # 🌟 搜尋與新增股票區塊
+        add_stock_layout = QHBoxLayout()
+        self.input_add_stock = QLineEdit()
+        self.input_add_stock.setPlaceholderText("🔍 輸入代號或名稱")
+        self.input_add_stock.returnPressed.connect(self.add_stock)
+
+        # 綁定自動完成 (Completer)
+        self.completer = QCompleter()
+        self.completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.input_add_stock.setCompleter(self.completer)
+        search_list = [f"{c} {info.get('name', '')}" for c, info in self.stock_db.items()]
+        self.completer.setModel(QStringListModel(search_list))
+
+        btn_add_stock = QPushButton("➕ 加入持股")
+        btn_add_stock.clicked.connect(self.add_stock)
+
+        add_stock_layout.addWidget(self.input_add_stock, 4)
+        add_stock_layout.addWidget(btn_add_stock, 1)
+
+        self.stock_list = QListWidget()
+
+        btn_move_up = QPushButton("🔼 上移")
+        btn_move_down = QPushButton("🔽 下移")
+        btn_del_stock = QPushButton("🗑️ 刪除持股")
+
+        btn_move_up.clicked.connect(self.move_stock_up)
+        btn_move_down.clicked.connect(self.move_stock_down)
+        btn_del_stock.clicked.connect(self.delete_stock)
+
+        right_btn_layout = QHBoxLayout()
+        right_btn_layout.addWidget(btn_move_up)
+        right_btn_layout.addWidget(btn_move_down)
+        right_btn_layout.addWidget(btn_del_stock)
+
+        right_layout.addLayout(add_stock_layout)
+        right_layout.addWidget(self.stock_list)
+        right_layout.addLayout(right_btn_layout)
+
+        h_layout.addLayout(left_layout, 1)
+        h_layout.addLayout(right_layout, 2)  # 讓右邊持股區塊寬一點
+
+        # ====== 底部：儲存與取消 ======
+        bottom_layout = QHBoxLayout()
+        bottom_layout.addStretch()
+        btn_save = QPushButton("💾 儲存並套用")
+        btn_save.setStyleSheet("background: #004D40; font-weight: bold; padding: 6px 12px;")
+        btn_cancel = QPushButton("取消")
+        btn_cancel.setStyleSheet("padding: 6px 12px;")
+
+        btn_save.clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+
+        bottom_layout.addWidget(btn_cancel)
+        bottom_layout.addWidget(btn_save)
+
+        main_layout.addLayout(h_layout)
+        main_layout.addLayout(bottom_layout)
+
+        if self.group_list.count() > 0:
+            self.group_list.setCurrentRow(0)
+
+    # ================== 邏輯處理 ==================
+
+    def on_group_selected(self, index):
+        self.stock_list.clear()
+        if index >= 0:
+            self.current_group = self.group_list.item(index).text()
+            for code in self.watchlists[self.current_group]:
+                name = self.stock_db.get(code, {}).get("name", "")
+                display_text = f"{code}  {name}".strip() if name else code
+                self.stock_list.addItem(display_text)
+
+    def add_stock(self):
+        if not self.current_group:
+            QMessageBox.warning(self, "提示", "請先選擇左側的群組！")
+            return
+
+        text = self.input_add_stock.text().strip().upper()
+        if not text:
+            return
+
+        # 取出開頭的代號部分
+        code = text.split(' ')[0]
+
+        # 若輸入合法，則加入名單
+        if code in self.stock_db or code.isalnum():
+            curr_list = self.watchlists[self.current_group]
+            if code not in curr_list:
+                # 寫入暫存資料
+                curr_list.insert(0, code)
+                # 更新 UI 顯示
+                name = self.stock_db.get(code, {}).get("name", "")
+                display_text = f"{code}  {name}".strip() if name else code
+                self.stock_list.insertItem(0, display_text)
+
+            self.input_add_stock.clear()
+            self.stock_list.setCurrentRow(0)
+
+    def add_group(self):
+        text, ok = QInputDialog.getText(self, "新增群組", "請輸入新群組名稱:")
+        if ok and text:
+            if text in self.watchlists:
+                QMessageBox.warning(self, "錯誤", "群組名稱已存在！")
+                return
+            self.watchlists[text] = []
+            self.group_list.addItem(text)
+            self.group_list.setCurrentRow(self.group_list.count() - 1)
+
+    def rename_group(self):
+        item = self.group_list.currentItem()
+        if not item: return
+        old_name = item.text()
+        text, ok = QInputDialog.getText(self, "重新命名", "請輸入新群組名稱:", text=old_name)
+        if ok and text and text != old_name:
+            if text in self.watchlists:
+                QMessageBox.warning(self, "錯誤", "群組名稱已存在！")
+                return
+            new_dict = {}
+            for k, v in self.watchlists.items():
+                if k == old_name:
+                    new_dict[text] = v
+                else:
+                    new_dict[k] = v
+            self.watchlists = new_dict
+            item.setText(text)
+            self.current_group = text
+
+    def delete_group(self):
+        item = self.group_list.currentItem()
+        if not item: return
+        if self.group_list.count() <= 1:
+            QMessageBox.warning(self, "錯誤", "至少需要保留一個群組！")
+            return
+
+        reply = QMessageBox.question(self, "確認刪除", f"確定要刪除群組「{item.text()}」及其所有持股嗎？")
+        if reply == QMessageBox.StandardButton.Yes:
+            del self.watchlists[item.text()]
+            self.group_list.takeItem(self.group_list.row(item))
+
+    def move_stock_up(self):
+        row = self.stock_list.currentRow()
+        if row > 0 and self.current_group:
+            item = self.stock_list.takeItem(row)
+            self.stock_list.insertItem(row - 1, item)
+            self.stock_list.setCurrentRow(row - 1)
+            lst = self.watchlists[self.current_group]
+            lst[row], lst[row - 1] = lst[row - 1], lst[row]
+
+    def move_stock_down(self):
+        row = self.stock_list.currentRow()
+        if row >= 0 and row < self.stock_list.count() - 1 and self.current_group:
+            item = self.stock_list.takeItem(row)
+            self.stock_list.insertItem(row + 1, item)
+            self.stock_list.setCurrentRow(row + 1)
+            lst = self.watchlists[self.current_group]
+            lst[row], lst[row + 1] = lst[row + 1], lst[row]
+
+    def delete_stock(self):
+        row = self.stock_list.currentRow()
+        if row >= 0 and self.current_group:
+            self.stock_list.takeItem(row)
+            del self.watchlists[self.current_group][row]
 
 class BackgroundDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
@@ -99,6 +314,13 @@ class StockListModule(QWidget):
         """)
         self.group_combo.currentTextChanged.connect(self.change_group)
 
+        # 新增編輯群組按鈕
+        self.btn_edit_group = QPushButton("✏️")
+        self.btn_edit_group.setFixedSize(28, 24)
+        self.btn_edit_group.setToolTip("編輯群組與持股名單")
+        self.btn_edit_group.setStyleSheet("QPushButton { background: #333; color: #FFF; border: 1px solid #555; } QPushButton:hover { background: #444; }")
+        self.btn_edit_group.clicked.connect(self.open_edit_dialog)
+
         self.btn_monitor = QPushButton("▶ 即時")
         self.btn_monitor.setFixedSize(60, 24)
         self.btn_monitor.setCheckable(True)
@@ -125,6 +347,7 @@ class StockListModule(QWidget):
         self.btn_add.clicked.connect(self.add_stock_to_list)
 
         top_layout.addWidget(self.group_combo, 2)
+        top_layout.addWidget(self.btn_edit_group, 0)  # 加入編輯按鈕
         top_layout.addWidget(self.btn_monitor, 1)
         top_layout.addWidget(self.input_stock, 5)
         top_layout.addWidget(self.btn_add, 1)
@@ -138,12 +361,9 @@ class StockListModule(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
-        # 🔥 [修正] 拿掉 QTableWidget::item 的 background-color，改由底下的 background-color:#000 支撐
-        # 🔥 替換原本的 setStyleSheet 區塊
         self.table.setStyleSheet("""
                     QTableWidget { background-color: #000000; font-family: 'Consolas', 'Microsoft JhengHei'; font-size: 14px; }
                     QHeaderView::section { background-color: #1A1A1A; color: #BBB; border: none; font-weight: bold; }
-                    /* 關鍵修正：必須加上 background-color: transparent; 才能讓 Delegate 的背景色透出來 */
                     QTableWidget::item { background-color: transparent; border-bottom: 1px solid #222; padding-right: 5px; }
                     QTableWidget::item:selected { background-color: #444; color: #FFF; }
                 """)
@@ -354,6 +574,29 @@ class StockListModule(QWidget):
     def change_group(self, group_name):
         self.current_group = group_name
         self.refresh_table()
+
+    def open_edit_dialog(self):
+        # 🌟 呼叫對話框時，額外傳入 self.stock_db 給它查詢名稱使用
+        dialog = WatchlistEditDialog(self.watchlists, self.stock_db, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # 接收修改後的資料
+            self.watchlists = dialog.watchlists
+            self.save_watchlists()
+
+            # 更新下拉選單 UI
+            self.group_combo.blockSignals(True)
+            self.group_combo.clear()
+            self.group_combo.addItems(list(self.watchlists.keys()))
+
+            # 嘗試維持原本所在的群組，若被刪除則退回第一個
+            if self.current_group not in self.watchlists:
+                self.current_group = list(self.watchlists.keys())[0] if self.watchlists else ""
+
+            if self.current_group:
+                self.group_combo.setCurrentText(self.current_group)
+            self.group_combo.blockSignals(False)
+
+            self.refresh_table()
 
     def _emit_smart_stock_id(self, code):
         market = "TW"
