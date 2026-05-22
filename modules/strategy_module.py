@@ -77,6 +77,8 @@ FULL_COLUMN_SPECS = {
     'rev_consecutive_highs': {'name': '連創高期數', 'show': False, 'tip': '連續幾個月打破歷史紀錄', 'type': 'num'},
     'fund_eps_cum': {'name': 'EPS(累)', 'show': True, 'tip': '最新年度累計 EPS', 'type': 'num'},
     'fund_eps_year': {'name': 'EPS年度', 'show': True, 'tip': '最新EPS所屬年度', 'type': 'str'},
+    'fund_three_up_qoq': {'name': '三率季增', 'show': False, 'tip': '毛利率、營益率、淨利率(或EPS)較上一季三升 (1=是)', 'type': 'num'},
+    'fund_three_up_yoy': {'name': '三率年增', 'show': True, 'tip': '毛利率、營益率、淨利率(或EPS)較去年同期三升 (1=是)', 'type': 'num'},
     'pe': {'name': 'PE', 'show': True, 'tip': '本益比', 'type': 'num'},
     'pbr': {'name': 'PB', 'show': False, 'tip': '股價淨值比', 'type': 'num'},
     'yield': {'name': '殖利率%', 'show': True, 'tip': '現金殖利率', 'type': 'num'},
@@ -164,7 +166,8 @@ TAG_CATEGORIES = {
     "📉 壓縮與整理": ["極度壓縮", "波動壓縮", "盤整5日", "盤整10日", "盤整20日", "盤整60日"],
     "💰 籌碼與主力": ["主力掃單(ILSS)", "投信認養", "散戶退場", "土洋對作(投勝)", "土洋對作(外勝)"],
     "🚀 營收與基本面": ["營收創兩年高", "營收創年高", "營收連創新高"],
-    "⚠️ 特殊型態": ["30W臨門一腳", "30W黏貼後突破", "30W甩轎", "假跌破", "回測季線", "回測年線", "Vix反轉"]
+    "⚠️ 特殊型態": ["30W臨門一腳", "30W黏貼後突破", "30W甩轎", "假跌破", "回測季線", "回測年線", "Vix反轉"],
+    "🚀 營收與基本面": ["營收創兩年高", "營收創年高", "營收連創新高", "三率三升(季增)", "三率三升(年增)"],
 }
 
 # 🔥 補齊所有標籤的 Tooltip
@@ -197,6 +200,8 @@ TAG_TOOLTIPS = {
     '營收創兩年高': '最新月營收大於過去 23 個月以來的所有月份，創兩年來新高',
     '營收創年高': '最新月營收大於過去 11 個月以來的所有月份，創一年來新高',
     '營收連創新高': '連續 2 個月(含)以上，營收皆打破過往歷史最高紀錄',
+    '三率三升(季增)': '最新一季的毛利率、營益率、淨利率(或EPS)皆高於上一季 (QoQ三升)',
+    '三率三升(年增)': '最新一季的毛利率、營益率、淨利率(或EPS)皆高於去年同期 (YoY三升)',
 }
 
 GLOBAL_STYLE = """
@@ -346,7 +351,7 @@ class StockDetailCard(QDialog):
                              'f_diff_5d', 'f_diff_10d', 'f_diff_20d', 'f_diff_60d', 'f_diff_120d'],
             "🏦 籌碼: 融資/總法人": ['m_net_today', 'm_sum_5d', 'margin_diff_5d', 'margin_diff_20d', 'legal_diff_5d',
                                     'legal_diff_20d'],
-            "📖 基本與估值": ['rev_yoy', 'rev_cum_yoy', 'fund_eps_cum', 'pe', 'pbr', 'yield', 'fund_contract_qoq',
+            "📖 基本與估值": ['rev_yoy', 'rev_cum_yoy', 'fund_eps_cum','fund_three_up_qoq', 'fund_three_up_yoy', 'pe', 'pbr', 'yield', 'fund_contract_qoq',
                              'fund_inventory_qoq', 'fund_op_cash_flow'],
             "🔥 產業與特徵": ['industry', 'dj_main_ind', 'dj_sub_ind', 'sub_concepts', '強勢特徵']
         }
@@ -1804,15 +1809,42 @@ class StrategyModule(QWidget):
             selected_tags = [t for t, chk in self.chk_tags.items() if chk.isChecked()]
             if selected_tags and '強勢特徵' in df.columns:
                 df['強勢特徵'] = df['強勢特徵'].fillna("")
+
+                # 🚀 深度診斷：列印前端讀取的絕對路徑與修改時間
+                import os
+                import time
+                base_path = Path(__file__).resolve().parent.parent
+                f_path = base_path / "data" / "strategy_results" / "factor_snapshot.parquet"
+
+                print(f"\n🔍 [UI Debug] 開始過濾特徵標籤:")
+                print(f"   - 📂 前端讀取的 Parquet 絕對路徑: {f_path.resolve()}")
+                if f_path.exists():
+                    print(f"   - 🕒 該檔案最後修改時間: {time.ctime(f_path.stat().st_mtime)}")
+                else:
+                    print(f"   - ⚠️ [警告] Parquet 檔案不存在！")
+
+                # 🔎 掃描全表看看到底有沒有任何一檔含有「三率三升」
+                any_three_up = df['強勢特徵'].str.contains('三率三升', regex=False, na=False).sum()
+                print(f"   - 🔎 檢查前端記憶體：全表含有 '三率三升' 關鍵字的股票總數為: {any_three_up} 檔")
+
+                print(f"   - 已勾選的標籤: {selected_tags}")
+                print(f"   - 目前表格過濾前總筆數: {len(df)}")
+                print(f"   - 隨機抽取 3 筆強勢特徵數據樣本作對照:")
+                sample_df = df[df['強勢特徵'] != ""].head(3)
+                if not sample_df.empty:
+                    for i, (idx, row_data) in enumerate(sample_df.iterrows()):
+                        print(
+                            f"     👉 股票 [{row_data.get('sid')} {row_data.get('name')}]: {row_data.get('強勢特徵')}")
+
                 import re  # 確保有載入正則套件
                 if self.rb_and.isChecked():
-                    # 加入 regex=False，強迫 Pandas 當作純文字比對，忽略括號的特殊意義
                     for tag in selected_tags:
                         df = df[df['強勢特徵'].str.contains(tag, regex=False, na=False)]
+                        print(f"   - 👉 套用交集 (AND) 標籤 '{tag}' 後，剩餘筆數: {len(df)}")
                 else:
-                    # 在 OR 聯集模式下，使用 re.escape 把括號跳脫 (變成 \(\))
                     pattern = "|".join([re.escape(str(t)) for t in selected_tags])
                     df = df[df['強勢特徵'].str.contains(pattern, regex=True, na=False)]
+                    print(f"   - 👉 套用聯集 (OR) 模式 '{pattern}' 後，剩餘筆數: {len(df)}")
 
             # ==========================================
             # 整理欄位顯示 (🚀 關鍵修復：強制鎖死 5 大核心欄位)

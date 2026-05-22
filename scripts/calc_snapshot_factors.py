@@ -246,6 +246,102 @@ def calculate_advanced_factors(df, sid=None):
 
     return factors
 
+
+# ==========================================
+# 🚀 三率三升專用：防禦型數值清理與運算輔助
+# ==========================================
+def clean_float(val):
+    """防禦性數值轉換，徹底清除百分比符號與千分位逗號"""
+    if val is None:
+        return 0.0
+    cleaned = str(val).replace('%', '').replace(',', '').strip()
+    try:
+        return float(cleaned) if cleaned else 0.0
+    except ValueError:
+        return 0.0
+
+
+def get_quarterly_revenue(jdata, quarter_str):
+    """加總對應季度的3個月營收，算出季度總營收"""
+    try:
+        parts = quarter_str.split('.')
+        q_year = int(parts[0])
+        q_num = int(parts[1].replace('Q', ''))
+    except Exception:
+        return 0.0
+
+    q_months = {1: [1, 2, 3], 2: [4, 5, 6], 3: [7, 8, 9], 4: [10, 11, 12]}.get(q_num, [])
+    rev_data = jdata.get('revenue', [])
+    q_rev_sum = 0.0
+    months_found = 0
+
+    for r in rev_data:
+        m_str = r.get('month', '')
+        m_year, m_val = None, None
+        if '/' in m_str:
+            try:
+                m_year = int(m_str.split('/')[0])
+                m_val = int(m_str.split('/')[1])
+            except:
+                pass
+        elif '-' in m_str:
+            try:
+                m_year = int(m_str.split('-')[0])
+                m_val = int(m_str.split('-')[1])
+            except:
+                pass
+
+        if m_year is not None and m_val is not None:
+            q_year_ad = q_year if q_year > 1900 else q_year + 1911
+            m_year_ad = m_year if m_year > 1900 else m_year + 1911
+
+            if q_year_ad == m_year_ad and m_val in q_months:
+                q_rev_sum += clean_float(r.get('revenue', 0))
+                months_found += 1
+
+    if months_found > 0 and q_rev_sum > 0:
+        return q_rev_sum
+    return 0.0
+
+
+def get_margins(prof_list, quarter_idx, jdata):
+    """取得特定季度的毛利率、營益率與淨利率(或EPS)"""
+    if quarter_idx >= len(prof_list):
+        return None, None, None
+    p = prof_list[quarter_idx]
+
+    gm = clean_float(p.get('gross_margin', 0))
+    om = clean_float(p.get('op_margin', 0))
+
+    nm_raw = p.get('net_margin') or p.get('net_profit_margin') or p.get('after_tax_net_margin')
+    if nm_raw is not None:
+        nm = clean_float(nm_raw)
+    else:
+        q_str = p.get('quarter', '')
+        q_rev = get_quarterly_revenue(jdata, q_str)
+        if q_rev > 0:
+            net_after_tax = clean_float(p.get('net_after_tax', 0))
+            nm = (net_after_tax / q_rev) * 100
+        else:
+            nm = clean_float(p.get('eps', 0))
+
+    return gm, om, nm
+
+
+def find_same_quarter_last_year_idx(prof_list, latest_q_str):
+    """尋找去年同期的季度資料索引"""
+    try:
+        parts = latest_q_str.split('.')
+        ly_year = int(parts[0]) - 1
+        ly_q = parts[1]
+        target = f"{ly_year}.{ly_q}"
+        for idx, p in enumerate(prof_list):
+            if p.get('quarter', '') == target:
+                return idx
+    except:
+        pass
+    return None
+
 # ==========================================
 # 深度 JSON 特徵轉換 (維持你原本的邏輯)
 # ==========================================
@@ -255,6 +351,7 @@ def calculate_json_factors(sid_str):
     res = {
         'rev_ym': '', 'rev_yoy': 0.0, 'rev_cum_yoy': 0.0,
         'fund_eps_year': '', 'fund_eps_cum': 0.0, 'eps_latest_q': '', 'eps_latest_val': 0.0,
+        'fund_three_up_qoq': 0, 'fund_three_up_yoy': 0,
         'eps_qoq': 0.0, 'eps_yoy': 0.0, 'eps_cum_yoy': 0.0,
         'margin_diff_5d': 0.0, 'legal_diff_5d': 0.0,
         'margin_diff_20d': 0.0, 'legal_diff_20d': 0.0,
@@ -338,7 +435,7 @@ def calculate_json_factors(sid_str):
             latest_q_str = prof[0].get('quarter', '')
             if '.' in latest_q_str:
                 res['eps_latest_q'] = latest_q_str
-                res['eps_latest_val'] = float(prof[0].get('eps', 0))
+                res['eps_latest_val'] = clean_float(prof[0].get('eps', 0))
                 res['fund_eps_year'] = latest_q_str
                 latest_y, latest_q = int(latest_q_str.split('.')[0]), int(latest_q_str.split('.')[1].replace('Q', ''))
                 prev_q_str = f"{latest_y}.{latest_q - 1}Q" if latest_q > 1 else f"{latest_y - 1}.4Q"
@@ -346,20 +443,63 @@ def calculate_json_factors(sid_str):
                 sum_this, sum_last, eps_prev, eps_last_y = 0.0, 0.0, None, None
 
                 for p in prof:
-                    q_str, val = p.get('quarter', ''), float(p.get('eps', 0) or 0)
+                    q_str, val = p.get('quarter', ''), clean_float(p.get('eps', 0) or 0)
                     if q_str == prev_q_str: eps_prev = val
                     if q_str == last_y_q_str: eps_last_y = val
                     try:
                         y, q = int(q_str.split('.')[0]), int(q_str.split('.')[1].replace('Q', ''))
-                        if y == latest_y and q <= latest_q: sum_this += val
-                        elif y == latest_y - 1 and q <= latest_q: sum_last += val
-                    except: pass
+                        if y == latest_y and q <= latest_q:
+                            sum_this += val
+                        elif y == latest_y - 1 and q <= latest_q:
+                            sum_last += val
+                    except:
+                        pass
 
                 res['fund_eps_cum'] = round(sum_this, 2)
-                if eps_prev is not None and eps_prev != 0: res['eps_qoq'] = round(((res['eps_latest_val'] - eps_prev) / abs(eps_prev)) * 100, 2)
-                if eps_last_y is not None and eps_last_y != 0: res['eps_yoy'] = round(((res['eps_latest_val'] - eps_last_y) / abs(eps_last_y)) * 100, 2)
+                if eps_prev is not None and eps_prev != 0: res['eps_qoq'] = round(
+                    ((res['eps_latest_val'] - eps_prev) / abs(eps_prev)) * 100, 2)
+                if eps_last_y is not None and eps_last_y != 0: res['eps_yoy'] = round(
+                    ((res['eps_latest_val'] - eps_last_y) / abs(eps_last_y)) * 100, 2)
                 if sum_last != 0: res['eps_cum_yoy'] = round(((sum_this - sum_last) / abs(sum_last)) * 100, 2)
-        except: pass
+
+                # 🚀 三率三升 (QoQ & YoY) 運算開始
+                res['fund_three_up_qoq'] = 0
+                res['fund_three_up_yoy'] = 0
+
+                gm0, om0, nm0 = get_margins(prof, 0, jdata)
+                gm1, om1, nm1 = get_margins(prof, 1, jdata)
+
+                # QoQ 季增比對
+                if gm0 is not None and gm1 is not None and om0 is not None and om1 is not None and nm0 is not None and nm1 is not None:
+                    if gm0 > gm1 and om0 > om1 and nm0 > nm1:
+                        res['fund_three_up_qoq'] = 1
+
+                # YoY 年增比對
+                ly_idx = find_same_quarter_last_year_idx(prof, latest_q_str)
+                if ly_idx is not None:
+                    gm_ly, om_ly, nm_ly = get_margins(prof, ly_idx, jdata)
+                    if gm0 is not None and gm_ly is not None and om0 is not None and om_ly is not None and nm0 is not None and nm_ly is not None:
+                        if gm0 > gm_ly and om0 > om_ly and nm0 > nm_ly:
+                            res['fund_three_up_yoy'] = 1
+
+                # 🔍 終極排錯：針對指標股輸出數據到控制台
+                if sid_str in ['2330', '2454', '2303']:
+                    print(f"\n🔍 [Debug {sid_str}] 三率三升深度排錯日誌:")
+                    print(f"   最新季 ({latest_q_str}): 毛利={gm0:.2f}%, 營益={om0:.2f}%, 淨利/EPS={nm0:.4f}")
+                    if len(prof) > 1:
+                        print(
+                            f"   前一季 ({prof[1].get('quarter')}): 毛利={gm1:.2f}%, 營益={om1:.2f}%, 淨利/EPS={nm1:.4f}")
+                    if ly_idx is not None:
+                        print(
+                            f"   去年同期 ({prof[ly_idx].get('quarter')}): 毛利={gm_ly:.2f}%, 營益={om_ly:.2f}%, 淨利/EPS={nm_ly:.4f}")
+                    print(
+                        f"   👉 運算結果 -> 季增(QoQ): {res['fund_three_up_qoq']} | 年增(YoY): {res['fund_three_up_yoy']}")
+
+        except Exception as e:
+            # 💡 當出現任何潛在異常時印出錯誤堆疊
+            print(f"⚠️ [Error] 股票 {sid_str} 財務計算發生異常: {e}")
+            import traceback
+            traceback.print_exc()
 
     # 4. 籌碼運算
     inst_data = jdata.get('institutional_investors', [])
@@ -549,15 +689,34 @@ def get_strong_tags(row):
     rev_highest = row.get('rev_highest_months', 0)
     rev_consec = row.get('rev_consecutive_highs', 0)
 
+    # 🚀 新增：防禦性宣告，若 Pandas 讀取到 NaN 則自動轉為 0，防止比對失效
+    if pd.isna(rev_highest): rev_highest = 0
+    if pd.isna(rev_consec): rev_consec = 0
+
+    # 1. 處理創年高與創兩年高
     if rev_highest >= 23:
         tags.append('營收創兩年高')
-    elif rev_highest >= 11:
+    if rev_highest >= 11:
         tags.append('營收創年高')
 
-    if rev_consec >= 2:
-        tags.append('營收連創新高')  # 給 UI Checkbox 統一比對用的
-        tags.append(f'連{int(rev_consec)}月創高')  # 看實際是幾個月用的
+    # 2. 🚀 核心修正：只要最新單月創歷史新高 (>= 1)，即賦予「營收連創新高」標籤
+    # 如此能確保「歷史新高」與「創年高」在交集 (AND) 時邏輯完全相通，不為 0
+    if rev_consec >= 1:
+        tags.append('營收連創新高')
+        tags.append(f'連{int(rev_consec)}月創高')
 
+    # === 🚀 新增：三率三升標籤 (補齊與後端對對碰缺失的部分) ===
+    three_up_qoq = row.get('fund_three_up_qoq', 0)
+    three_up_yoy = row.get('fund_three_up_yoy', 0)
+
+    # 🚀 防禦機制：防止 NaN 導致比對失效，並強制轉為 float 進行精準匹配
+    if pd.isna(three_up_qoq): three_up_qoq = 0
+    if pd.isna(three_up_yoy): three_up_yoy = 0
+
+    if float(three_up_qoq) == 1.0:
+        tags.append('三率三升(季增)')
+    if float(three_up_yoy) == 1.0:
+        tags.append('三率三升(年增)')
 
     return ','.join(tags)
 
@@ -748,7 +907,8 @@ def main():
         '現價': '今日收盤價', '漲幅1d': '今日漲幅(%)', '漲幅5d': '5日漲幅(%)', '漲幅20d': '20日漲幅(%)',
         '漲幅60d': '3個月漲幅(%)',
         'bb_width': '布林寬度(%)', '量比': '成交量比', 'RS強度': 'RS強度', '強勢特徵': '強勢特徵標籤',
-        'str_30w_week_offset': '30W起漲週數(前)', 'str_st_week_offset': 'ST買訊(週)'
+        'str_30w_week_offset': '30W起漲週數(前)', 'str_st_week_offset': 'ST買訊(週)',
+        'fund_three_up_qoq': '三率季增(三升)','fund_three_up_yoy': '三率年增(三升)',
     }
 
     final_cols = [c for c in final_df.columns if c in chinese_map]
@@ -758,6 +918,14 @@ def main():
     strategy_dir.mkdir(parents=True, exist_ok=True)
     final_df.to_parquet(strategy_dir / 'factor_snapshot.parquet')
     output_df.to_csv(strategy_dir / '戰情室今日快照_全中文版.csv', encoding='utf-8-sig', index=False)
+    # 🚀 在大表存檔前印出「三率三升」的總體統計驗證
+    qoq_count = sum(1 for x in final_list if x.get('fund_three_up_qoq', 0) == 1)
+    yoy_count = sum(1 for x in final_list if x.get('fund_three_up_yoy', 0) == 1)
+    print("-" * 50)
+    print(f"📊 [驗證] 三率三升統計 (完整大表模式)：")
+    print(f"   📈 QoQ (季增三升) 共符合: {qoq_count} 檔")
+    print(f"   📈 YoY (年增三升) 共符合: {yoy_count} 檔")
+    print("-" * 50)
     print(f"[System] 存檔完成: {strategy_dir}")
 
 
@@ -818,7 +986,10 @@ def run_fast_patch():
 
     df_new_chips = pd.DataFrame(updated_rows)
     df_new_chips.set_index('sid', inplace=True)
-
+    # 🚀 新增：動態補齊欄位，徹底解決 Pandas.update 忽略新欄位的底層 Bug
+    new_cols = [c for c in df_new_chips.columns if c not in df.columns]
+    for c in new_cols:
+        df[c] = np.nan
     df.update(df_new_chips)
     df.reset_index(inplace=True)
 
@@ -852,18 +1023,22 @@ def run_fast_patch():
         '現價': '今日收盤價', '漲幅1d': '今日漲幅(%)', '漲幅5d': '5日漲幅(%)', '漲幅20d': '20日漲幅(%)',
         '漲幅60d': '3個月漲幅(%)',
         'bb_width': '布林寬度(%)', '量比': '成交量比', 'RS強度': 'RS強度', '強勢特徵': '強勢特徵標籤',
-        'str_30w_week_offset': '30W起漲週數(前)', 'str_st_week_offset': 'ST買訊(週)'
+        'str_30w_week_offset': '30W起漲週數(前)', 'str_st_week_offset': 'ST買訊(週)',
+        'fund_three_up_qoq': '三率季增(三升)','fund_three_up_yoy': '三率年增(三升)',
     }
     final_cols = [c for c in df.columns if c in chinese_map]
     output_df = df[final_cols].rename(columns=chinese_map)
     output_df.to_csv(strategy_dir / '戰情室今日快照_全中文版.csv', encoding='utf-8-sig', index=False)
-
+    # 🚀 在熱更新大表存檔前印出「三率三升」的總體統計驗證
+    qoq_count = (df['fund_three_up_qoq'] == 1).sum() if 'fund_three_up_qoq' in df.columns else 0
+    yoy_count = (df['fund_three_up_yoy'] == 1).sum() if 'fund_three_up_yoy' in df.columns else 0
+    print("-" * 50)
+    print(f"📊 [驗證] 三率三升統計 (熱更新模式)：")
+    print(f"   📈 QoQ (季增三升) 共符合: {qoq_count} 檔")
+    print(f"   📈 YoY (年增三升) 共符合: {yoy_count} 檔")
+    print("-" * 50)
     print(f"[System] 熱更新完成！耗時極短。")
     print("PROGRESS: 100")
-
-
-# 👆 整段替換結束 👆
-
 
 # ==========================================
 # 修改主入口
