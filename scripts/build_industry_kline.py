@@ -16,26 +16,38 @@ if str(project_root) not in sys.path:
 
 from utils.cache.manager import CacheManager
 
-# ── 效能優化 1：月份字串轉日期加上快取，避免每筆營收記錄重複計算 ────────────
-_tw_month_cache = {}
+# ── 全域共享變數（繞過進程通訊瓶頸） ──────────────────────────────────
+GLOBAL_STOCK_DFS = {}
+GLOBAL_INST_MATRIX = None  # 全市場法人買賣狀態矩陣 (Date x Sid)
+GLOBAL_REV_MATRIX = None  # 全市場營收增長狀態矩陣 (Date x Sid)
 
-def convert_tw_month_to_date(tw_month_str):
-    """將民國年月 '115/03' 轉換為西元月底日期；結果快取避免重複計算"""
-    if tw_month_str in _tw_month_cache:
-        return _tw_month_cache[tw_month_str]
-    try:
-        y, m = tw_month_str.split('/')
-        year = int(y) + 1911
-        month = int(m)
-        if month == 12:
-            next_month = datetime(year + 1, 1, 1)
-        else:
-            next_month = datetime(year, month + 1, 1)
-        result = next_month - pd.Timedelta(days=1)
-    except:
-        result = pd.NaT
-    _tw_month_cache[tw_month_str] = result
-    return result
+
+# ── 向量化民國年月轉換（利用 Pandas Series 加速，完全拔除逐筆迴圈） ──────────
+def vectorize_tw_months(series):
+    """傳入 pd.Series 格式的民國年月 (例如 '115/03')，一次性向量化轉換成西元月底日"""
+    if series.empty:
+        return pd.to_datetime(series)
+
+    # 提取民國年與月份
+    splitted = series.str.split('/')
+    y_roc = splitted.str[0].astype(float).fillna(0).astype(int)
+    m = splitted.str[1].astype(float).fillna(1).astype(int)
+
+    y_ad = y_roc + 1911
+
+    # 計算下個月的第一天
+    next_m = m + 1
+    next_y = y_ad + (next_m > 12).astype(int)
+    next_m = np.where(next_m > 12, 1, next_m)
+
+    # 構造西元字串再由 Pandas 向量化轉換，最後減去 1 天得到月底日
+    # 🔒 安全防禦：將 NumPy ndarray 轉換為 pd.Series，才能正確發揮 .str.zfill(2) 向量化補零的功能
+    next_m_series = pd.Series(next_m).astype(str).str.zfill(2)
+    dt_str = pd.Series(next_y).astype(str) + '-' + next_m_series + '-01'
+
+    # 重新對齊原本的 index 結構，避免 pivot table 對帳失敗
+    dt_str.index = series.index
+    return pd.to_datetime(dt_str, errors='coerce') - pd.Timedelta(days=1)
 
 
 def load_sector_mappings(project_root):
@@ -99,9 +111,8 @@ def load_issued_shares(project_root, all_sids):
     return shares_dict
 
 
-# ── 效能優化 2：JSON 預載改為多執行緒並行 I/O ────────────────────────────────
 def _load_one_json(args):
-    """單一 JSON 讀取工作，供 ThreadPoolExecutor 呼叫"""
+    """單一 JSON 純 I/O 讀取工作，供 ThreadPoolExecutor 呼叫，絕不在此處解析時間"""
     sid, path = args
     try:
         with open(path, 'r', encoding='utf-8') as f:
@@ -111,9 +122,8 @@ def _load_one_json(args):
 
 
 def load_all_fundamentals(json_dir, all_sids, max_workers=16):
-    """用執行緒池並行讀取所有 JSON，I/O 密集型任務效果顯著"""
-    tasks = [(sid, json_dir / f"{sid}.json")
-             for sid in all_sids if (json_dir / f"{sid}.json").exists()]
+    """用執行緒池純粹並行讀取所有 JSON，回歸純 I/O 密集型優勢"""
+    tasks = [(sid, json_dir / f"{sid}.json") for sid in all_sids if (json_dir / f"{sid}.json").exists()]
     result = {}
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         for sid, data in pool.map(_load_one_json, tasks):
@@ -122,56 +132,26 @@ def load_all_fundamentals(json_dir, all_sids, max_workers=16):
     return result
 
 
-# ── 效能優化 3：單一板塊合成邏輯獨立成頂層函式，供多進程呼叫 ────────────────
+# ── 子進程記憶體初始化 ──────────────────────────────────────────────────
+def init_worker(stock_dfs, inst_matrix, rev_matrix):
+    global GLOBAL_STOCK_DFS, GLOBAL_INST_MATRIX, GLOBAL_REV_MATRIX
+    GLOBAL_STOCK_DFS = stock_dfs
+    GLOBAL_INST_MATRIX = inst_matrix
+    GLOBAL_REV_MATRIX = rev_matrix
+
+
+# ── 核心合成邏輯 ─────────────────────────────────────────────────────────
 def build_one_sector(args):
-    """
-    計算單一板塊的 IDX parquet，回傳 (tag, True/None)。
-    頂層函式才能被 ProcessPoolExecutor pickle。
-    """
-    import pandas as pd
-    import numpy as np
-    import json
-    from pathlib import Path
-
-    tag, sids, stock_dfs_records, stock_fundamentals, output_dir_str = args
-
-    # 月份快取在子進程內重新建立
-    _local_month_cache = {}
-    def _tw_month(s):
-        if s in _local_month_cache:
-            return _local_month_cache[s]
-        try:
-            from datetime import datetime as dt
-            y, m = s.split('/')
-            year = int(y) + 1911
-            month = int(m)
-            if month == 12:
-                nxt = dt(year + 1, 1, 1)
-            else:
-                nxt = dt(year, month + 1, 1)
-            res = nxt - pd.Timedelta(days=1)
-        except:
-            res = pd.NaT
-        _local_month_cache[s] = res
-        return res
+    tag, sids, output_dir_str = args
+    global GLOBAL_STOCK_DFS, GLOBAL_INST_MATRIX, GLOBAL_REV_MATRIX
 
     try:
-        # 還原 stock_dfs
-        stock_dfs = {}
-        for sid, (recs, cols) in stock_dfs_records.items():
-            df = pd.DataFrame(recs, columns=cols)
-            df['Date'] = pd.to_datetime(df['Date'])
-            df = df.set_index('Date')
-            stock_dfs[sid] = df
-
-        dfs_to_concat = [stock_dfs[sid] for sid in sids if sid in stock_dfs]
+        dfs_to_concat = [GLOBAL_STOCK_DFS[sid] for sid in sids if sid in GLOBAL_STOCK_DFS]
         if not dfs_to_concat:
             return tag, None
 
         # ── 1. 合成加權 K 線 ─────────────────────────────────────────────────
-        all_dates = pd.DatetimeIndex(
-            sorted(set().union(*[set(df.index) for df in dfs_to_concat]))
-        )
+        all_dates = pd.DatetimeIndex(sorted(set().union(*[set(df.index) for df in dfs_to_concat])))
         aligned = []
         for df in dfs_to_concat:
             df = df[~df.index.duplicated(keep='last')]
@@ -206,64 +186,49 @@ def build_one_sector(args):
         result_df['dividends'] = 0.0
         result_df.sort_index(inplace=True)
 
-        # ── 2. 等權平均漲幅 ──────────────────────────────────────────────────
-        pct_cols = {}
-        for sid in [s for s in sids if s in stock_dfs]:
-            s_close = stock_dfs[sid]['adj_close']
-            pct_cols[sid] = s_close.pct_change(fill_method=None) * 100
+        # ── 2. 等權平均漲幅 (向量化複利) ──────────────────────────────────────
+        valid_sids = [s for s in sids if s in GLOBAL_STOCK_DFS]
+        pct_cols = {sid: GLOBAL_STOCK_DFS[sid]['adj_close'].pct_change(fill_method=None) * 100 for sid in valid_sids}
 
         if pct_cols:
             eq_df = pd.DataFrame(pct_cols)
             result_df['Equal_Pct_1d'] = eq_df.mean(axis=1).reindex(result_df.index).round(4).fillna(0.0)
-            # ── 效能優化 4：NumPy 向量化複利計算，取代 rolling.apply + lambda ──
             ep = result_df['Equal_Pct_1d'].values
             log1p = np.log1p(ep / 100.0)
-            roll5 = np.array([np.sum(log1p[max(0, k-4):k+1]) for k in range(len(log1p))])
-            result_df['Equal_Pct_5d'] = np.round(np.expm1(roll5) * 100, 4)
-            result_df['Equal_Pct_5d'] = result_df['Equal_Pct_5d'].fillna(0.0)
+            roll5 = np.array([np.sum(log1p[max(0, k - 4):k + 1]) for k in range(len(log1p))])
+            result_df['Equal_Pct_5d'] = np.round(np.expm1(roll5) * 100, 4).fillna(0.0)
         else:
             result_df['Equal_Pct_1d'] = 0.0
             result_df['Equal_Pct_5d'] = 0.0
 
-        # ── 3. 基本面籌碼擴散率 ──────────────────────────────────────────────
-        actual_sids = [s for s in sids if s in stock_dfs and s in stock_fundamentals]
-        daily_inst = []
-        monthly_rev = []
+        # ── 3. 全張全域矩陣極速橫向切片 ───────────────────────────────────────
+        sector_sids = [s for s in sids if s in GLOBAL_INST_MATRIX.columns]
+        if sector_sids:
+            result_df['Legal_Diffusion'] = (GLOBAL_INST_MATRIX[sector_sids].mean(axis=1, skipna=True) * 100).reindex(
+                result_df.index).round(2).fillna(0.0)
+        else:
+            result_df['Legal_Diffusion'] = 0.0
 
-        for sid in actual_sids:
-            jdata = stock_fundamentals[sid]
-            for row in jdata.get('institutional_investors', []):
-                dt_val = pd.to_datetime(row.get('date'))
-                if pd.isna(dt_val): continue
-                is_buying = 1 if (float(row.get('foreign_buy_sell', 0)) +
-                                  float(row.get('invest_trust_buy_sell', 0)) > 0) else 0
-                daily_inst.append({'Date': dt_val, 'is_buying': is_buying})
+        # 基本面營收擴散率與中位數
+        sector_rev_sids = [s for s in sids if s in GLOBAL_REV_MATRIX.columns]
+        if sector_rev_sids:
+            sub_rev = GLOBAL_REV_MATRIX[sector_rev_sids]
 
-            for row in jdata.get('revenue', []):
-                dt_val = _tw_month(row.get('month', ''))
-                if pd.isna(dt_val): continue
-                yoy = float(row.get('rev_yoy', 0))
-                monthly_rev.append({'Date': dt_val, 'rev_yoy': yoy,
-                                    'is_growing': 1 if yoy > 0 else 0})
+            is_growing_mat = np.where(pd.isna(sub_rev), np.nan, np.where(sub_rev > 0, 1, 0))
+            with np.errstate(empty='ignore'):
+                rev_diff_series = pd.Series(np.nanmean(is_growing_mat, axis=1) * 100, index=sub_rev.index)
 
-        if daily_inst:
-            df_inst = pd.DataFrame(daily_inst)
-            inst_agg = (df_inst.groupby('Date')['is_buying'].mean() * 100).round(2).rename('Legal_Diffusion')
-            result_df = result_df.join(inst_agg, how='left')
-        result_df['Legal_Diffusion'] = result_df.get('Legal_Diffusion', pd.Series(0.0, index=result_df.index)).fillna(0.0)
+            median_series = sub_rev.median(axis=1, skipna=True)
+            accel_series = median_series.diff()
 
-        if monthly_rev:
-            df_rev = pd.DataFrame(monthly_rev)
-            rev_agg = df_rev.groupby('Date').agg(
-                Rev_Diffusion=('is_growing', 'mean'),
-                YoY_Median=('rev_yoy', 'median')
-            )
-            rev_agg['Rev_Diffusion'] = (rev_agg['Rev_Diffusion'] * 100).round(2)
-            rev_agg['YoY_Median'] = rev_agg['YoY_Median'].round(2)
-            rev_agg['YoY_Accel'] = rev_agg['YoY_Median'].diff().round(2)
             full_idx = pd.date_range(start=result_df.index.min(), end=result_df.index.max(), freq='D')
-            rev_daily = rev_agg.reindex(full_idx).ffill()
+            rev_daily = pd.DataFrame({
+                'Rev_Diffusion': rev_diff_series,
+                'YoY_Median': median_series,
+                'YoY_Accel': accel_series
+            }).reindex(full_idx).ffill()
             rev_daily.index.name = 'Date'
+
             result_df = result_df.join(rev_daily, how='left')
             result_df[['Rev_Diffusion', 'YoY_Median', 'YoY_Accel']] = \
                 result_df[['Rev_Diffusion', 'YoY_Median', 'YoY_Accel']].ffill().fillna(0.0)
@@ -282,7 +247,7 @@ def build_one_sector(args):
 
 
 def main():
-    print(f"[System] 板塊 K 線合成作業啟動 (V9.4 - 並行加速版) | {datetime.now():%H:%M:%S}")
+    print(f"[System] 板塊 K 線合成作業啟動 (V9.6 - 終極矩陣向量化版) | {datetime.now():%H:%M:%S}")
 
     sector_dict = load_sector_mappings(project_root)
     all_needed_sids = set(sid for sids in sector_dict.values() for sid in sids)
@@ -294,15 +259,57 @@ def main():
         if len(valid_sids) >= 5:
             valid_sectors[tag] = valid_sids
 
-    # ── 效能優化 2：並行讀取 JSON ────────────────────────────────────────────
+    # ── 1. 執行緒池純粹載入 JSON (繞過 GIL 計算干擾) ─────────────────────────
     print("⏳ 並行載入基本面 JSON (16 執行緒)...")
     t0 = datetime.now()
     json_dir = project_root / 'data' / 'fundamentals'
     stock_fundamentals = load_all_fundamentals(json_dir, all_needed_sids, max_workers=16)
-    print(f"   完成，耗時 {(datetime.now()-t0).total_seconds():.1f}s，共 {len(stock_fundamentals)} 筆")
+    print(f"   完成，耗時 {(datetime.now() - t0).total_seconds():.1f}s，共 {len(stock_fundamentals)} 筆")
 
-    # ── K 線讀取（維持單執行緒，CacheManager 不保證 thread-safe）───────────
-    print("⏳ 載入 K 線資料...")
+    # ── 2. 🟢 真正的 Pandas 向量化大矩陣極速建構 ─────────────────────────────
+    print("⏳ 正在利用 Pandas 向量化建構全域大型矩陣...")
+    t_mat = datetime.now()
+
+    inst_flat = []
+    rev_flat = []
+
+    # 僅做輕量化的 list 收集，絕不在迴圈內呼叫 to_datetime
+    for sid, jdata in stock_fundamentals.items():
+        inst_rows = jdata.get('institutional_investors', [])
+        if inst_rows:
+            for r in inst_rows:
+                inst_flat.append((r.get('date'), sid,
+                                  float(r.get('foreign_buy_sell', 0)) + float(r.get('invest_trust_buy_sell', 0))))
+
+        rev_rows = jdata.get('revenue', [])
+        if rev_rows:
+            for r in rev_rows:
+                rev_flat.append((r.get('month'), sid, float(r.get('rev_yoy', 0))))
+
+    # 核心精髓：一整批丟給 Pandas 進行 C 語言級別的向量化解析
+    if inst_flat:
+        df_inst_all = pd.DataFrame(inst_flat, columns=['Date', 'sid', 'net_buy'])
+        df_inst_all['Date'] = pd.to_datetime(df_inst_all['Date'], errors='coerce')
+        df_inst_all = df_inst_all.dropna(subset=['Date'])
+        # 向量化判定買賣狀態
+        df_inst_all['is_buying'] = np.where(df_inst_all['net_buy'] > 0, 1.0, 0.0)
+        inst_matrix = df_inst_all.pivot_table(index='Date', columns='sid', values='is_buying')
+    else:
+        inst_matrix = pd.DataFrame()
+
+    if rev_flat:
+        df_rev_all = pd.DataFrame(rev_flat, columns=['Month', 'sid', 'rev_yoy'])
+        # 呼叫全向量化民國年月轉換，1秒鐘刷完幾萬筆！
+        df_rev_all['Date'] = vectorize_tw_months(df_rev_all['Month'])
+        df_rev_all = df_rev_all.dropna(subset=['Date'])
+        rev_matrix = df_rev_all.pivot_table(index='Date', columns='sid', values='rev_yoy')
+    else:
+        rev_matrix = pd.DataFrame()
+
+    print(
+        f"   矩陣化完成！籌碼矩陣規模: {inst_matrix.shape} | 營收矩陣規模: {rev_matrix.shape} | 總耗時: {(datetime.now() - t_mat).total_seconds():.1f}s")
+
+    print("⏳ 載入 K 線資料並預先轉換時間索引...")
     t1 = datetime.now()
     cache = CacheManager()
     stock_dfs = {}
@@ -321,47 +328,39 @@ def main():
             df_subset = df[need_cols].copy()
             df_subset['shares'] = shares_dict.get(sid, 0)
             df_subset['Date'] = pd.to_datetime(df_subset['Date'])
+            df_subset = df_subset.set_index('Date')
             stock_dfs[sid] = df_subset
-    print(f"   完成，耗時 {(datetime.now()-t1).total_seconds():.1f}s，共 {len(stock_dfs)} 檔")
+    print(f"   完成，耗時 {(datetime.now() - t1).total_seconds():.1f}s，共 {len(stock_dfs)} 檔")
 
     output_dir = project_root / 'data' / 'cache' / 'sector'
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── 效能優化 3：序列化後多進程並行合成 ──────────────────────────────────
-    print("⏳ 序列化 K 線資料...")
-    stock_dfs_records = {
-        sid: (df.reset_index().to_dict('records'), list(df.reset_index().columns))
-        for sid, df in stock_dfs.items()
-    }
-
     n_workers = min(multiprocessing.cpu_count(), len(valid_sectors), 8)
-    print(f"⚡ 啟動 {n_workers} 個子進程並行合成 {len(valid_sectors)} 個板塊...")
+    print(f"⚡ 啟動 {n_workers} 個子進程並行合成 {len(valid_sectors)} 個板塊 (終極記憶體矩陣共享機制)...")
 
-    task_args = [
-        (tag, sids,
-         {sid: stock_dfs_records[sid] for sid in sids if sid in stock_dfs_records},
-         {sid: stock_fundamentals.get(sid, {}) for sid in sids},
-         str(output_dir))
-        for tag, sids in valid_sectors.items()
-    ]
+    task_args = [(tag, sids, str(output_dir)) for tag, sids in valid_sectors.items()]
 
     t2 = datetime.now()
     done = 0
     total = len(task_args)
     last_pct = -1
 
-    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+    with ProcessPoolExecutor(
+            max_workers=n_workers,
+            initializer=init_worker,
+            initargs=(stock_dfs, inst_matrix, rev_matrix)
+    ) as executor:
         futures = {executor.submit(build_one_sector, arg): arg[0] for arg in task_args}
         for future in as_completed(futures):
             tag_done, ok = future.result()
             done += 1
             pct = int(done / total * 100)
             if pct > last_pct:
-                print(f"\rPROGRESS: {pct} | ✅ {done}/{total} [{tag_done}]{' '*15}", end="", flush=True)
+                print(f"\rPROGRESS: {pct} | ✅ {done}/{total} [{tag_done}]{' ' * 15}", end="", flush=True)
                 last_pct = pct
 
     elapsed = (datetime.now() - t2).total_seconds()
-    print(f"\n[System] 板塊合成完成！共 {total} 個 IDX_*.parquet (含基本面 + 等權漲幅)，合成耗時 {elapsed:.1f}s。")
+    print(f"\n[System] 板塊合成完成！共 {total} 個 IDX_*.parquet，合成耗時 {elapsed:.1f}s。")
     print("PROGRESS: 100", flush=True)
 
 

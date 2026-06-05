@@ -119,29 +119,6 @@ class TechnicalStrategies:
         except:
             return default_cfg
 
-        # --- 檔案: modules/technical.py ---
-        # 在檔案中找到 TechnicalStrategies 類別，加入與修改以下方法：
-
-        @staticmethod
-        def calculate_bollinger_bands(df: pd.DataFrame, window: int = 20, num_std: float = 2.0) -> pd.DataFrame:
-            """📦 新增：計算布林通道寬度 (提供給 L3Score 或未來 K 線圖使用)"""
-            if len(df) < window:
-                return pd.DataFrame(index=df.index,
-                                    columns=['BB_Middle', 'BB_Upper', 'BB_Lower', 'BB_Width_Pct']).fillna(0)
-
-            # 兼容大小寫
-            close_col = 'Close' if 'Close' in df.columns else 'close'
-
-            middle = df[close_col].rolling(window=window).mean()
-            std = df[close_col].rolling(window=window).std()
-            upper = middle + (std * num_std)
-            lower = middle - (std * num_std)
-            # 寬度百分比 = (上軌 - 下軌) / 中軌 * 100
-            width_pct = ((upper - lower) / middle) * 100
-
-            return pd.DataFrame({
-                'BB_Middle': middle, 'BB_Upper': upper, 'BB_Lower': lower, 'BB_Width_Pct': width_pct
-            })
 
     @staticmethod
     def analyze_30w_breakout_details(df: pd.DataFrame, is_sector: bool = False) -> pd.DataFrame:
@@ -163,7 +140,7 @@ class TechnicalStrategies:
         prev_vol = vol.shift(1)
 
         # 放寬板塊指數門檻
-        min_gain = 0.02 if is_sector else cfg.get('trigger_min_gain', 0.10)
+        min_gain = 0.02 if is_sector else cfg.get('trigger_min_gain', 0.095)
         vol_mult = 1.0 if is_sector else cfg.get('trigger_vol_multiplier', 1.1)
 
         for i in range(30, len(df)):
@@ -177,7 +154,10 @@ class TechnicalStrategies:
             # 防呆：確保相關均線與上週收盤價存在
             if p_c_val == 0 or pd.isna(curr_ma) or pd.isna(p_ma_val): continue
 
-            pct_change = (close.iloc[i] - p_c_val) / p_c_val
+            # 容許「相對於上週收盤」或「相對於本週(近5日)開盤」的漲幅，取其大者，解決跨週累積漲幅被截斷的問題
+            pct_change_close = (close.iloc[i] - p_c_val) / p_c_val
+            pct_change_open = (close.iloc[i] - open_p.iloc[i]) / open_p.iloc[i]
+            pct_change = max(pct_change_close, pct_change_open)
 
             # --- 基礎攻擊條件 ---
             fail_reasons = []
@@ -326,9 +306,12 @@ class TechnicalStrategies:
             # ==========================================
             # 💡 唯一不同的條件：聽牌漲幅必須在 0% ~ 9.85% 之間
             # ==========================================
-            pct_change = (close.iloc[i] - p_c_val) / p_c_val
+            # 容許「相對於上週收盤」或「相對於本週(近5日)開盤」的漲幅，取其大者，解決跨週累積漲幅被截斷的問題
+            pct_change_close = (close.iloc[i] - p_c_val) / p_c_val
+            pct_change_open = (close.iloc[i] - open_p.iloc[i]) / open_p.iloc[i]
+            pct_change = max(pct_change_close, pct_change_open)
 
-            if not (0 <= pct_change < 0.0985):
+            if not (0 <= pct_change < 0.095):
                 continue
 
             # 準備攻擊的底線：今天收盤價必須已經踩在均線之上

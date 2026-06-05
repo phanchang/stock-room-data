@@ -176,7 +176,18 @@ def calculate_advanced_factors(df, sid=None):
             df_weekly_live = df_weekly.copy()
             if len(df) >= 5 and len(df_weekly_live) >= 1:
                 last_idx = df_weekly_live.index[-1]
-                last_5d_vol = df['Volume'].tail(5).sum()
+
+                # 抓取近 5 日的日線實體資料 (例如上週三 ~ 本週二)
+                recent_5d = df.tail(5)
+
+                # 校正本週 K 線的四要素，讓它具備完整的 5 日漲跌幅與波動區間
+                df_weekly_live.at[last_idx, 'Open'] = recent_5d['Open'].iloc[0]
+                df_weekly_live.at[last_idx, 'High'] = recent_5d['High'].max()
+                df_weekly_live.at[last_idx, 'Low'] = recent_5d['Low'].min()
+                # Close 已經是最新的，不需變動
+
+                # 量能校正 (取近5日總量)
+                last_5d_vol = recent_5d['Volume'].sum()
                 if df_weekly_live.at[last_idx, 'Volume'] < last_5d_vol:
                     df_weekly_live.at[last_idx, 'Volume'] = last_5d_vol
 

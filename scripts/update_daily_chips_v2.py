@@ -296,67 +296,59 @@ def process_local_json_worker(sid, date_str, inst_row_dict, margin_row_dict, dat
 # ==========================================
 # 引擎控制
 # ==========================================
-def get_local_latest_date(mode):
-    today_str = datetime.now().strftime('%Y-%m-%d')
-    candidate_dates = []
+def get_dates_to_fetch(mode):
+    today = datetime.now()
+    today_str = today.strftime('%Y-%m-%d')
+    # 嚴格限制只檢查過去 5 個「日曆天」的缺口，避免被異常的單邊歷史資料卡死
+    cutoff_date_str = (today - timedelta(days=5)).strftime('%Y-%m-%d')
+
+    target_dates = set()
+    latest_d = '1970-01-01'
 
     # 檢查幾檔指標股的狀態
     for sid in ["2330", "0050", "2303"]:
         p = DATA_DIR / f"{sid}.json"
-        if not p.exists():
-            continue
+        if not p.exists(): continue
         data = fast_read_json(p)
-        if not data:
-            continue
+        if not data: continue
 
-        # 🔥 防呆過濾 1：剔除超過今天的「未來日期」錯誤資料 (解決 2026-xxx 的 Bug)
-        inst_dates = [r['date'] for r in data.get('institutional_investors', []) if r['date'] <= today_str]
-        margin_dates = [r['date'] for r in data.get('margin_trading', []) if r['date'] <= today_str]
+        # 改用時間區間過濾，捨棄會造成錯位的 [:30] 陣列切片
+        inst_dates = set(
+            r['date'] for r in data.get('institutional_investors', []) if cutoff_date_str <= r['date'] <= today_str)
+        margin_dates = set(
+            r['date'] for r in data.get('margin_trading', []) if cutoff_date_str <= r['date'] <= today_str)
 
-        if not inst_dates and not margin_dates:
-            continue
-
-        # 🔥 防呆過濾 2：擷取最近 30 天的日期集合，用來比對「缺口」
-        recent_inst = set(inst_dates[:30])
-        recent_margin = set(margin_dates[:30])
-
-        gaps = set()
         if mode == 'all':
-            # 雙向檢查：法人有但資券沒有，或資券有但法人沒有的日期
-            gaps = (recent_inst - recent_margin) | (recent_margin - recent_inst)
+            gaps = (inst_dates - margin_dates) | (margin_dates - inst_dates)
         elif mode == 'margin':
-            # 只查資券時，以「法人有抓到，但資券沒抓到」的日期為缺口基準
-            gaps = recent_inst - recent_margin
+            gaps = inst_dates - margin_dates
         elif mode == 'inst':
-            # 只查法人時，以「資券有抓到，但法人沒抓到」的日期為缺口基準
-            gaps = recent_margin - recent_inst
-
-        gaps = sorted(list(gaps))
-
-        if gaps:
-            # 🚨 發現缺口！取最早的缺口日期，往前推一天，讓 main 迴圈 +1 後剛好命中該缺口去補齊
-            gap_date = datetime.strptime(gaps[0], '%Y-%m-%d')
-            candidate_dates.append((gap_date - timedelta(days=1)).strftime('%Y-%m-%d'))
+            gaps = margin_dates - inst_dates
         else:
-            # 若無缺口，正常取得最新日期
-            if mode == 'all':
-                d1 = inst_dates[0] if inst_dates else '1970-01-01'
-                d2 = margin_dates[0] if margin_dates else '1970-01-01'
-                latest_d = min(d1, d2)
-            elif mode == 'margin':
-                latest_d = margin_dates[0] if margin_dates else '1970-01-01'
-            else:
-                latest_d = inst_dates[0] if inst_dates else '1970-01-01'
+            gaps = set()
 
-            if latest_d != '1970-01-01':
-                candidate_dates.append(latest_d)
+        target_dates.update(gaps)
 
-    if candidate_dates:
-        # 確保取所有股票中最舊的那天，保障資料全面補齊
-        oldest_str = min(candidate_dates)
-        return datetime.strptime(oldest_str, '%Y-%m-%d')
+        # 找出本機最新的日期基準
+        all_dates = list(inst_dates | margin_dates)
+        if all_dates:
+            local_max = max(all_dates)
+            if local_max > latest_d:
+                latest_d = local_max
 
-    return datetime.now() - timedelta(days=3)
+    # 補上從最新日期到今天的未更新日期
+    if latest_d != '1970-01-01':
+        current = datetime.strptime(latest_d, '%Y-%m-%d') + timedelta(days=1)
+        while current.date() <= today.date():
+            target_dates.add(current.strftime('%Y-%m-%d'))
+            current += timedelta(days=1)
+    else:
+        # 若完全無資料，預設抓最近 3 天
+        for i in range(3):
+            target_dates.add((today - timedelta(days=i)).strftime('%Y-%m-%d'))
+
+    sorted_dates = sorted(list(target_dates))
+    return [datetime.strptime(d, '%Y-%m-%d') for d in sorted_dates]
 
 
 def run_for_date(target_date, mode, target_stocks):
@@ -414,9 +406,8 @@ def main():
     args = parser.parse_args()
 
     start_time = time.time()
-    # 顯示目前使用的 JSON 引擎
     engine_name = "orjson (極速)" if HAS_ORJSON else "原生 json (標準)"
-    print(f"🚀 啟動極速籌碼更新引擎 V2 | 模式: {args.mode} | 引擎: {engine_name}")
+    print(f"🚀 啟動精準籌碼更新引擎 V2 | 模式: {args.mode} | 引擎: {engine_name}")
 
     csv_path = PROJECT_ROOT / "data" / "stock_list.csv"
     if not csv_path.exists(): return
@@ -427,37 +418,26 @@ def main():
     if args.date:
         any_success = run_for_date(datetime.strptime(args.date, '%Y%m%d'), args.mode, target_stocks)
     else:
-        latest = get_local_latest_date(args.mode)
-        print(f"🔍 [本機狀態] {args.mode} 資料最新日期: {latest.strftime('%Y-%m-%d')}")
+        # 取得需要抓取的精確日期列表 (只含缺口與最新未抓取的日子)
+        dates_to_fetch = get_dates_to_fetch(args.mode)
 
-        need_repair = False
-        try:
-            p = DATA_DIR / "2330.json"
-            if p.exists():
-                last_data = fast_read_json(p).get('institutional_investors', [])
-                if last_data and last_data[0]['total_legal_pct'] == 0:
-                    need_repair = True
-        except:
-            pass
-
-        if need_repair:
-            print("⚠️ 偵測到上次更新數據不完整 (0.0%)，自動啟動修復模式...")
-            current_date = latest
+        if not dates_to_fetch:
+            print("🔍 [本機狀態] 無偵測到任何缺口或需更新日期。")
         else:
-            current_date = latest + timedelta(days=1)
+            print(f"🔍 [本機狀態] 偵測到需更新/補缺的精確日期共 {len(dates_to_fetch)} 天。")
 
         today = datetime.now()
-        while current_date.date() <= today.date():
+        for current_date in dates_to_fetch:
             if current_date.date() == today.date():
                 if args.mode == 'margin' and today.hour < 21:
                     print(f"⏳ 今天({current_date.strftime('%m/%d')})資券尚未公布，跳過。")
-                    break
+                    continue
                 elif today.hour < 15:
                     print(f"⏳ 今天({current_date.strftime('%m/%d')})尚未收盤，跳過。")
-                    break
+                    continue
 
-            if run_for_date(current_date, args.mode, target_stocks): any_success = True
-            current_date += timedelta(days=1)
+            if run_for_date(current_date, args.mode, target_stocks):
+                any_success = True
             time.sleep(0.5)
 
     if not any_success:

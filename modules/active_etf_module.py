@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QComboBox,
                              QLabel, QTableWidget, QTableWidgetItem, QFrame,
                              QSplitter, QApplication, QHeaderView, QTabWidget,
                              QPushButton, QStackedWidget, QScrollArea, QGridLayout,
-                             QSizePolicy)
+                             QSizePolicy, QAbstractItemView)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 
@@ -192,7 +192,42 @@ class MultiETFDataWorker(QThread):
                 all_data.append(df)
         self.multi_data_fetched.emit(pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame())
 
+class BatchPriceWorker(QThread):
+    price_data_fetched = pyqtSignal(dict, list, list)
 
+    def __init__(self, stock_ids, market_map, consensus_changes, radar_changes):
+        super().__init__()
+        self.stock_ids = set(stock_ids)
+        self.market_map = market_map
+        self.consensus_changes = consensus_changes
+        self.radar_changes = radar_changes
+
+    def run(self):
+        res = {}
+        for sid in self.stock_ids:
+            mkt = self.market_map.get(str(sid), "TW")
+            p = Path(f"data/cache/tw/{sid}_{mkt}.parquet")
+            res[sid] = {'1d': 0.0, '3d': 0.0, '5d': 0.0, '10d': 0.0, '20d': 0.0}
+            if p.exists():
+                try:
+                    df = pd.read_parquet(p)
+                    if not df.empty:
+                        df.index = pd.to_datetime(df.index)
+                        df = df.sort_index()
+                        col = 'close' if 'close' in df.columns else 'Close'
+                        if col in df.columns and len(df) >= 1:
+                            closes = df[col].values
+                            c_now = closes[-1]
+                            def safe_pct(idx):
+                                return (c_now / closes[idx] - 1) * 100 if len(closes) >= abs(idx) else 0.0
+                            res[sid] = {
+                                '1d': safe_pct(-2), '3d': safe_pct(-4),
+                                '5d': safe_pct(-6), '10d': safe_pct(-11),
+                                '20d': safe_pct(-21)
+                            }
+                except Exception:
+                    pass
+        self.price_data_fetched.emit(res, self.consensus_changes, self.radar_changes)
 # ─── 主程式 ──────────────────────────────────────────────
 
 class ActiveETFModule(QWidget):
@@ -222,6 +257,16 @@ class ActiveETFModule(QWidget):
         self.load_industry_info()
         self.init_ui()
         self.load_multi_etf_data()
+
+    def _on_consensus_scroll(self, event):
+        """捕捉籌碼共識圖的滾輪事件，連動外部的 QScrollArea"""
+        if not hasattr(self, 'scroll_consensus'): return
+        v_bar = self.scroll_consensus.verticalScrollBar()
+        step = v_bar.singleStep() * 3
+        if event.button == 'up':
+            v_bar.setValue(v_bar.value() - step)
+        elif event.button == 'down':
+            v_bar.setValue(v_bar.value() + step)
 
     # ─── 輔助載入 ──────────────────────────────────────
 
@@ -496,7 +541,6 @@ class ActiveETFModule(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         sp = QSplitter(Qt.Orientation.Horizontal)
 
-        # 左：核心持股散點圖
         left = QFrame()
         left.setStyleSheet(f"QFrame {{ {PANEL_STYLE} }}")
         ll = QVBoxLayout(left)
@@ -516,11 +560,11 @@ class ActiveETFModule(QWidget):
         self.canvas_core.setStyleSheet(f"background:{BG_PANEL};")
         self.canvas_core.mpl_connect('button_press_event', self.on_core_click)
         self.canvas_core.mpl_connect('motion_notify_event', self.on_core_hover)
-        ll.addWidget(self.canvas_core)
-        self._core_scatter_data = []   # list of (x, y, sid, name)
-        self._core_selected_idx = None  # index of highlighted bubble
+        ll.addWidget(self.canvas_core, 1)  # ✅ 加 stretch=1，canvas 撐滿 left panel
 
-        # 右：核心持股表
+        self._core_scatter_data = []
+        self._core_selected_idx = None
+
         right = QFrame()
         right.setStyleSheet(f"QFrame {{ {PANEL_STYLE} }}")
         rl = QVBoxLayout(right)
@@ -545,13 +589,16 @@ class ActiveETFModule(QWidget):
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)      # ETF 欄拉寬
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        rl.addWidget(self.table_core)
+        rl.addWidget(self.table_core, 1)  # ✅ 加 stretch=1，table 撐滿 right panel
 
-        sp.addWidget(left); sp.addWidget(right)
-        sp.setStretchFactor(0, 52); sp.setStretchFactor(1, 48)
-        lay.addWidget(sp)
+        sp.addWidget(left);
+        sp.addWidget(right)
+        sp.setStretchFactor(0, 52);
+        sp.setStretchFactor(1, 48)
+
+        lay.addWidget(sp, 1)  # ✅ 關鍵：加 stretch=1，Splitter 撐滿整個 page_core
 
     # ─── 模組2：籌碼共識 ────────────────────────────────
     # 上：雙向 bar chart（買進/賣出量化視覺化）
@@ -562,7 +609,6 @@ class ActiveETFModule(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
 
-        # 圖區
         chart_panel = QFrame()
         chart_panel.setStyleSheet(f"QFrame {{ {PANEL_STYLE} }}")
         cl = QVBoxLayout(chart_panel)
@@ -572,9 +618,17 @@ class ActiveETFModule(QWidget):
         ch = QWidget()
         chr_l = QHBoxLayout(ch)
         chr_l.setContentsMargins(0, 0, 0, 0)
-        chr_l.addWidget(section_title("近3日籌碼共識", TEXT_PRI, 13))
+        self.lbl_consensus_title = section_title("近3日籌碼共識", TEXT_PRI, 13)
+        chr_l.addWidget(self.lbl_consensus_title)
         chr_l.addStretch()
-        self.lbl_buy_cnt  = QLabel("—")
+        chr_l.addWidget(dim_label("觀察區間："))
+        self.combo_consensus_tf = QComboBox()
+        self.combo_consensus_tf.addItems(["1日", "3日", "5日", "20日"])
+        self.combo_consensus_tf.setCurrentIndex(1)
+        self.combo_consensus_tf.setStyleSheet(COMBO_STYLE)
+        self.combo_consensus_tf.currentIndexChanged.connect(self.update_all_modules)
+        chr_l.addWidget(self.combo_consensus_tf)
+        self.lbl_buy_cnt = QLabel("—")
         self.lbl_sell_cnt = QLabel("—")
         self.lbl_buy_cnt.setStyleSheet(f"color:{RED}; font-size:12px; font-weight:bold;")
         self.lbl_sell_cnt.setStyleSheet(f"color:{GREEN}; font-size:12px; font-weight:bold;")
@@ -583,60 +637,70 @@ class ActiveETFModule(QWidget):
         chr_l.addWidget(self.lbl_sell_cnt)
         cl.addWidget(ch)
 
+        # ✅ 修正：canvas 改包進 QScrollArea，不再 setFixedHeight 寫死（原本塞 24 個 label 只有 220px 導致擠爆）
         self.fig_consensus = Figure(facecolor=BG_PANEL)
         self.canvas_consensus = FigureCanvas(self.fig_consensus)
         self.canvas_consensus.setStyleSheet(f"background:{BG_PANEL};")
-        self.canvas_consensus.setFixedHeight(220)
-        cl.addWidget(self.canvas_consensus)
+        self.canvas_consensus.mpl_connect('scroll_event', self._on_consensus_scroll)
+        self.canvas_consensus.mpl_connect('button_press_event', self.on_consensus_click)
+        self.scroll_consensus = QScrollArea()
+        self.scroll_consensus.setWidgetResizable(True)
+        self.scroll_consensus.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_consensus.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll_consensus.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.scroll_consensus.setWidget(self.canvas_consensus)
+        cl.addWidget(self.scroll_consensus)
+
+        # ✅ chart_panel 固定高度，scroll 在裡面滾動（同 radar page 做法）
+        chart_panel.setFixedHeight(280)
         lay.addWidget(chart_panel)
 
-        # 表區：買/賣並排，無任何色框
         tbl_w = QWidget()
         tbl_l = QHBoxLayout(tbl_w)
         tbl_l.setContentsMargins(0, 0, 0, 0)
         tbl_l.setSpacing(8)
 
-        # 買進表
         bp = QFrame()
         bp.setStyleSheet(f"QFrame {{ {PANEL_STYLE} }}")
         bl = QVBoxLayout(bp)
         bl.setContentsMargins(12, 10, 12, 8)
         bl.setSpacing(4)
-
         bh = QWidget()
         bhr = QHBoxLayout(bh)
         bhr.setContentsMargins(0, 0, 0, 0)
         bhr.addWidget(section_title("共同加碼 Top 15", RED, 12))
         bhr.addStretch()
-        bhr.addWidget(dim_label("近3日 2家以上同步買進"))
+        self.lbl_consensus_buy_hint = dim_label("近3日 2家以上同步買進")
+        bhr.addWidget(self.lbl_consensus_buy_hint)
         bl.addWidget(bh)
-
         self.table_buy = QTableWidget()
-        self.table_buy.setColumnCount(4)
-        self.table_buy.setHorizontalHeaderLabels(["代號", "名稱", "參與ETF", "合計張數"])
+        self.table_buy.setColumnCount(7)
+        self.table_buy.setHorizontalHeaderLabels(["代號", "名稱", "參與ETF", "合計張數", "今日", "近3日", "近5日"])
         setup_table(self.table_buy, stretch_col=1)
+        for i in range(4, 7):
+            self.table_buy.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
         bl.addWidget(self.table_buy)
         tbl_l.addWidget(bp)
 
-        # 賣出表
         sp2 = QFrame()
         sp2.setStyleSheet(f"QFrame {{ {PANEL_STYLE} }}")
         sl = QVBoxLayout(sp2)
         sl.setContentsMargins(12, 10, 12, 8)
         sl.setSpacing(4)
-
         sh2 = QWidget()
         shr = QHBoxLayout(sh2)
         shr.setContentsMargins(0, 0, 0, 0)
         shr.addWidget(section_title("共同減碼 Top 15", GREEN, 12))
         shr.addStretch()
-        shr.addWidget(dim_label("近3日 2家以上同步賣出"))
+        self.lbl_consensus_sell_hint = dim_label("近3日 2家以上同步賣出")
+        shr.addWidget(self.lbl_consensus_sell_hint)
         sl.addWidget(sh2)
-
         self.table_sell = QTableWidget()
-        self.table_sell.setColumnCount(4)
-        self.table_sell.setHorizontalHeaderLabels(["代號", "名稱", "參與ETF", "合計張數"])
+        self.table_sell.setColumnCount(7)
+        self.table_sell.setHorizontalHeaderLabels(["代號", "名稱", "參與ETF", "合計張數", "今日", "近3日", "近5日"])
         setup_table(self.table_sell, stretch_col=1)
+        for i in range(4, 7):
+            self.table_sell.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
         sl.addWidget(self.table_sell)
         tbl_l.addWidget(sp2)
 
@@ -859,7 +923,46 @@ class ActiveETFModule(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
 
-        # 下：三欄表格，乾淨無多餘邊框
+        # 頂部：標題與下拉選單
+        header = QFrame()
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(4, 0, 4, 0)
+        hl.addWidget(section_title("進出動向", ACCENT, 14))
+        hl.addStretch()
+        hl.addWidget(dim_label("觀察區間："))
+        self.combo_radar_tf = QComboBox()
+        self.combo_radar_tf.addItems(["每日", "近3日", "近5日", "近10日", "近20日"])
+        self.combo_radar_tf.setStyleSheet(COMBO_STYLE)
+        self.combo_radar_tf.currentIndexChanged.connect(self.update_all_modules)
+        hl.addWidget(self.combo_radar_tf)
+        lay.addWidget(header)
+
+        # 上：進出概覽圖 (包裝進 QScrollArea 輔助滾動)
+        chart_panel = QFrame()
+        chart_panel.setStyleSheet(f"QFrame {{ {PANEL_STYLE} }}")
+        c_lay = QVBoxLayout(chart_panel)
+        c_lay.setContentsMargins(12, 10, 12, 8)
+
+        self.scroll_radar = QScrollArea()
+        self.scroll_radar.setWidgetResizable(True)
+        self.scroll_radar.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_radar.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll_radar.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        self.fig_radar = Figure(facecolor=BG_PANEL)
+        self.canvas_radar = FigureCanvas(self.fig_radar)
+        self.canvas_radar.setStyleSheet(f"background:{BG_PANEL};")
+
+        # [新增] 綁定畫布的滾輪事件，讓滑鼠在圖表區內也能滾動
+        self.canvas_radar.mpl_connect('scroll_event', self._on_radar_scroll)
+        self.canvas_radar.mpl_connect('button_press_event', self.on_radar_click)
+
+        self.scroll_radar.setWidget(self.canvas_radar)
+        c_lay.addWidget(self.scroll_radar)
+        chart_panel.setFixedHeight(250)
+        lay.addWidget(chart_panel)
+
+        # 下：三欄表格
         tbl_row = QWidget()
         tr_l = QHBoxLayout(tbl_row)
         tr_l.setContentsMargins(0, 0, 0, 0)
@@ -870,11 +973,10 @@ class ActiveETFModule(QWidget):
         np_panel.setStyleSheet(f"QFrame {{ {PANEL_STYLE} }}")
         np_l = QVBoxLayout(np_panel)
         np_l.setContentsMargins(12, 10, 12, 8)
-        np_l.setSpacing(4)
-        np_l.addWidget(section_title("今日新增持股", RED, 12))
+        np_l.addWidget(section_title("新增持股", RED, 12))
         self.table_new = QTableWidget()
         self.table_new.setColumnCount(4)
-        self.table_new.setHorizontalHeaderLabels(["ETF", "代號", "名稱", "權重"])
+        self.table_new.setHorizontalHeaderLabels(["ETF", "代號", "名稱", "最新權重"])
         setup_table(self.table_new, stretch_col=2)
         np_l.addWidget(self.table_new)
         tr_l.addWidget(np_panel)
@@ -884,11 +986,10 @@ class ActiveETFModule(QWidget):
         op_panel.setStyleSheet(f"QFrame {{ {PANEL_STYLE} }}")
         op_l = QVBoxLayout(op_panel)
         op_l.setContentsMargins(12, 10, 12, 8)
-        op_l.setSpacing(4)
-        op_l.addWidget(section_title("今日完全移除", TEXT_SEC, 12))
+        op_l.addWidget(section_title("完全移除", TEXT_SEC, 12))
         self.table_out = QTableWidget()
         self.table_out.setColumnCount(4)
-        self.table_out.setHorizontalHeaderLabels(["ETF", "代號", "名稱", "前日權重"])
+        self.table_out.setHorizontalHeaderLabels(["ETF", "代號", "名稱", "前期權重"])
         setup_table(self.table_out, stretch_col=2)
         op_l.addWidget(self.table_out)
         tr_l.addWidget(op_panel)
@@ -898,11 +999,10 @@ class ActiveETFModule(QWidget):
         cp_panel.setStyleSheet(f"QFrame {{ {PANEL_STYLE} }}")
         cp_l2 = QVBoxLayout(cp_panel)
         cp_l2.setContentsMargins(12, 10, 12, 8)
-        cp_l2.setSpacing(4)
         cp_l2.addWidget(section_title("大幅調整排行", PURPLE, 12))
         self.table_change = QTableWidget()
-        self.table_change.setColumnCount(5)
-        self.table_change.setHorizontalHeaderLabels(["ETF", "代號", "名稱", "張數變化", "權重變化"])
+        self.table_change.setColumnCount(6)
+        self.table_change.setHorizontalHeaderLabels(["ETF", "代號", "名稱", "張數變化", "權重變化", "區間漲幅"])
         setup_table(self.table_change, stretch_col=2)
         cp_l2.addWidget(self.table_change)
         tr_l.addWidget(cp_panel)
@@ -927,6 +1027,19 @@ class ActiveETFModule(QWidget):
         etfs = list(self.mapping.keys())
         etf_latest_stocks, etf_latest_df = {}, {}
         all_changes, consensus_changes = [], []
+        stock_ids_to_fetch = set()
+
+        # 每日進出動向的觀察區間（原有邏輯不變）
+        tf_text = getattr(self, 'combo_radar_tf', None)
+        tf_val = tf_text.currentText() if tf_text else "每日"
+        tf_map = {"每日": 2, "近3日": 4, "近5日": 6, "近10日": 11, "近20日": 21}
+        radar_period = tf_map.get(tf_val, 2)
+
+        # ✅ 籌碼共識的觀察區間：從新增的下拉選單讀取
+        cons_combo = getattr(self, 'combo_consensus_tf', None)
+        cons_val = cons_combo.currentText() if cons_combo else "3日"
+        cons_tf_map = {"1日": 2, "3日": 4, "5日": 6, "20日": 21}
+        consensus_period = cons_tf_map.get(cons_val, 4)
 
         for etf in etfs:
             sub = df[df['etf_id'] == etf]
@@ -938,34 +1051,41 @@ class ActiveETFModule(QWidget):
             etf_latest_df[etf] = df0
 
             if len(dates) >= 2:
-                t1 = dates[-2]
-                m1 = pd.merge(df0, sub[sub['date'] == t1], on=['stock_id', 'name'],
-                              suffixes=('_now', '_prev'), how='outer').fillna(0)
-                for _, r in m1.iterrows():
-                    all_changes.append({'etf': etf, 'stock_id': str(r['stock_id']), 'name': str(r['name']),
-                                        'w_now': r['weight_now'], 'w_prev': r['weight_prev'],
-                                        's_now': r['shares_now'], 's_prev': r['shares_prev'],
-                                        's_diff': r['shares_now'] - r['shares_prev'],
-                                        'w_diff': r['weight_now'] - r['weight_prev']})
-                t3 = dates[max(0, len(dates) - 4)]
-                m3 = pd.merge(df0, sub[sub['date'] == t3], on=['stock_id', 'name'],
-                              suffixes=('_now', '_prev'), how='outer').fillna(0)
-                for _, r in m3.iterrows():
-                    consensus_changes.append({'etf': etf, 'stock_id': str(r['stock_id']),
-                                              'name': str(r['name']),
-                                              's_diff': r['shares_now'] - r['shares_prev']})
+                # 每日進出動向（原有邏輯）
+                r_idx = max(0, len(dates) - radar_period)
+                m_radar = pd.merge(df0, sub[sub['date'] == dates[r_idx]], on=['stock_id', 'name'],
+                                   suffixes=('_now', '_prev'), how='outer').fillna(0)
+                for _, r in m_radar.iterrows():
+                    diff = r['shares_now'] - r['shares_prev']
+                    if diff != 0:
+                        sid = str(r['stock_id'])
+                        all_changes.append({'etf': etf, 'stock_id': sid, 'name': str(r['name']),
+                                            'w_now': r['weight_now'], 'w_prev': r['weight_prev'],
+                                            's_now': r['shares_now'], 's_prev': r['shares_prev'],
+                                            's_diff': diff, 'w_diff': r['weight_now'] - r['weight_prev']})
+                        stock_ids_to_fetch.add(sid)
 
-        # ── 模組1 ──
+                # ✅ 籌碼共識：改用動態 consensus_period，不再寫死 -4
+                c_idx = max(0, len(dates) - consensus_period)
+                m_cons = pd.merge(df0, sub[sub['date'] == dates[c_idx]], on=['stock_id', 'name'],
+                                  suffixes=('_now', '_prev'), how='outer').fillna(0)
+                for _, r in m_cons.iterrows():
+                    diff = r['shares_now'] - r['shares_prev']
+                    if diff != 0:
+                        sid = str(r['stock_id'])
+                        consensus_changes.append({'etf': etf, 'stock_id': sid, 'name': str(r['name']), 's_diff': diff})
+                        stock_ids_to_fetch.add(sid)
+
         self._build_core_data(etf_latest_df)
-
-        # ── 模組2 ──
-        self._build_consensus(consensus_changes)
-
-        # ── 模組3 ──
         self._build_style_data(etf_latest_df)
 
-        # ── 模組4 ──
-        self._build_radar_data(all_changes)
+        self.price_worker = BatchPriceWorker(stock_ids_to_fetch, self.stock_market_map, consensus_changes, all_changes)
+        self.price_worker.price_data_fetched.connect(self._on_batch_price_done)
+        self.price_worker.start()
+
+    def _on_batch_price_done(self, prices, consensus_changes, radar_changes):
+        self._build_consensus(consensus_changes, prices)
+        self._build_radar_data(radar_changes, prices)
 
     # ─── 模組1 資料 ──────────────────────────────────────
 
@@ -999,7 +1119,6 @@ class ActiveETFModule(QWidget):
         self._draw_core_scatter(core)
 
     def _draw_core_scatter(self, core):
-        # Only show top 20 for readability
         display_core = core[:20]
         self.fig_core.clear()
         ax = self.fig_core.add_subplot(111)
@@ -1009,25 +1128,27 @@ class ActiveETFModule(QWidget):
         if not display_core:
             ax.text(0.5, 0.5, '資料載入中...', ha='center', va='center',
                     color=TEXT_DIM, fontsize=14, transform=ax.transAxes)
-            ax.axis('off'); self.canvas_core.draw(); return
+            ax.axis('off');
+            self.canvas_core.draw();
+            return
 
-        xs   = [c[4] for c in display_core]
+        xs = [c[4] for c in display_core]
         cnts = [c[2] for c in display_core]
-        nms  = [c[1] for c in display_core]
+        nms = [c[1] for c in display_core]
         sids = [c[0] for c in display_core]
 
         cnt_colors = {3: ACCENT + "CC", 4: RED + "CC"}
         scatter_colors = [cnt_colors.get(c, TEXT_SEC + "CC") for c in cnts]
-        sizes = [max(300, w * 35) for w in xs]   # larger bubbles for top 20
+        sizes = [max(300, w * 35) for w in xs]
 
-        sc = ax.scatter(range(len(display_core)), xs, s=sizes, c=scatter_colors,
-                        alpha=0.88, edgecolors='none', zorder=5)
+        ax.scatter(range(len(display_core)), xs, s=sizes, c=scatter_colors,
+                   alpha=0.88, edgecolors='none', zorder=5)
         self._core_scatter_data = list(zip(range(len(display_core)), xs, sids, nms))
-        self._core_labels = []   # store text artists for highlight
+        self._core_labels = []
 
-        # Draw all labels with normal size
         for i, (sid, nm, w, cnt) in enumerate(zip(sids, nms, xs, cnts)):
-            y_off = w * 0.10 + (3.0 if i % 2 == 1 else 0.8)
+            # ✅ 縮小 y_off，讓標籤貼近泡泡，不會把圖往下撐
+            y_off = w * 0.06 + 1.2
             txt = ax.text(i, w + y_off, nm, ha='center', va='bottom',
                           color=TEXT_PRI if cnt == 4 else TEXT_SEC,
                           fontsize=9, fontweight='bold' if cnt == 4 else 'normal',
@@ -1036,17 +1157,22 @@ class ActiveETFModule(QWidget):
 
         self._core_selected_idx = None
 
-        # 圖例
-        leg = [mpatches.Patch(color=RED,   label='4家共同持有'),
+        leg = [mpatches.Patch(color=RED, label='4家共同持有'),
                mpatches.Patch(color=ACCENT, label='3家共同持有')]
         ax.legend(handles=leg, frameon=False, labelcolor=TEXT_PRI,
                   fontsize=10, loc='upper right')
 
-        # [關鍵修正]: 動態拉高 Y 軸天花板，預留 35% 空間，防止台積電等大權重文字被切掉
         max_w = max(xs) if xs else 50
-        ax.set_ylim(-2, max_w * 1.35)
+        min_w = min(xs) if xs else 0
 
-        ax.set_xticks([]); ax.set_xlim(-0.8, len(display_core) - 0.2)
+        # ✅ 核心修正：Y 軸下限從接近最小值開始（而非 0），上限只留 20% 給標籤
+        # 讓泡泡填滿整個圖區，視覺上移
+        y_bottom = max(0, min_w - max_w * 0.08)
+        y_top = max_w * 1.20
+        ax.set_ylim(y_bottom, y_top)
+
+        ax.set_xticks([]);
+        ax.set_xlim(-0.8, len(display_core) - 0.2)
         ax.set_ylabel("合計權重 (%)", color=TEXT_SEC, fontsize=10)
         ax.tick_params(colors=TEXT_SEC, labelsize=9)
         ax.grid(axis='y', color=BORDER, linestyle=':', alpha=0.5)
@@ -1059,28 +1185,27 @@ class ActiveETFModule(QWidget):
 
     def on_core_click(self, e):
         if not e.inaxes or not self._core_scatter_data: return
-        # Find closest bubble by x distance
         best_i, best_dist = 0, float('inf')
         for list_i, (xi, yi, sid, nm) in enumerate(self._core_scatter_data):
             d = abs(e.xdata - xi)
             if d < best_dist:
-                best_dist = d; best_i = list_i
+                best_dist = d;
+                best_i = list_i
         if best_dist > 0.6: return
         xi, yi, sid, nm = self._core_scatter_data[best_i]
 
-        # Highlight: reset all labels, enlarge clicked one
         if hasattr(self, '_core_labels') and self._core_labels:
             for j, txt in enumerate(self._core_labels):
                 if j == best_i:
-                    txt.set_fontsize(13); txt.set_color(GOLD)
+                    txt.set_fontsize(13);
+                    txt.set_color(GOLD)
                     txt.set_fontweight('bold')
                 else:
                     txt.set_fontsize(9)
-                    txt.set_color(TEXT_PRI if self._core_scatter_data[j][2] == 4 else TEXT_SEC
-                                  if j < len(self._core_scatter_data) else TEXT_SEC)
+                    cnt_j = self._core_scatter_data[j][2] if j < len(self._core_scatter_data) else 3
+                    txt.set_color(TEXT_PRI if cnt_j == 4 else TEXT_SEC)
             self.canvas_core.draw()
 
-        # Scroll table to row
         for i in range(self.table_core.rowCount()):
             if self.table_core.item(i, 0) and self.table_core.item(i, 0).text() == sid:
                 self.table_core.selectRow(i)
@@ -1092,20 +1217,34 @@ class ActiveETFModule(QWidget):
 
     # ─── 模組2 資料 ──────────────────────────────────────
 
-    def _build_consensus(self, consensus_changes):
+    def _build_consensus(self, consensus_changes, prices_dict):
+        # ✅ 讀取當前選擇的區間，用於動態更新所有標題文字
+        cons_combo = getattr(self, 'combo_consensus_tf', None)
+        cons_val = cons_combo.currentText() if cons_combo else "3日"
+
+        # 更新三處動態標題
+        if hasattr(self, 'lbl_consensus_title'):
+            self.lbl_consensus_title.setText(f"近{cons_val}籌碼共識")
+        if hasattr(self, 'lbl_consensus_buy_hint'):
+            self.lbl_consensus_buy_hint.setText(f"近{cons_val} 2家以上同步買進")
+        if hasattr(self, 'lbl_consensus_sell_hint'):
+            self.lbl_consensus_sell_hint.setText(f"近{cons_val} 2家以上同步賣出")
+
         buy_d, sell_d = {}, {}
         for c in consensus_changes:
             sid, nm, etf, diff = c['stock_id'], c['name'], c['etf'], c['s_diff']
             if diff > 0:
                 if sid not in buy_d: buy_d[sid] = {'name': nm, 'etfs': [], 'tot': 0}
-                buy_d[sid]['etfs'].append(etf); buy_d[sid]['tot'] += diff
+                buy_d[sid]['etfs'].append(etf);
+                buy_d[sid]['tot'] += diff
             elif diff < 0:
                 if sid not in sell_d: sell_d[sid] = {'name': nm, 'etfs': [], 'tot': 0}
-                sell_d[sid]['etfs'].append(etf); sell_d[sid]['tot'] += diff
+                sell_d[sid]['etfs'].append(etf);
+                sell_d[sid]['tot'] += diff
 
-        buy_list  = [[k, v['name'], ", ".join(v['etfs']), v['tot']]
-                     for k, v in buy_d.items() if len(v['etfs']) >= 2]
-        sell_list = [[k, v['name'], ", ".join(v['etfs']), v['tot']]
+        buy_list = [[k, v['name'], ", ".join(v['etfs']), v['tot'], prices_dict.get(k, {})]
+                    for k, v in buy_d.items() if len(v['etfs']) >= 2]
+        sell_list = [[k, v['name'], ", ".join(v['etfs']), v['tot'], prices_dict.get(k, {})]
                      for k, v in sell_d.items() if len(v['etfs']) >= 2]
         buy_list.sort(key=lambda x: x[3], reverse=True)
         sell_list.sort(key=lambda x: x[3])
@@ -1113,11 +1252,8 @@ class ActiveETFModule(QWidget):
         self.lbl_buy_cnt.setText(f"加碼共識 {len(buy_list)} 檔")
         self.lbl_sell_cnt.setText(f"減碼共識 {len(sell_list)} 檔")
 
-        # 繪圖：雙向橫 bar
         self._draw_consensus_chart(buy_list[:12], sell_list[:12])
-
-        # 填表
-        self._fill_consensus_table(self.table_buy,  buy_list[:15],  RED,   positive=True)
+        self._fill_consensus_table(self.table_buy, buy_list[:15], RED, positive=True)
         self._fill_consensus_table(self.table_sell, sell_list[:15], GREEN, positive=False)
 
     def _draw_consensus_chart(self, buy_list, sell_list):
@@ -1126,19 +1262,42 @@ class ActiveETFModule(QWidget):
         ax = self.fig_consensus.add_subplot(111)
         ax.set_facecolor(BG_CARD)
 
+        # ✅ 初始化，避免殘留舊資料
+        self._consensus_bar_data = []
+        self._consensus_bars = None
+
+        combined = (buy_list + sell_list)[:20]
         labels, vals = [], []
-        for sid, nm, _, tot in (buy_list + sell_list)[:20]:
+        for sid, nm, _, tot, _prices in combined:
             labels.append(nm)
             vals.append(int(tot / 1000))
+            self._consensus_bar_data.append((sid, nm, tot > 0))  # (sid, name, is_buy)
 
         if not labels:
-            ax.text(0.5, 0.5, '等待資料...', ha='center', va='center',
-                    color=TEXT_DIM, fontsize=12, transform=ax.transAxes)
-            ax.axis('off'); self.canvas_consensus.draw(); return
+            cons_combo = getattr(self, 'combo_consensus_tf', None)
+            cons_val = cons_combo.currentText() if cons_combo else "?"
+            hint = (
+                f"『{cons_val}』觀察期間內無跨ETF共識動向\n\n"
+                "原因：共識需 2家以上 ETF 同步加減碼同一檔股票\n"
+                "觀察期間越短，各ETF調倉時間窗重疊機率越低\n"
+                "建議切換至 3日 / 5日 / 20日 觀察"
+            )
+            ax.text(0.5, 0.5, hint, ha='center', va='center',
+                    color=TEXT_DIM, fontsize=11, multialignment='center',
+                    linespacing=1.8, transform=ax.transAxes)
+            ax.axis('off')
+            self.canvas_consensus.setFixedHeight(220)
+            self.canvas_consensus.draw()
+            return
+
+        dynamic_height = max(240, len(labels) * 30 + 60)
+        self.canvas_consensus.setFixedHeight(dynamic_height)
 
         y = np.arange(len(labels))
-        colors = [RED if v > 0 else GREEN for v in vals]
-        ax.barh(y, vals, color=colors, height=0.6, alpha=0.85, edgecolor='none')
+        base_colors = [RED if v > 0 else GREEN for v in vals]
+        # ✅ 存 bars 參照，供 click handler 改色
+        self._consensus_bars = ax.barh(y, vals, color=base_colors, height=0.6,
+                                       alpha=0.85, edgecolor='none')
         ax.set_yticks(y)
         ax.set_yticklabels(labels, color=TEXT_PRI, fontsize=10, fontweight='bold')
         ax.axvline(0, color=TEXT_SEC, linewidth=1.2)
@@ -1154,14 +1313,22 @@ class ActiveETFModule(QWidget):
 
     def _fill_consensus_table(self, table, data, clr, positive=True):
         table.setRowCount(len(data))
-        for i, (sid, nm, etfs, tot) in enumerate(data):
-            amt = f"+{int(tot/1000):,}張" if positive else f"{int(tot/1000):,}張"
+        for i, (sid, nm, etfs, tot, prices) in enumerate(data):
+            amt = f"+{int(tot / 1000):,}張" if positive else f"{int(tot / 1000):,}張"
             table.setItem(i, 0, titem(sid, ACCENT, Qt.AlignmentFlag.AlignCenter, True))
             table.setItem(i, 1, titem(nm, TEXT_PRI, bold=True))
-            etf_item = titem(etfs, TEXT_PRI)     # 高對比色，完整顯示
-            etf_item.setToolTip(etfs)            # tooltip 完整展示
+            etf_item = titem(etfs, TEXT_PRI)
+            etf_item.setToolTip(etfs)
             table.setItem(i, 2, etf_item)
             table.setItem(i, 3, titem(amt, clr, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, True))
+
+            def format_pct(val):
+                c = RED if val > 0 else GREEN if val < 0 else TEXT_PRI
+                return titem(f"{val:+.1f}%" if val != 0 else "-", c, Qt.AlignmentFlag.AlignRight)
+
+            table.setItem(i, 4, format_pct(prices.get('1d', 0)))
+            table.setItem(i, 5, format_pct(prices.get('3d', 0)))
+            table.setItem(i, 6, format_pct(prices.get('5d', 0)))
 
     # ─── 模組3 資料 ──────────────────────────────────────
 
@@ -1202,21 +1369,35 @@ class ActiveETFModule(QWidget):
 
     # ─── 模組4 資料 ──────────────────────────────────────
 
-    def _build_radar_data(self, all_changes):
+    def _build_radar_data(self, all_changes, prices_dict):
+        tf_text = getattr(self, 'combo_radar_tf', None)
+        tf_val = tf_text.currentText() if tf_text else "每日"
+        p_map = {"每日": "1d", "近3日": "3d", "近5日": "5d", "近10日": "10d", "近20日": "20d"}
+        p_key = p_map.get(tf_val, "1d")
+
         new_list, out_list, chg_list = [], [], []
         for c in all_changes:
+            sid = c['stock_id']
+            p_val = prices_dict.get(sid, {}).get(p_key, 0.0)
             if c['s_prev'] == 0 and c['s_now'] > 0:
-                new_list.append([c['etf'], c['stock_id'], c['name'], f"{c['w_now']:.2f}%"])
+                new_list.append([c['etf'], sid, c['name'], f"{c['w_now']:.2f}%"])
             elif c['s_prev'] > 0 and c['s_now'] == 0:
-                out_list.append([c['etf'], c['stock_id'], c['name'], f"{c['w_prev']:.2f}%"])
+                out_list.append([c['etf'], sid, c['name'], f"{c['w_prev']:.2f}%"])
             elif abs(c['s_diff']) > 0:
-                chg_list.append([c['etf'], c['stock_id'], c['name'], c['s_diff'], c['w_diff']])
-        chg_list.sort(key=lambda x: abs(x[3]), reverse=True)
+                chg_list.append([c['etf'], sid, c['name'], c['s_diff'], c['w_diff'], p_val])
 
-        # 填表
+        # 執行精密分流排序：右邊全呈現買的(多到少)，再接賣的(少到多)
+        buys = [x for x in chg_list if x[4] >= 0]
+        sells = [x for x in chg_list if x[4] < 0]
+        buys.sort(key=lambda x: x[4], reverse=True)
+        sells.sort(key=lambda x: x[4], reverse=True)
+
+        ordered_chg_list = buys + sells
+
         self._fill_simple_table(self.table_new, new_list, RED)
         self._fill_simple_table(self.table_out, out_list, TEXT_SEC)
-        self._fill_change_table(chg_list[:20])
+        self._fill_change_table(ordered_chg_list[:20])
+        self._draw_radar_chart(new_list, out_list, ordered_chg_list)
 
     def _draw_radar_chart(self, new_list, out_list, chg_list):
         self.fig_radar.clear()
@@ -1224,44 +1405,116 @@ class ActiveETFModule(QWidget):
         ax = self.fig_radar.add_subplot(111)
         ax.set_facecolor(BG_CARD)
 
-        if not chg_list and not new_list and not out_list:
-            ax.text(0.5, 0.5, '今日無變動', ha='center', va='center',
-                    color=TEXT_DIM, fontsize=13, transform=ax.transAxes)
-            ax.axis('off'); self.canvas_radar.draw(); return
+        # ✅ 初始化
+        self._radar_bar_data = []
+        self._radar_bars = None
 
-        labels = [f"{r[2]}({r[0]})" for r in chg_list[:16]]
-        vals   = [int(r[3] / 1000) for r in chg_list[:16]]
-        colors = [RED if v > 0 else GREEN for v in vals]
+        if not chg_list:
+            ax.text(0.5, 0.5, '區間內無權重調整變動', ha='center', va='center',
+                    color=TEXT_DIM, fontsize=13, transform=ax.transAxes)
+            ax.axis('off')
+            self.canvas_radar.draw()
+            return
+
+        total_items = len(chg_list)
+        dynamic_height = max(220, total_items * 32 + 50)
+        self.canvas_radar.setFixedHeight(dynamic_height)
+
+        plot_data = list(reversed(chg_list))
+        # ✅ 存每列對應的 (sid, etf)，供 click 查表用
+        self._radar_bar_data = [(r[1], r[0]) for r in plot_data]  # (sid, etf)
+
+        labels = [f"{r[2]} ({r[0]})" for r in plot_data]
+        vals = [r[4] for r in plot_data]
+        base_colors = [RED if v >= 0 else GREEN for v in vals]
 
         y = np.arange(len(labels))
-        ax.barh(y, vals, color=colors, height=0.58, alpha=0.85, edgecolor='none')
-
-        # 新增/移除 圓點 overlay（在最左/最右顯示 badge）
-        y_offset = len(labels)
-        for j, row in enumerate(new_list[:5]):
-            ax.plot(0, y_offset + j, 'o', color=RED, ms=8, zorder=5)
-            ax.text(0.5, y_offset + j, f"★新增  {row[2]}({row[0]})",
-                    va='center', color=RED, fontsize=8.5)
-        for j, row in enumerate(out_list[:5]):
-            ax.plot(0, y_offset + len(new_list) + j, 'o', color=TEXT_DIM, ms=8, zorder=5)
-            ax.text(0.5, y_offset + len(new_list) + j, f"✕移除  {row[2]}({row[0]})",
-                    va='center', color=TEXT_SEC, fontsize=8.5)
-
-        all_labels = labels + [''] * (len(new_list[:5]) + len(out_list[:5]))
-        ax.set_yticks(range(len(all_labels)))
-        ax.set_yticklabels(labels + [r[2] for r in new_list[:5]] + [r[2] for r in out_list[:5]],
-                           color=TEXT_PRI, fontsize=9)
-        ax.set_yticklabels(ax.get_yticklabels())
-        # override: use simple labels
-        ax.set_yticks(y); ax.set_yticklabels(labels, color=TEXT_PRI, fontsize=9)
-        ax.axvline(0, color=BORDER, linewidth=1)
-        ax.set_xlabel("張數變化（千張）", color=TEXT_SEC, fontsize=9)
-        ax.tick_params(colors=TEXT_SEC, labelsize=9)
+        # ✅ 存 bars 參照
+        self._radar_bars = ax.barh(y, vals, color=base_colors, height=0.6,
+                                   alpha=0.85, edgecolor='none')
+        ax.set_yticks(y)
+        ax.set_yticklabels(labels, color=TEXT_PRI, fontsize=10, fontweight='bold')
+        ax.axvline(0, color=TEXT_SEC, linewidth=1.2)
+        ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=100.0, decimals=2))
+        ax.set_xlabel("持股權重增減變化 (%)", color=TEXT_PRI, fontsize=10, fontweight='bold')
+        ax.tick_params(colors=TEXT_PRI, labelsize=9)
         ax.grid(axis='x', color=BORDER, linestyle=':', alpha=0.5)
         for s in ax.spines.values(): s.set_visible(False)
 
-        self.fig_radar.tight_layout(pad=1.2)
+        self.fig_radar.tight_layout(pad=1.5)
         self.canvas_radar.draw()
+
+    def on_consensus_click(self, e):
+        """點擊共識 bar chart → highlight 下方買/賣表格對應列"""
+        if not e.inaxes or not self._consensus_bar_data or self._consensus_bars is None:
+            return
+        if not self.fig_consensus.axes or e.inaxes != self.fig_consensus.axes[0]:
+            return
+
+        y_idx = int(round(e.ydata))
+        if not (0 <= y_idx < len(self._consensus_bar_data)):
+            return
+
+        sid, nm, is_buy = self._consensus_bar_data[y_idx]
+
+        # ✅ bar 本身：重置全部，高亮點擊列 (金色外框)
+        base_colors = [RED if d[2] else GREEN for d in self._consensus_bar_data]
+        for i, bar in enumerate(self._consensus_bars):
+            bar.set_facecolor(base_colors[i])
+            bar.set_alpha(0.85)
+            bar.set_edgecolor('none')
+            bar.set_linewidth(0)
+        self._consensus_bars[y_idx].set_edgecolor(GOLD)
+        self._consensus_bars[y_idx].set_linewidth(2.0)
+        self._consensus_bars[y_idx].set_alpha(1.0)
+        self.canvas_consensus.draw_idle()
+
+        # ✅ 表格：清除另一側選取，定位並 highlight 正確側
+        target = self.table_buy if is_buy else self.table_sell
+        other = self.table_sell if is_buy else self.table_buy
+        other.clearSelection()
+
+        for i in range(target.rowCount()):
+            item = target.item(i, 0)
+            if item and item.text() == sid:
+                target.selectRow(i)
+                target.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
+                break
+
+    def on_radar_click(self, e):
+        """點擊進出動向 bar chart → highlight 下方調整排行表格對應列"""
+        if not e.inaxes or not self._radar_bar_data or self._radar_bars is None:
+            return
+        if not self.fig_radar.axes or e.inaxes != self.fig_radar.axes[0]:
+            return
+
+        y_idx = int(round(e.ydata))
+        if not (0 <= y_idx < len(self._radar_bar_data)):
+            return
+
+        sid, etf = self._radar_bar_data[y_idx]
+
+        # ✅ bar 本身：重置全部，高亮點擊列
+        for i, bar in enumerate(self._radar_bars):
+            bar.set_alpha(0.85)
+            bar.set_edgecolor('none')
+            bar.set_linewidth(0)
+        self._radar_bars[y_idx].set_edgecolor(GOLD)
+        self._radar_bars[y_idx].set_linewidth(2.0)
+        self._radar_bars[y_idx].set_alpha(1.0)
+        self.canvas_radar.draw_idle()
+
+        # ✅ 表格：在 table_change 找 sid + etf 對應列
+        for i in range(self.table_change.rowCount()):
+            item_etf = self.table_change.item(i, 0)
+            item_sid = self.table_change.item(i, 1)
+            if item_sid and item_sid.text() == sid and item_etf and item_etf.text() == etf:
+                self.table_change.selectRow(i)
+                self.table_change.scrollToItem(
+                    self.table_change.item(i, 0),
+                    QAbstractItemView.ScrollHint.PositionAtCenter
+                )
+                break
 
     def _fill_simple_table(self, table, data, clr):
         table.setRowCount(len(data))
@@ -1275,14 +1528,13 @@ class ActiveETFModule(QWidget):
         self.table_change.setRowCount(len(chg_list))
         for i, row in enumerate(chg_list):
             clr = RED if row[3] > 0 else GREEN
-            table_change = self.table_change
-            table_change.setItem(i, 0, titem(row[0], ACCENT, Qt.AlignmentFlag.AlignCenter))
-            table_change.setItem(i, 1, titem(row[1], TEXT_SEC, Qt.AlignmentFlag.AlignCenter))
-            table_change.setItem(i, 2, titem(row[2]))
-            table_change.setItem(i, 3, titem(f"{int(row[3]/1000):+,}張", clr,
-                                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, True))
-            table_change.setItem(i, 4, titem(f"{row[4]:+.2f}%", clr,
-                                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, True))
+            p_clr = RED if row[5] > 0 else GREEN if row[5] < 0 else TEXT_PRI
+            self.table_change.setItem(i, 0, titem(row[0], ACCENT, Qt.AlignmentFlag.AlignCenter))
+            self.table_change.setItem(i, 1, titem(row[1], TEXT_SEC, Qt.AlignmentFlag.AlignCenter))
+            self.table_change.setItem(i, 2, titem(row[2]))
+            self.table_change.setItem(i, 3, titem(f"{int(row[3]/1000):+,}張", clr, Qt.AlignmentFlag.AlignRight))
+            self.table_change.setItem(i, 4, titem(f"{row[4]:+.2f}%", clr, Qt.AlignmentFlag.AlignRight))
+            self.table_change.setItem(i, 5, titem(f"{row[5]:+.1f}%" if row[5] != 0 else "-", p_clr, Qt.AlignmentFlag.AlignRight))
 
     # ─── 單檔操作邏輯 ─────────────────────────────────────
 
@@ -1410,23 +1662,26 @@ class ActiveETFModule(QWidget):
                 pdf.columns = [c.capitalize() for c in pdf.columns]
                 pdf.index = pd.to_datetime(pdf.index).tz_localize(None)
                 pd_df = pdf[pdf.index >= td['date'].min()].copy()
-            except: pass
+            except:
+                pass
 
         self.fig_trend.clear()
         self.fig_trend.patch.set_facecolor(BG_PANEL)
         ax1 = self.fig_trend.add_subplot(111)
         ax1.set_facecolor(BG_CARD)
-        ax2 = ax1.twinx(); ax3 = ax1.twinx()
+        ax2 = ax1.twinx();
+        ax3 = ax1.twinx()
         ax3.spines['right'].set_position(('outward', 60))
-        ax1.set_zorder(10); ax2.set_zorder(11); ax3.set_zorder(2)
-        ax1.patch.set_visible(False); ax2.patch.set_visible(False)
+        ax1.set_zorder(10);
+        ax2.set_zorder(11);
+        ax3.set_zorder(2)
+        ax1.patch.set_visible(False);
+        ax2.patch.set_visible(False)
 
-        # 庫存張數線：紫色，確保可見，單位=千張（軸用逗號格式，不加K）
         shares_in_k = td['shares'] / 1000
         l3, = ax3.plot(td['date'], shares_in_k, color=PURPLE, lw=1.8,
                        marker='o', ms=3, alpha=0.75, label='庫存(千張)')
         ax3.tick_params(axis='y', colors=PURPLE, labelsize=8)
-        # 移除科學記號，用千張數值直接顯示（如 3.4 代表3400張）
         ax3.yaxis.set_major_formatter(mtick.FuncFormatter(lambda x, _: f'{x:.1f}'))
 
         l1, = ax1.plot(td['date'], td['weight'], color=ACCENT, lw=2, marker='o', ms=3.5, label='權重')
@@ -1437,27 +1692,34 @@ class ActiveETFModule(QWidget):
             l2, = ax2.plot(pd_df.index, pd_df['Close'], color=GOLD, lw=1.5, ls='--', alpha=0.9, label='股價')
             ts, tc, dcs = 0, 0.0, []
             for _, r in td.iterrows():
-                try: pidx = pd_df.index.get_indexer([r['date']], method='ffill')[0]
-                except: pidx = -1
+                try:
+                    pidx = pd_df.index.get_indexer([r['date']], method='ffill')[0]
+                except:
+                    pidx = -1
                 p = pd_df['Close'].iloc[pidx] if pidx != -1 else 0
                 if p > 0:
-                    if r['shares'] > ts: tc += (r['shares'] - ts) * p; ts = r['shares']
+                    if r['shares'] > ts:
+                        tc += (r['shares'] - ts) * p; ts = r['shares']
                     elif r['shares'] < ts:
-                        tc = (tc * r['shares'] / ts) if r['shares'] > 0 else 0.0; ts = r['shares']
+                        tc = (tc * r['shares'] / ts) if r['shares'] > 0 else 0.0;
+                        ts = r['shares']
                 dcs.append(tc / ts if ts > 0 else 0.0)
             td['avg_cost'] = dcs
             if (td['shares'] > 0).any():
                 cost_sub = td.loc[td['shares'] > 0]
                 l4, = ax2.plot(cost_sub['date'], cost_sub['avg_cost'],
                                color='#FF6EC7', ls=':', marker='o', ms=3.5, lw=1.5, alpha=0.8, label='成本')
-                # 最後一天成本標注
                 last_cost_row = cost_sub.iloc[-1]
                 lc = last_cost_row['avg_cost']
+                lp = pd_df['Close'].iloc[-1]
                 if lc > 0:
+                    # [新增] 實作成本乖離率計算
+                    dev = (lp - lc) / lc * 100
                     ax2.plot(last_cost_row['date'], lc, 'o', color='#FF6EC7', ms=6, zorder=6)
-                    ax2.text(last_cost_row['date'], lc, f" {lc:.1f}",
+                    ax2.text(last_cost_row['date'], lc, f" {lc:.1f} (乖離{dev:+.1f}%)",
                              color='#FF6EC7', fontsize=10, fontweight='bold',
                              va='center', bbox=dict(boxstyle="round,pad=0.3", fc=BG_CARD, ec='#FF6EC7', alpha=0.9))
+
             lp = pd_df['Close'].iloc[-1]
             ax2.plot(pd_df.index[-1], lp, 'o', color=GOLD, ms=6, zorder=5)
             ax2.text(pd_df.index[-1], lp, f" {lp:.1f}", color=GOLD, fontsize=10, fontweight='bold',
@@ -1505,28 +1767,42 @@ class ActiveETFModule(QWidget):
     def on_line_hover(self, e):
         if not e.inaxes or self.line_data is None: return
         import matplotlib.dates as mdates
-        try: dt = mdates.num2date(e.xdata).replace(tzinfo=None)
-        except: return
+        try:
+            dt = mdates.num2date(e.xdata).replace(tzinfo=None)
+        except:
+            return
         td, pd_df = self.line_data['etf'], self.line_data['price']
         r = td.loc[(td['date'] - dt).abs().idxmin()]
         idx = td.index.get_loc(r.name)
-        txt = p_val = ""
+        txt = p_val = dev_val = ""
+
         if idx > 0:
             pr = td.iloc[idx - 1]
             diff = r['shares'] - pr['shares']
             pct = (diff / pr['shares'] * 100) if pr['shares'] > 0 else 0
             dc = RED if diff >= 0 else GREEN
-            txt = f" <span style='color:{dc};'>{int(diff/1000):+,}張 ({pct:+.2f}%)</span>"
+            txt = f" <span style='color:{dc};'>{int(diff / 1000):+,}張 ({pct:+.2f}%)</span>"
+
+        cost = r.get('avg_cost', 0)
         if not pd_df.empty:
             try:
-                p_val = f" <span style='color:{GOLD};'>股價:{pd_df.iloc[pd_df.index.get_indexer([r['date']], method='nearest')[0]]['Close']:.1f}</span>"
-            except: pass
+                # 取得距離懸停時間最近的收盤價
+                pidx = pd_df.index.get_indexer([r['date']], method='nearest')[0]
+                price = pd_df.iloc[pidx]['Close']
+                p_val = f" <span style='color:{GOLD};'>股價:{price:.1f}</span>"
+                if cost > 0:
+                    dev = (price - cost) / cost * 100
+                    dc = RED if dev > 0 else GREEN
+                    dev_val = f" <span style='color:{dc};font-weight:bold;'>(乖離:{dev:+.1f}%)</span>"
+            except:
+                pass
+
         self.info_label.setText(
             f"<span style='color:{TEXT_SEC};'>{r['date'].strftime('%Y-%m-%d')}</span>"
             f" <span style='color:{ACCENT};'>權重:{r['weight']}%</span>"
-            f" <span style='color:{TEXT_PRI};'>持股:{int(r['shares']/1000):,}張</span>"
+            f" <span style='color:{TEXT_PRI};'>持股:{int(r['shares'] / 1000):,}張</span>"
             f"{txt}{p_val}"
-            f" <span style='color:#FF6EC7;'>成本:{r.get('avg_cost', 0):.1f}</span>")
+            f" <span style='color:#FF6EC7;'>成本:{cost:.1f}</span>{dev_val}")
 
     def on_table_clicked(self, row, col):
         if not self.stock_table.item(row, 0): return
@@ -1534,6 +1810,16 @@ class ActiveETFModule(QWidget):
         nm  = self.stock_table.item(row, 1).text() if self.stock_table.item(row, 1) else ""
         self.plot_trend(sid, nm, self.get_market_suffix(sid))
         self.stock_clicked_signal.emit(f"{sid}_{self.get_market_suffix(sid)}")
+
+    def _on_radar_scroll(self, event):
+        """捕捉 Matplotlib 畫布的滾輪事件，連動外部的 QScrollArea"""
+        if not hasattr(self, 'scroll_radar'): return
+        v_bar = self.scroll_radar.verticalScrollBar()
+        step = v_bar.singleStep() * 3  # 乘以 3 加快滾動速度，手感更滑順
+        if event.button == 'up':
+            v_bar.setValue(v_bar.value() - step)
+        elif event.button == 'down':
+            v_bar.setValue(v_bar.value() + step)
 
 
 if __name__ == "__main__":

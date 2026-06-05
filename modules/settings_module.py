@@ -465,7 +465,12 @@ class SettingsModule(QWidget):
         finance_layout = QHBoxLayout()
         finance_layout.setSpacing(10)
         self.combo_finance_mode = QComboBox()
-        self.combo_finance_mode.addItems(["⚡ 僅更新月營收 (快)", "🔥 更新營收+財報 (慢)", "📄 僅更新財報 (慢)"])
+        self.combo_finance_mode.addItems([
+            "⚡ 僅更新月營收 (MoneyDJ 早鳥)",
+            "🔥 更新營收+財報 (MoneyDJ 完整)",
+            "📄 僅更新財報 (MoneyDJ)",
+            "🌐 MOPS 官方大表整月批次 (11號後)"  # 🆕 新增選項
+        ])
         self.combo_finance_mode.setStyleSheet("""
             QComboBox { background-color: #2D2D30; color: #EEE; border: 1px solid #555; padding: 10px; font-size: 16px; border-radius: 6px; font-weight: bold;}
             QComboBox::drop-down { border: 0px; }
@@ -867,7 +872,12 @@ class SettingsModule(QWidget):
 
     def run_pipeline_financials(self):
         mode_idx = self.combo_finance_mode.currentIndex()
-        mode_names = ["僅更新月營收", "更新營收與財報", "僅更新財報"]
+        mode_names = [
+            "僅更新月營收 (MoneyDJ 早鳥)",
+            "更新營收與財報 (MoneyDJ 完整)",
+            "僅更新財報 (MoneyDJ)",
+            "MOPS 官方大表整月批次 (11號後)"
+        ]
         mode_name = mode_names[mode_idx]
         if not self._foolproof_check(f"基本面更新 ({mode_name})"): return
 
@@ -876,14 +886,36 @@ class SettingsModule(QWidget):
         self._disable_all_buttons()
         self.progress.setFormat("⏳ 抓取資料中 - %p%")
 
+        # 💡 新增：攔截標籤，預設為「未跳過」
+        self.finance_skipped = False
+
         args = []
-        if mode_idx >= 1: args = ["--full"]
+        if mode_idx == 1 or mode_idx == 2:
+            args = ["--full"]
+        elif mode_idx == 3:
+            args = ["--mops_batch"]
 
         self.runner_finance = ScriptRunner(self.project_root / "scripts" / "update_financials.py", args)
-        self.runner_finance.output_signal.connect(self.log)
+
+        # 💡 修改：將輸出與結束訊號導向我們新寫的攔截函數
+        self.runner_finance.output_signal.connect(self._check_finance_output)
         self.runner_finance.progress_signal.connect(self.progress.setValue)
-        self.runner_finance.finished.connect(self._proceed_to_calc_factors)
+        self.runner_finance.finished.connect(self._handle_finance_finished)
         self.runner_finance.start_script()
+
+    def _check_finance_output(self, text):
+        """攔截 update_financials 的輸出，判斷是否為空更新"""
+        self.log(text)
+        if "略過戰情室大表重算" in text or "跳過戰情室大表重算" in text or "作業結束" in text:
+            self.finance_skipped = True
+
+    def _handle_finance_finished(self, exitCode):
+        """根據攔截結果決定是否往下跑大表重算"""
+        if getattr(self, 'finance_skipped', False):
+            self.log("🛑 偵測到無新資料，UI 介面已自動終止大表重算排程 (為您省下 5 分鐘)。")
+            self.on_pipeline_finished()
+        else:
+            self._proceed_to_calc_factors()
 
     def run_pipeline_concepts(self):
         if not self._foolproof_check("概念股分類更新"): return
