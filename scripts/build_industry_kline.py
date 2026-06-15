@@ -196,7 +196,10 @@ def build_one_sector(args):
             ep = result_df['Equal_Pct_1d'].values
             log1p = np.log1p(ep / 100.0)
             roll5 = np.array([np.sum(log1p[max(0, k - 4):k + 1]) for k in range(len(log1p))])
-            result_df['Equal_Pct_5d'] = np.round(np.expm1(roll5) * 100, 4).fillna(0.0)
+            # 先算數值並賦值，此時它會自動轉為 Pandas Series
+            result_df['Equal_Pct_5d'] = np.round(np.expm1(roll5) * 100, 4)
+            # 接著再呼叫 Pandas 的 fillna
+            result_df['Equal_Pct_5d'] = result_df['Equal_Pct_5d'].fillna(0.0)
         else:
             result_df['Equal_Pct_1d'] = 0.0
             result_df['Equal_Pct_5d'] = 0.0
@@ -215,7 +218,11 @@ def build_one_sector(args):
             sub_rev = GLOBAL_REV_MATRIX[sector_rev_sids]
 
             is_growing_mat = np.where(pd.isna(sub_rev), np.nan, np.where(sub_rev > 0, 1, 0))
-            with np.errstate(empty='ignore'):
+
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                # 攔截全 NaN 列造成的 Mean of empty slice 警告，不影響底層的高速運算
                 rev_diff_series = pd.Series(np.nanmean(is_growing_mat, axis=1) * 100, index=sub_rev.index)
 
             median_series = sub_rev.median(axis=1, skipna=True)
@@ -242,7 +249,21 @@ def build_one_sector(args):
         result_df.to_parquet(save_path)
         return tag, True
 
+
     except Exception as e:
+
+        # 🔴 破案關鍵：攔截並寫出真實的錯誤堆疊訊息
+
+        import traceback
+
+        err_msg = traceback.format_exc()
+
+        error_log_path = Path(output_dir_str).parent / "sector_error_log.txt"
+
+        with open(error_log_path, "a", encoding="utf-8") as f:
+
+            f.write(f"❌【{tag}】發生錯誤:\n{err_msg}\n{'-' * 40}\n")
+
         return tag, None
 
 

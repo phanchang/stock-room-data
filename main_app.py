@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt, pyqtSignal,QTimer
 import traceback
 
 from modules.sector_dashboard import SectorDashboard
+from modules.ownership_module import OwnershipModule
 
 def exception_hook(exctype, value, tb):
     print("💥 偵測到未捕獲的錯誤:")
@@ -165,10 +166,12 @@ class StockWarRoomV3(QMainWindow):
         self.revenue_module = RevenueModule()
         self.eps_module = EPSModule()
         self.ratio_module = RatioModule()
+        self.ownership_module = OwnershipModule(self)
 
         self.chips_tabs = self._create_tab_widget()
         self.chips_tabs.addTab(self.inst_module, "三大法人")
         self.chips_tabs.addTab(self.margin_module, "資券變化")
+        self.chips_tabs.addTab(self.ownership_module, "股權分佈")
         self.chips_tabs.currentChanged.connect(self.on_tab_changed)
 
         self.fund_tabs = self._create_tab_widget()
@@ -284,6 +287,8 @@ class StockWarRoomV3(QMainWindow):
             self.inst_module.load_inst_data(self.current_stock_id, self.current_stock_name)
         elif current_chips == self.margin_module:
             self.margin_module.load_margin_data(self.current_stock_id, self.current_stock_name)
+        elif current_chips == self.ownership_module:  # <-- 新增這兩行
+            self.ownership_module.load_ownership_data(self.current_stock_id, self.current_stock_name)
 
         current_fund = self.fund_tabs.currentWidget()
         if current_fund == self.revenue_module:

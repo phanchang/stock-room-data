@@ -22,11 +22,12 @@ load_dotenv()
 # 【根據真實 HTML 結構改寫 - 直接替換版本】
 # 把整個 def get_chip_dynamics(sid): 都換成這個
 
-def get_chip_dynamics(sid):
+def get_chip_dynamics(sid, current_price=0.0):
     import requests
     from bs4 import BeautifulSoup
     import re
     import traceback
+    from datetime import datetime
 
     url = f"https://norway.twsthr.info/StockHolders.aspx?stock={sid}"
     headers = {
@@ -34,15 +35,12 @@ def get_chip_dynamics(sid):
     }
 
     try:
-        # 稍微增加一點 timeout，避免網站回應稍慢時崩潰
         res = requests.get(url, headers=headers, timeout=8)
         soup = BeautifulSoup(res.text, 'html.parser')
 
-        # 🚀 1. 找到真正包含「總結數據」的表格 (避開你貼的 15 級距明細表)
         target_table = None
         for tbl in soup.find_all('table'):
             text = tbl.get_text()
-            # 總表必定同時包含這三個專屬關鍵字
             if '總股東人數' in text and '集保總張數' in text and '平均張數' in text:
                 target_table = tbl
                 break
@@ -50,77 +48,137 @@ def get_chip_dynamics(sid):
         if not target_table:
             return "⚠️ 找不到目標籌碼表格 (請確認該股是否有資料)", ""
 
-        # 🚀 2. 繞過複雜的 rowspan/colspan 標題，直接定位標準化的數據列
         parsed_data = []
-
         for tr in target_table.find_all('tr'):
             cells = tr.find_all(['td', 'th'])
-
-            # 清除空白與千分位逗號，並過濾掉純空值的欄位，達成絕對對齊 (無視 &nbsp;)
             texts = [c.get_text(strip=True).replace('\xa0', '').replace(',', '') for c in cells]
             texts = [t for t in texts if t]
 
-            # 數據列的特徵：第一欄必定是 8 碼日期，且總表標準欄位數 >= 12
             if len(texts) >= 12 and re.match(r'^\d{8}$', texts[0]):
                 try:
-                    date_val = texts[0]
-                    # 根據台灣神秘金字塔的標準總表結構，過濾空值後的固定座標：
-                    # [0]日期 [1]集保總數 [2]總股東人數 [3]平均張數 [4]>400人數 [5]>400比例 ... [11]>1000比例
-                    holders = int(texts[2])
-                    pct_400 = float(texts[5].replace('%', ''))
-                    pct_1000 = float(texts[11].replace('%', ''))
-
                     parsed_data.append({
-                        'date': date_val,
-                        'holders': holders,
-                        '400': pct_400,
-                        '1000': pct_1000
+                        'date_str': texts[0],
+                        'date_obj': datetime.strptime(texts[0], '%Y%m%d'),
+                        'total_lots': int(texts[1]),
+                        'holders': int(texts[2]),
+                        'pct_400': float(texts[5].replace('%', '')),
+                        'pct_800': float(texts[9].replace('%', '')),
+                        'pct_1000': float(texts[11].replace('%', ''))
                     })
                 except Exception:
-                    continue  # 忽略轉型錯誤的例外行
+                    continue
 
-        # 🚀 3. 資料驗證與輸出
-        # 確保按日期由新到舊排序
-        parsed_data.sort(key=lambda x: x['date'], reverse=True)
+        parsed_data.sort(key=lambda x: x['date_obj'], reverse=True)
+        if len(parsed_data) < 2:
+            return "⚠️ 歷史籌碼資料不足", ""
 
-        if len(parsed_data) < 5:
-            return f"⚠️ 歷史籌碼資料不足五週 (僅找到 {len(parsed_data)} 筆)", ""
-
-        # 只取近 5 週資料
-        parsed_data = parsed_data[:5]
+        # --- 1. 動態市值與大戶門檻判定 ---
         latest = parsed_data[0]
-        past = parsed_data[4]
+        market_cap = latest['total_lots'] * 1000 * current_price
 
-        # 計算差額
-        holders_diff = latest['holders'] - past['holders']
-        whale_1000_diff = latest['1000'] - past['1000']
+        if market_cap < 5_000_000_000:
+            whale_key = 'pct_400'
+            whale_label = ">400張"
+            cap_desc = "小型股 (市值<50億)"
+        elif market_cap <= 30_000_000_000:
+            whale_key = 'pct_800'
+            whale_label = ">800張"
+            cap_desc = "中型股 (市值50~300億)"
+        else:
+            whale_key = 'pct_1000'
+            whale_label = ">1000張"
+            cap_desc = "大型股 (市值>300億)"
+
+        work_data = parsed_data[:5]
+
+        # --- 2. 日期防呆 Streak 演算法 (修正獨立計算) ---
+        whale_streak = 0
+        whale_trend = 0
+        retail_streak = 0
+        retail_trend = 0
+
+        w_counting = True  # 獨立控制大戶是否繼續算
+        r_counting = True  # 獨立控制散戶是否繼續算
+
+        for i in range(len(work_data) - 1):
+            if not w_counting and not r_counting:
+                break  # 兩者都中斷時，才提早結束迴圈
+
+            curr = work_data[i]
+            prev = work_data[i + 1]
+
+            days_diff = (curr['date_obj'] - prev['date_obj']).days
+            if days_diff > 15:
+                break
+
+            w_diff = round(curr[whale_key] - prev[whale_key], 2)
+            r_diff = curr['holders'] - prev['holders']
+
+            # 大戶獨立計算
+            if w_counting:
+                cur_w_dir = 1 if w_diff > 0 else (-1 if w_diff < 0 else 0)
+                if i == 0 and cur_w_dir != 0:
+                    whale_trend = cur_w_dir
+                    whale_streak = 1
+                elif cur_w_dir == whale_trend and whale_trend != 0:
+                    whale_streak += 1
+                else:
+                    w_counting = False
+
+            # 散戶獨立計算
+            if r_counting:
+                cur_r_dir = 1 if r_diff > 0 else (-1 if r_diff < 0 else 0)
+                if i == 0 and cur_r_dir != 0:
+                    retail_trend = cur_r_dir
+                    retail_streak = 1
+                elif cur_r_dir == retail_trend and retail_trend != 0:
+                    retail_streak += 1
+                else:
+                    r_counting = False
+
+        # --- 3. 輸出 AI Prompt 與 深色系 UI 表格 (修正排版) ---
+        past = work_data[-1]
+        whale_diff_total = latest[whale_key] - past[whale_key]
+        holders_diff_total = latest['holders'] - past['holders']
+
+        w_streak_str = f"連買 {whale_streak} 週" if whale_trend == 1 else (
+            f"連賣 {whale_streak} 週" if whale_trend == -1 else "無連續方向")
+        r_streak_str = f"連增 {retail_streak} 週 (散戶進)" if retail_trend == 1 else (
+            f"連降 {retail_streak} 週 (散戶退)" if retail_trend == -1 else "無連續方向")
 
         ai_text = (
-            f"【近一月大戶籌碼真實動態】\n"
-            f"- 比較基準：{latest['date']} vs {past['date']}\n"
-            f"- 千張大戶變動：{whale_1000_diff:+.2f}%\n"
-            f"- 散戶(總股東人數)變動：{holders_diff:+}人\n"
+            f"【近 {len(work_data)} 週真實籌碼動態 (動態門檻架構)】\n"
+            f"- 系統判定：{cap_desc}，大戶門檻自動設為 {whale_label}\n"
+            f"- {whale_label}大戶佔比變化：{whale_diff_total:+.2f}% ({w_streak_str})\n"
+            f"- 散戶(總人數)變化：{holders_diff_total:+}人 ({r_streak_str})\n"
         )
 
+        # UI 排版修正：移除 table 的 right 屬性，改用 HTML width 撐開，並明確分配欄位對齊與比例
         ui_html = f"""
-        <table style='width: 100%; margin-top: 15px; border-collapse: collapse; font-size: 14px; text-align: right;'>
-            <tr style='background-color: #1E2632; color: #00E5FF; font-weight: bold;'>
-                <th style='padding: 6px; text-align: center; border-bottom: 2px solid #2B3544;'>日期</th>
-                <th style='padding: 6px; border-bottom: 2px solid #2B3544;'>散戶(人)</th>
-                <th style='padding: 6px; border-bottom: 2px solid #2B3544;'>>400張(%)</th>
-                <th style='padding: 6px; border-bottom: 2px solid #2B3544;'>千張大戶(%)</th>
-            </tr>
+        <div style='background-color: #151A22; border: 1px solid #2B3544; border-radius: 6px; padding: 12px; margin-top: 10px;'>
+            <div style='color: #E0E6ED; font-size: 14px; margin-bottom: 6px;'>
+                🎯 自動分級：<span style='color:#00E5FF; font-weight:bold;'>{cap_desc}</span> | 大戶標竿：<span style='color:#FFD700; font-weight:bold;'>{whale_label}</span>
+            </div>
+            <div style='color: #E0E6ED; font-size: 14px; margin-bottom: 12px;'>
+                📈 大戶動能：<span style='color:{"#FF4D4D" if whale_trend == 1 else "#00E676" if whale_trend == -1 else "#E0E6ED"}; font-weight:bold;'>{w_streak_str}</span> | 
+                📉 散戶動向：<span style='color:{"#FF4D4D" if retail_trend == -1 else "#00E676" if retail_trend == 1 else "#E0E6ED"}; font-weight:bold;'>{r_streak_str}</span>
+            </div>
+            <table width='100%' style='border-collapse: collapse; font-size: 14px; margin-top: 5px;'>
+                <tr style='background-color: #1E2632; color: #00E5FF;'>
+                    <th style='padding: 8px; text-align: left; border-bottom: 2px solid #2B3544; width: 30%;'>日期</th>
+                    <th style='padding: 8px; text-align: right; border-bottom: 2px solid #2B3544; width: 35%;'>大戶({whale_label})</th>
+                    <th style='padding: 8px; text-align: right; border-bottom: 2px solid #2B3544; width: 35%;'>散戶(人)</th>
+                </tr>
         """
-        for row in parsed_data:
+        for row in work_data:
             ui_html += f"""
-            <tr style='border-bottom: 1px solid #2B3544;'>
-                <td style='padding: 6px; text-align: center; color: #E0E6ED;'>{row['date']}</td>
-                <td style='padding: 6px; color: #FFD700;'>{row['holders']:,}</td>
-                <td style='padding: 6px; color: #E0E6ED;'>{row['400']:.2f}%</td>
-                <td style='padding: 6px; color: #FF4D4D; font-weight: bold;'>{row['1000']:.2f}%</td>
-            </tr>
+                <tr style='border-bottom: 1px solid #2B3544;'>
+                    <td style='padding: 8px; text-align: left; color: #E0E6ED;'>{row['date_str']}</td>
+                    <td style='padding: 8px; text-align: right; color: #FF4D4D; font-weight: bold;'>{row[whale_key]:.2f}%</td>
+                    <td style='padding: 8px; text-align: right; color: #FFD700;'>{row['holders']:,}</td>
+                </tr>
             """
-        ui_html += "</table>"
+        ui_html += "</table></div>"
 
         return ai_text, ui_html
 
@@ -211,13 +269,14 @@ class ChipCrawlerWorker(QThread):
     """背景偷偷爬取籌碼資料，避免卡住 UI 開啟"""
     finished = pyqtSignal(str, str)  # 傳遞 ai_text, ui_html
 
-    def __init__(self, sid):
+    def __init__(self, sid, current_price):
         super().__init__()
         self.sid = sid
+        self.current_price = current_price
 
     def run(self):
-        # 呼叫你寫好的爬蟲 function
-        ai_text, ui_html = get_chip_dynamics(self.sid)
+        # 呼叫更新後的爬蟲 function，傳入現價計算市值
+        ai_text, ui_html = get_chip_dynamics(self.sid, self.current_price)
         self.finished.emit(ai_text, ui_html)
 
 class StockInsightDashboard(QDialog):
@@ -256,7 +315,8 @@ class StockInsightDashboard(QDialog):
         self.init_ui()
 
         # 🚀 視窗 UI 畫完後，立刻在背景啟動爬蟲，不卡頓畫面
-        self.chip_worker = ChipCrawlerWorker(self.sid)
+        current_price = self.get_val('今日收盤價', '現價', 0.0)
+        self.chip_worker = ChipCrawlerWorker(self.sid, current_price)
         self.chip_worker.finished.connect(self._on_chip_data_ready)
         self.chip_worker.start()
 
