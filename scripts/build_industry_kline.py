@@ -150,59 +150,77 @@ def build_one_sector(args):
         if not dfs_to_concat:
             return tag, None
 
-        # ── 1. 合成加權 K 線 ─────────────────────────────────────────────────
+        # ── 1. 合成等權重 K 線 (Equal-Weighted Index，完美解決權值股扭曲問題) ──
         all_dates = pd.DatetimeIndex(sorted(set().union(*[set(df.index) for df in dfs_to_concat])))
-        aligned = []
+
+        pct_open_list, pct_high_list, pct_low_list, pct_close_list, vol_list = [], [], [], [], []
+
         for df in dfs_to_concat:
             df = df[~df.index.duplicated(keep='last')]
             df = df.reindex(all_dates)
+            # 填補空值確保價格連續
             df[['adj_open', 'adj_high', 'adj_low', 'adj_close']] = \
                 df[['adj_open', 'adj_high', 'adj_low', 'adj_close']].ffill()
             df['volume'] = df['volume'].fillna(0)
-            df['shares'] = df['shares'].ffill().bfill()
-            aligned.append(df)
 
-        sector_df = pd.concat(aligned)
-        for col in ['adj_open', 'adj_high', 'adj_low', 'adj_close']:
-            sector_df[f'w_{col}'] = sector_df[col] * sector_df['shares']
+            # 計算以「前一交易日收盤價」為基準的單日漲跌幅
+            prev_close = df['adj_close'].shift(1)
+            # 避免除以 0 產生 inf
+            prev_close = prev_close.replace(0, np.nan)
 
-        daily = sector_df.groupby(sector_df.index).agg(
-            w_adj_open=('w_adj_open', 'sum'),
-            w_adj_high=('w_adj_high', 'sum'),
-            w_adj_low=('w_adj_low', 'sum'),
-            w_adj_close=('w_adj_close', 'sum'),
-            shares=('shares', 'sum'),
-            volume=('volume', 'sum'),
-        )
-        daily = daily[daily['shares'] > 0]
+            pct_open_list.append((df['adj_open'] - prev_close) / prev_close)
+            pct_high_list.append((df['adj_high'] - prev_close) / prev_close)
+            pct_low_list.append((df['adj_low'] - prev_close) / prev_close)
+            pct_close_list.append((df['adj_close'] - prev_close) / prev_close)
+            vol_list.append(df['volume'])
 
-        result_df = pd.DataFrame(index=daily.index)
+        # 計算整個板塊的「平均」單日漲跌幅
+        avg_pct_open = pd.DataFrame(pct_open_list).mean(axis=0).fillna(0)
+        avg_pct_high = pd.DataFrame(pct_high_list).mean(axis=0).fillna(0)
+        avg_pct_low = pd.DataFrame(pct_low_list).mean(axis=0).fillna(0)
+        avg_pct_close = pd.DataFrame(pct_close_list).mean(axis=0).fillna(0)
+        total_vol = pd.DataFrame(vol_list).sum(axis=0).fillna(0)
+
+        # 建立基準指數 (起始點設為 1000 點)
+        base_value = 1000.0
+        idx_close = base_value * (1 + avg_pct_close).cumprod()
+        idx_close.iloc[0] = base_value # 強制第一天收盤為 1000
+
+        # 利用前一天的收盤指數，推算當天的 O, H, L
+        prev_idx_close = idx_close.shift(1).fillna(base_value)
+
+        result_df = pd.DataFrame(index=all_dates)
         result_df.index.name = 'Date'
-        for col in ['open', 'high', 'low', 'close']:
-            val = (daily[f'w_adj_{col}'] / daily['shares']).round(2)
-            result_df[col] = val
-            result_df[f'adj_{col}'] = val
-        result_df['volume'] = daily['volume'].astype(int)
+
+        result_df['open'] = prev_idx_close * (1 + avg_pct_open)
+        result_df['high'] = prev_idx_close * (1 + avg_pct_high)
+        result_df['low'] = prev_idx_close * (1 + avg_pct_low)
+        result_df['close'] = idx_close
+        result_df['volume'] = total_vol.astype(int)
         result_df['dividends'] = 0.0
+
+        # 防呆：將第一天的 O, H, L 設為 1000
+        result_df.iloc[0, result_df.columns.get_loc('open')] = base_value
+        result_df.iloc[0, result_df.columns.get_loc('high')] = base_value
+        result_df.iloc[0, result_df.columns.get_loc('low')] = base_value
+
+        # 同步 adj_ 欄位
+        for col in ['open', 'high', 'low', 'close']:
+            result_df[col] = result_df[col].round(2)
+            result_df[f'adj_{col}'] = result_df[col]
+
         result_df.sort_index(inplace=True)
 
         # ── 2. 等權平均漲幅 (向量化複利) ──────────────────────────────────────
-        valid_sids = [s for s in sids if s in GLOBAL_STOCK_DFS]
-        pct_cols = {sid: GLOBAL_STOCK_DFS[sid]['adj_close'].pct_change(fill_method=None) * 100 for sid in valid_sids}
+        # K 線本身已是等權重，單日漲幅即為 avg_pct_close
+        result_df['Equal_Pct_1d'] = (avg_pct_close * 100).round(4).fillna(0.0)
 
-        if pct_cols:
-            eq_df = pd.DataFrame(pct_cols)
-            result_df['Equal_Pct_1d'] = eq_df.mean(axis=1).reindex(result_df.index).round(4).fillna(0.0)
-            ep = result_df['Equal_Pct_1d'].values
-            log1p = np.log1p(ep / 100.0)
-            roll5 = np.array([np.sum(log1p[max(0, k - 4):k + 1]) for k in range(len(log1p))])
-            # 先算數值並賦值，此時它會自動轉為 Pandas Series
-            result_df['Equal_Pct_5d'] = np.round(np.expm1(roll5) * 100, 4)
-            # 接著再呼叫 Pandas 的 fillna
-            result_df['Equal_Pct_5d'] = result_df['Equal_Pct_5d'].fillna(0.0)
-        else:
-            result_df['Equal_Pct_1d'] = 0.0
-            result_df['Equal_Pct_5d'] = 0.0
+        # 滾動 5 日複利
+        ep = result_df['Equal_Pct_1d'].values
+        log1p = np.log1p(ep / 100.0)
+        roll5 = np.array([np.sum(log1p[max(0, k - 4):k + 1]) for k in range(len(log1p))])
+        result_df['Equal_Pct_5d'] = np.round(np.expm1(roll5) * 100, 4)
+        result_df['Equal_Pct_5d'] = result_df['Equal_Pct_5d'].fillna(0.0)
 
         # ── 3. 全張全域矩陣極速橫向切片 ───────────────────────────────────────
         sector_sids = [s for s in sids if s in GLOBAL_INST_MATRIX.columns]
@@ -212,17 +230,14 @@ def build_one_sector(args):
         else:
             result_df['Legal_Diffusion'] = 0.0
 
-        # 基本面營收擴散率與中位數
         sector_rev_sids = [s for s in sids if s in GLOBAL_REV_MATRIX.columns]
         if sector_rev_sids:
             sub_rev = GLOBAL_REV_MATRIX[sector_rev_sids]
-
             is_growing_mat = np.where(pd.isna(sub_rev), np.nan, np.where(sub_rev > 0, 1, 0))
 
             import warnings
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", category=RuntimeWarning)
-                # 攔截全 NaN 列造成的 Mean of empty slice 警告，不影響底層的高速運算
                 rev_diff_series = pd.Series(np.nanmean(is_growing_mat, axis=1) * 100, index=sub_rev.index)
 
             median_series = sub_rev.median(axis=1, skipna=True)
@@ -249,21 +264,12 @@ def build_one_sector(args):
         result_df.to_parquet(save_path)
         return tag, True
 
-
     except Exception as e:
-
-        # 🔴 破案關鍵：攔截並寫出真實的錯誤堆疊訊息
-
         import traceback
-
         err_msg = traceback.format_exc()
-
         error_log_path = Path(output_dir_str).parent / "sector_error_log.txt"
-
         with open(error_log_path, "a", encoding="utf-8") as f:
-
             f.write(f"❌【{tag}】發生錯誤:\n{err_msg}\n{'-' * 40}\n")
-
         return tag, None
 
 

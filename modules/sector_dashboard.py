@@ -1295,7 +1295,6 @@ class L3ComputeWorker(QThread):
         self.finished.emit()
 
 
-
 class GlobalL3ComputeWorker(QThread):
     """🚀 負責背景掃描與並行計算『全體板塊成分股』L3 評分的執行執行緒"""
     progress_updated = pyqtSignal(int, int, str)
@@ -1315,20 +1314,24 @@ class GlobalL3ComputeWorker(QThread):
         original_print = builtins.print
         builtins.print = lambda *args, **kwargs: None
 
+        # ✨ 1. 建立集合，負責收集全市場的黑馬股代號
+        dark_horse_sids = set()
+
         try:
             total = len(self.tasks)
             for idx, row in enumerate(self.tasks):
                 if self._is_cancelled:
                     break
 
-                # 💡 這裡完美相容前面修改的 to_dict('records') 結構
                 row_dict = row._asdict() if hasattr(row, '_asdict') else row
                 sid = str(row_dict.get('股票代號', ''))
                 rs_val = row_dict.get('RS強度', 0)
                 tags = str(row_dict.get('強勢特徵標籤', ''))
                 name_str = str(row_dict.get('股票名稱', ''))
 
-                self.progress_updated.emit(idx, total, f"{sid} {name_str}")
+                # ✨ 2. 降頻渲染：每 5 檔股票才更新一次 UI，防止訊號風暴癱瘓主執行緒
+                if idx % 5 == 0 or idx == total - 1:
+                    self.progress_updated.emit(idx, total, f"{sid} {name_str}")
 
                 fundamental_data = {}
                 json_path = self.project_root / "data" / "fundamentals" / f"{sid}.json"
@@ -1355,9 +1358,7 @@ class GlobalL3ComputeWorker(QThread):
                     except:
                         pass
 
-                l3_score_val = 0.0
                 is_dark_horse = False
-                tooltip_html = ""
 
                 if not kline_df.empty and fundamental_data:
                     boll_width = row_dict.get('布林寬度(%)', 50.0)
@@ -1370,95 +1371,27 @@ class GlobalL3ComputeWorker(QThread):
                         pass
 
                     try:
-                        # 1. 確保基本數值絕對不是 None
                         rs_float = float(rs_val) if rs_val else 0.0
                         boll_float = float(boll_width) if boll_width else 50.0
 
+                        from utils.scoring.l3_score import L3Scorer
                         l3_result = L3Scorer.calculate_score(rs_float, fundamental_data, kline_df, tags, boll_float)
-                        l3_score_val = l3_result.get('L3Score', 0.0)
                         is_dark_horse = l3_result.get('is_dark_horse', False)
 
-                        # 2. 終極防呆：確保字典絕對不會是 None，避免 .get() 時發生 NoneType 崩潰
-                        vwap = l3_result.get('vwap_info') or {}
-                        rev = l3_result.get('rev_info') or {}
-                        prof = l3_result.get('prof_info') or {}
-
-                        breakdown_parts = []
-                        if rs_float >= 80:
-                            breakdown_parts.append("🟢 RS技術強勢分 (+30)")
-                        elif rs_float >= 50:
-                            breakdown_parts.append("🟡 RS技術中等分 (+15)")
-
-                        v_status = vwap.get('status') or ''
-                        if "站上" in v_status or "站在" in v_status:
-                            breakdown_parts.append("🟢 法人成本安全分 (+25)")
-
-                        rev_slope = float(rev.get('slope') or 0.0)
-                        if rev_slope > 10:
-                            breakdown_parts.append(f"🟢 營收動能噴發分 ({rev_slope:+.1f}%) (+25)")
-                        elif rev_slope > 0:
-                            breakdown_parts.append(f"🟡 營收穩定成長分 ({rev_slope:+.1f}%) (+15)")
-
-                        op_qoq = float(prof.get('qoq') or 0.0)
-                        if op_qoq > 20:
-                            breakdown_parts.append(f"🟢 獲利加速品質分 ({op_qoq:+.1f}%) (+20)")
-
-                        score_breakdown_html = "<br>".join(breakdown_parts) if breakdown_parts else "基本技術與價量基本分"
-
-                        reasons = []
-                        vwap_bias = float(vwap.get('bias_pct') or 0.0)
+                        # ✨ 3. 如果判定為黑馬特選股，立刻加入集合
                         if is_dark_horse:
-                            if boll_float < 15:
-                                reasons.append(f"⚡ 布林通道極度收斂 ({boll_float:.1f}%) - 蓄勢突破")
-                            if "ilss" in tags.lower() or "主力" in tags.lower():
-                                reasons.append("🐳 主力暗中掃單特徵 (ILSS技術特徵)")
-                            if rs_float >= 85:
-                                reasons.append(f"📈 RS強度高達 {rs_float:.1f} - 超越市場大眾")
-                            if 0 <= vwap_bias <= 5:
-                                reasons.append(f"🛡️ 貼近法人成本安全邊際 (乖離僅 {vwap_bias:.1f}%)")
-                            if not reasons:
-                                reasons.append("✨ 符合『籌碼沉澱 + 營收爆發 + 剛起漲』之黃金交叉")
-                        reasons_html = "<br>".join(reasons) if reasons else "不符合黑馬指標條件"
+                            dark_horse_sids.add(sid)
 
-                        tooltip_html = f"""
-                        <div style='font-family: Arial, sans-serif; font-size: 13px; color: #E0E0E0; line-height: 1.45;'>
-                            <b style='color: #FFD700; font-size: 14px;'>{sid} {name_str}</b> | L3Score: <b style='color: #B388FF;'>{l3_score_val:.1f}</b> {'<span style="color:#FFD700;">★黑馬特選股</span>' if is_dark_horse else ''}<br>
-                            <hr style='background-color: #555; height: 1px; border: none; margin: 5px 0;'>
-
-                            <b style='color: #00FFCC;'>📊 【L3Score 得分細項拆解】:</b><br>
-                            <span style='color: #FFFFFF;'>{score_breakdown_html}</span><br>
-                            <br>
-                            <b style='color: #FFD700;'>🎯 【黑馬選股判定依據】:</b><br>
-                            <span style='color: #FFB74D; font-weight: bold;'>{reasons_html}</span><br>
-                            <hr style='background-color: #555; height: 1px; border: none; margin: 5px 0;'>
-
-                            <b style='color: #00E5FF;'>[法人成本]</b> {v_status}<br>
-                            均價: {vwap.get('vwap', 0)} | 乖離率: <b style='color: #FF5252;'>{vwap_bias}%</b><br>
-                            <b style='color: #FF9800;'>[營收動能]</b> {rev.get('status', '')} (斜率: {rev_slope}%)<br>
-                            <b style='color: #69F0AE;'>[獲利純度]</b> {prof.get('status', '')} (營業利益季增: {op_qoq}%)<br>
-                        </div>
-                        """
                     except Exception as e:
-                        # 原本盲目吞掉錯誤的 except: pass 改為列印錯誤，方便日後維護
-                        print(f"❌ {sid} Tooltip 產生失敗: {e}")
+                        print(f"❌ {sid} 運算失敗: {e}")
                         pass
 
-                res_dict = {
-                    "sid": sid, "name": name_str,
-                    "close": row_dict.get('今日收盤價', 0),
-                    "pct_1d": row_dict.get('今日漲幅(%)', 0),
-                    "pct_5d": row_dict.get('5日漲幅(%)', 0),
-                    "legal_5d": row_dict.get('法人5日增(%)', 0),
-                    "margin_5d": row_dict.get('融資5日增(%)', 0),
-                    "rs": rs_val, "tags": tags,
-                    "d30w": row_dict.get('30W距離', 99),
-                    "dst": row_dict.get('ST距離', 99),
-                    "score": l3_score_val, "is_horse": is_dark_horse,
-                    "tooltip": tooltip_html
-                }
-                self.stock_computed.emit(res_dict)
+                # ✨ 4. 這裡原本錯誤呼叫了未定義的 stock_computed，已被徹底拔除。
 
-            self.progress_updated.emit(total, total, "計算完成")
+            # ✨ 5. 掃描結束後，將收集到的黑馬名單發送回主 UI
+            if not self._is_cancelled:
+                self.finished_computation.emit(dark_horse_sids)
+
         finally:
             builtins.print = original_print
 

@@ -1,31 +1,41 @@
-import sys
-from pathlib import Path
+import requests
+from bs4 import BeautifulSoup
+import os
+from dotenv import load_dotenv
 
-# 設定路徑
-current_file = Path(__file__).resolve()
-project_root = current_file.parent
-sys.path.insert(0, str(project_root))
+load_dotenv()
 
-from utils.etf.modules.parsers.ezmoney_parser import EZMoneyParser
 
-print("=== 開始強制修復本機 CSV ===")
+def debug_print_tables(sid="6197"):
+    url = f"https://norway.twsthr.info/StockHolders.aspx?stock={sid}"
+    headers = {'User-Agent': 'Mozilla/5.0'}
 
-# 1. 重建 00981A (會把 raw 裡面幾十個 excel 重新合併成正確的 CSV)
-print("\n[1] 正在重建 00981A...")
-p1 = EZMoneyParser(
-    raw_dir="data/raw/ezmoney/00981A",
-    clean_dir="data/clean/ezmoney",
-    etf_code="00981A"
-)
-p1.parse_all_files()
+    http_proxy = os.getenv("HTTP_PROXY", os.getenv("http_proxy"))
+    https_proxy = os.getenv("HTTPS_PROXY", os.getenv("https_proxy"))
+    proxies = {}
+    if http_proxy: proxies["http"] = http_proxy
+    if https_proxy: proxies["https"] = https_proxy
 
-# 2. 重建 00403A
-print("\n[2] 正在重建 00403A...")
-p2 = EZMoneyParser(
-    raw_dir="data/raw/ezmoney/00403A",
-    clean_dir="data/clean/ezmoney",
-    etf_code="00403A"
-)
-p2.parse_all_files()
+    print(f"🔍 抓取網頁中: {url}")
+    try:
+        res = requests.get(url, headers=headers, proxies=proxies, timeout=8)
+        soup = BeautifulSoup(res.text, 'html.parser')
 
-print("\n🎉 修復完成！請重新啟動你的 ETF UI 介面。")
+        tables = soup.find_all('table')
+        print(f"✅ 共找到 {len(tables)} 個 table，印出前幾列供比對結構：\n")
+
+        for i, tbl in enumerate(tables):
+            print(f"--- Table [{i}] ---")
+            rows = tbl.find_all('tr')
+            # 每個 table 只印前 4 列來找特徵
+            for j, tr in enumerate(rows[:4]):
+                cells = [c.get_text(strip=True).replace('\xa0', '') for c in tr.find_all(['td', 'th'])]
+                print(f"  Row {j}: {cells}")
+            print("-" * 30 + "\n")
+
+    except Exception as e:
+        print(f"❌ 錯誤: {e}")
+
+
+if __name__ == "__main__":
+    debug_print_tables("6197")

@@ -447,18 +447,14 @@ class ActiveETFModule(QWidget):
         div.setStyleSheet(f"background: {BORDER};")
         rl.addWidget(div)
 
-        self.fig_change = Figure(facecolor=BG_PANEL)
-        self.canvas_change = FigureCanvas(self.fig_change)
-        self.canvas_change.setStyleSheet(f"background:{BG_PANEL};")
-        self.canvas_change.mpl_connect('motion_notify_event', self.on_bar_hover)
-        self.canvas_change.mpl_connect('button_press_event', self.on_bar_click)
+        self.change_panel = self._build_change_container()
 
         self.fig_trend = Figure(facecolor=BG_PANEL)
         self.canvas_trend = FigureCanvas(self.fig_trend)
         self.canvas_trend.setStyleSheet(f"background:{BG_PANEL};")
         self.canvas_trend.mpl_connect('motion_notify_event', self.on_line_hover)
 
-        rl.addWidget(self.canvas_change, stretch=4)
+        rl.addWidget(self.change_panel, stretch=4)
         rl.addWidget(self.canvas_trend,  stretch=6)
 
         sp.addWidget(left); sp.addWidget(right)
@@ -1544,8 +1540,9 @@ class ActiveETFModule(QWidget):
             etf_id, provider = keys[index], self.mapping[keys[index]][0]
             self.lbl_etf_info.setText(self.mapping[keys[index]][1])
             self.stock_table.setRowCount(0)
-            self.fig_change.clear(); self.canvas_change.draw()
-            self.fig_trend.clear(); self.canvas_trend.draw()
+            self._clear_change_list()  # ← 替換舊的 fig_change.clear()
+            self.fig_trend.clear();
+            self.canvas_trend.draw()
             self.worker = ETFDataWorker(etf_id, provider)
             self.worker.data_fetched.connect(self.process_data)
             self.worker.start()
@@ -1582,6 +1579,37 @@ class ActiveETFModule(QWidget):
             top12 = (self.merged_data[self.merged_data['share_diff'].abs() > 0]
                      .sort_values('share_diff', key=abs, ascending=False)
                      .head(12).sort_values('pct_change'))
+
+            # 正式加入連買/連賣狀態判斷邏輯
+            status_list = []
+            for _, r in top12.iterrows():
+                sid = r['stock_id']
+                hist = self.current_df[self.current_df['stock_id'] == sid].sort_values('date', ascending=False)
+                diffs = hist['shares'].diff(-1)
+
+                status = ""
+                consec_days = 0
+
+                if r['shares_prev'] == 0 and r['shares_now'] > 0:
+                    status = "★新買入"
+                elif r['shares_prev'] > 0 and r['shares_now'] == 0:
+                    status = "●清空"
+                elif r['share_diff'] > 0:
+                    for d in diffs:
+                        if pd.isna(d) or d <= 0: break
+                        consec_days += 1
+                    status = f"連買{consec_days}日" if consec_days > 1 else ""
+                elif r['share_diff'] < 0:
+                    for d in diffs:
+                        if pd.isna(d) or d >= 0: break
+                        consec_days += 1
+                    status = f"連賣{consec_days}日" if consec_days > 1 else ""
+
+                status_list.append(status)
+
+            top12 = top12.copy()
+            top12['consec_status'] = status_list
+
             self.plot_changes(top12, self.latest_date)
         else:
             self.plot_changes(pd.DataFrame(), self.latest_date)
@@ -1618,31 +1646,268 @@ class ActiveETFModule(QWidget):
             self.stock_table.setItem(i, 3, titem(f"{int(sh/1000) if pd.notna(sh) else 0:,}{ar}", sc,
                                                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, bool(ar)))
 
-    def plot_changes(self, df, dt):
-        self.fig_change.clear()
-        ax = self.fig_change.add_subplot(111)
-        ax.set_facecolor(BG_CARD)
-        self.fig_change.patch.set_facecolor(BG_PANEL)
-        self.bar_data = df.reset_index(drop=True)
-        if self.bar_data.empty:
-            ax.text(0.5, 0.5, "期間無明顯持股變動", ha='center', va='center',
-                    color=TEXT_DIM, fontsize=13); ax.axis('off')
-            self.canvas_change.draw(); return
+    def _build_change_container(self):
+        """建立資金流向面板的外框容器（含標題列 + 可捲動的列清單）"""
+        outer = QFrame()
+        outer.setStyleSheet(f"""
+            QFrame {{
+                background: {BG_CARD};
+                border-radius: 8px;
+                border: 1px solid {BORDER};
+            }}
+        """)
+        vlay = QVBoxLayout(outer)
+        vlay.setContentsMargins(0, 0, 0, 0)
+        vlay.setSpacing(0)
 
-        y = np.arange(len(self.bar_data))
-        ax.barh(y, self.bar_data['pct_change'],
-                color=[RED if x >= 0 else GREEN for x in self.bar_data['share_diff']],
-                height=0.55, alpha=0.85, edgecolor='none')
-        ax.set_yticks(y)
-        ax.set_yticklabels(self.bar_data['name'], fontsize=10.5, fontweight='bold', color=TEXT_PRI)
-        ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=100))
-        ax.set_title(f"資金流向  ·  {dt.strftime('%Y-%m-%d')}", color=TEXT_DIM, fontsize=10, loc='left', pad=6)
-        ax.tick_params(colors=TEXT_SEC, labelsize=9)
-        ax.grid(axis='x', color=BORDER, linestyle=':', alpha=0.5)
-        ax.axvline(0, color=BORDER, linewidth=1)
-        for s in ax.spines.values(): s.set_visible(False)
-        self.fig_change.tight_layout(pad=1.2)
-        self.canvas_change.draw()
+        # ── 標題列 ──────────────────────────────
+        header = QWidget()
+        header.setFixedHeight(34)
+        header.setStyleSheet(f"background: transparent; border-bottom: 1px solid {BORDER};")
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(14, 0, 14, 0)
+
+        self._change_title_lbl = QLabel("資金流向")
+        self._change_title_lbl.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 11px; letter-spacing: 1px; background: transparent; border: none;")
+
+        leg_row = QWidget()
+        leg_row.setStyleSheet("background: transparent; border: none;")
+        ll = QHBoxLayout(leg_row)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.setSpacing(12)
+        for color, label in [(RED, "加碼"), (GREEN, "減碼"), (ACCENT, "清空")]:
+            dot = QLabel("●")
+            dot.setStyleSheet(f"color: {color}; font-size: 10px; background: transparent; border: none;")
+            lbl = QLabel(label)
+            lbl.setStyleSheet(f"color: {TEXT_SEC}; font-size: 11px; background: transparent; border: none;")
+            ll.addWidget(dot)
+            ll.addWidget(lbl)
+
+        hl.addWidget(self._change_title_lbl)
+        hl.addStretch()
+        hl.addWidget(leg_row)
+        vlay.addWidget(header)
+
+        # ── 捲動區 ─────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollBar:vertical {{
+                background: {BG_PANEL}; width: 4px; border-radius: 2px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {BORDER}; border-radius: 2px; min-height: 20px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        """)
+
+        self._change_list_widget = QWidget()
+        self._change_list_widget.setStyleSheet("background: transparent; border: none;")
+        self._change_list_layout = QVBoxLayout(self._change_list_widget)
+        self._change_list_layout.setContentsMargins(8, 6, 8, 6)
+        self._change_list_layout.setSpacing(4)
+        self._change_list_layout.addStretch()
+
+        scroll.setWidget(self._change_list_widget)
+        vlay.addWidget(scroll)
+
+        return outer
+
+    def _clear_change_list(self):
+        """清空列清單（保留最後的 stretch）"""
+        lay = self._change_list_layout
+        while lay.count() > 1:
+            item = lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _make_direction_bar(self, pct: float, direction: str) -> QWidget:
+        """雙向進度條，固定 120px 寬，不 stretch。"""
+        container = QWidget()
+        container.setFixedSize(120, 8)
+        container.setStyleSheet("background: transparent; border: none;")
+
+        pct_clamped = min(abs(pct), 100.0)
+        if direction == 'buy':
+            bar_color = QColor(RED)
+        elif direction == 'sell':
+            bar_color = QColor(GREEN)
+        else:
+            bar_color = QColor(ACCENT)
+
+        def paint(event, widget=container, c=bar_color, p=pct_clamped, d=direction):
+            from PyQt6.QtGui import QPainter
+            painter = QPainter(widget)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            w = widget.width()
+            h = widget.height()
+            mid = w // 2
+            painter.setBrush(QColor(255, 255, 255, 12))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(0, 0, w, h, 3, 3)
+            fill_w = max(int((p / 100.0) * (mid - 2)), 3)
+            painter.setBrush(c)
+            if d == 'buy':
+                painter.drawRoundedRect(mid - fill_w, 0, fill_w, h, 3, 3)
+            else:
+                painter.drawRoundedRect(mid + 2, 0, fill_w, h, 3, 3)
+            painter.setBrush(QColor(255, 255, 255, 35))
+            painter.drawRect(mid - 1, 0, 2, h)
+            painter.end()
+
+        container.paintEvent = paint
+        return container
+
+    def _make_change_row(self, row_data: dict) -> QWidget:
+        """單列資金流向卡片，列高 48px，字體放大。"""
+        share_diff    = row_data.get('share_diff', 0)
+        pct_change    = row_data.get('pct_change', 0.0)
+        consec_status = str(row_data.get('consec_status', '') or '')
+        action_type   = str(row_data.get('action_type',   '') or '')
+        name          = str(row_data.get('name', ''))
+        stock_id      = str(row_data.get('stock_id', ''))
+        shares_prev   = row_data.get('shares_prev', 0)
+        shares_now    = row_data.get('shares_now', 0)
+
+        is_clear = ('清空' in action_type or (shares_now == 0 and shares_prev > 0))
+        if is_clear:
+            direction, pill_color = 'clear', ACCENT
+            row_bg, border_l = "rgba(0,212,255,0.07)", ACCENT
+        elif share_diff >= 0:
+            direction, pill_color = 'buy', RED
+            row_bg, border_l = "rgba(255,61,87,0.07)", RED
+        else:
+            direction, pill_color = 'sell', GREEN
+            row_bg, border_l = "rgba(0,230,118,0.06)", GREEN
+
+        pill_text = consec_status or action_type or (
+            "加碼" if direction == 'buy' else ("清空" if direction == 'clear' else "減碼"))
+
+        row_widget = QWidget()
+        row_widget.setFixedHeight(48)
+        row_widget.setCursor(Qt.CursorShape.PointingHandCursor)
+        row_widget.setStyleSheet(f"""
+            QWidget {{
+                background: {row_bg};
+                border-radius: 6px;
+                border-left: 3px solid {border_l};
+            }}
+            QWidget:hover {{ background: rgba(255,255,255,0.05); }}
+        """)
+
+        lay = QHBoxLayout(row_widget)
+        lay.setContentsMargins(10, 0, 12, 0)
+        lay.setSpacing(10)
+
+        pill = QLabel(pill_text)
+        pill.setFixedWidth(76)
+        pill.setFixedHeight(24)
+        pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pill.setStyleSheet(f"""
+            QLabel {{
+                color: {pill_color};
+                background: transparent;
+                border: 1px solid {pill_color};
+                border-radius: 12px;
+                font-size: 12px;
+                font-weight: bold;
+                padding: 0 4px;
+            }}
+        """)
+
+        name_lbl = QLabel(name)
+        name_lbl.setFixedWidth(60)
+        name_lbl.setStyleSheet(f"""
+            QLabel {{
+                color: {TEXT_PRI};
+                font-size: 14px;
+                font-weight: bold;
+                background: transparent;
+                border: none;
+            }}
+        """)
+
+        bar = self._make_direction_bar(abs(pct_change), direction)
+
+        pct_str = "−100%" if is_clear else f"{'+'if share_diff>=0 else ''}{pct_change:.1f}%"
+        pct_lbl = QLabel(pct_str)
+        pct_lbl.setFixedWidth(58)
+        pct_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        pct_lbl.setStyleSheet(f"""
+            QLabel {{
+                color: {pill_color};
+                font-size: 13px;
+                font-weight: bold;
+                background: transparent;
+                border: none;
+            }}
+        """)
+
+        shares_lbl = QLabel(f"{int(shares_prev/1000):,} → {int(shares_now/1000):,} 張")
+        shares_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        shares_lbl.setStyleSheet(f"""
+            QLabel {{
+                color: {TEXT_SEC};
+                font-size: 12px;
+                background: transparent;
+                border: none;
+            }}
+        """)
+
+        lay.addWidget(pill)
+        lay.addWidget(name_lbl)
+        lay.addWidget(bar)
+        lay.addWidget(pct_lbl)
+        lay.addWidget(shares_lbl, stretch=1)
+
+        def on_click(_, sid=stock_id, nm=name):
+            for i in range(self.stock_table.rowCount()):
+                if self.stock_table.item(i, 0) and self.stock_table.item(i, 0).text() == sid:
+                    self.stock_table.selectRow(i)
+                    break
+            self.plot_trend(sid, nm, self.get_market_suffix(sid))
+            dc = RED if share_diff >= 0 else GREEN
+            self.info_label.setText(
+                f"<span style='color:{TEXT_PRI};font-weight:bold;'>{nm}</span>"
+                f"<span style='color:{TEXT_DIM};'> | </span>"
+                f"<span style='color:{TEXT_SEC};'>{int(shares_prev/1000):,} → {int(shares_now/1000):,} 張</span>"
+                f"<span style='color:{TEXT_DIM};'> | </span>"
+                f"<span style='color:{dc};font-weight:bold;'>"
+                f"{action_type or ''} {int(share_diff/1000):+,} ({pct_change:+.1f}%)</span>")
+
+        row_widget.mousePressEvent = on_click
+        return row_widget
+
+    def plot_changes(self, df, dt):
+        """
+        【完整替換原版 plot_changes】
+        改用 PyQt6 原生 Widget 列，告別 matplotlib ax.text() 對齊問題。
+        """
+        # 更新標題日期
+        self._change_title_lbl.setText(
+            f"資金流向  ·  {dt.strftime('%Y-%m-%d')}" if dt else "資金流向")
+
+        # 清空舊列
+        self._clear_change_list()
+        self.bar_data = df.reset_index(drop=True) if not df.empty else df
+
+        lay = self._change_list_layout
+
+        if df.empty:
+            empty_lbl = QLabel("期間無明顯持股變動")
+            empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_lbl.setStyleSheet(
+                f"color: {TEXT_DIM}; font-size: 13px; background: transparent; border: none;")
+            lay.insertWidget(0, empty_lbl)
+            return
+
+        for _, row in df.iterrows():
+            row_widget = self._make_change_row(row.to_dict())
+            lay.insertWidget(lay.count() - 1, row_widget)
 
     def plot_trend(self, sid, snm, mkt="TW"):
         if self.current_df is None: return
@@ -1738,31 +2003,6 @@ class ActiveETFModule(QWidget):
                    loc='upper left', frameon=False, labelcolor=TEXT_PRI, fontsize=9)
         self.fig_trend.tight_layout(pad=1.2)
         self.canvas_trend.draw()
-
-    def on_bar_click(self, e):
-        if not e.inaxes or self.bar_data is None: return
-        if not self.fig_change.axes: return
-        if e.inaxes != self.fig_change.axes[0]: return
-        y = int(round(e.ydata))
-        if 0 <= y < len(self.bar_data):
-            sid = str(self.bar_data.iloc[y]['stock_id'])
-            for i in range(self.stock_table.rowCount()):
-                if self.stock_table.item(i, 0) and self.stock_table.item(i, 0).text() == sid:
-                    self.stock_table.selectRow(i); break
-            self.plot_trend(sid, str(self.bar_data.iloc[y]['name']), self.get_market_suffix(sid))
-
-    def on_bar_hover(self, e):
-        if not e.inaxes or self.bar_data is None: return
-        y = int(round(e.ydata))
-        if 0 <= y < len(self.bar_data) and abs(e.ydata - y) < 0.4:
-            r = self.bar_data.iloc[y]
-            dc = RED if r['share_diff'] >= 0 else GREEN
-            self.info_label.setText(
-                f"<span style='color:{TEXT_PRI};font-weight:bold;'>{r['name']}</span>"
-                f"<span style='color:{TEXT_DIM};'> | </span>"
-                f"<span style='color:{TEXT_SEC};'>{int(r['shares_prev']/1000)}→{int(r['shares_now']/1000)} 張</span>"
-                f"<span style='color:{TEXT_DIM};'> | </span>"
-                f"<span style='color:{dc};font-weight:bold;'>{r['action_type'] or ''} {int(r['share_diff']/1000):+,} ({r['pct_change']:+.1f}%)</span>")
 
     def on_line_hover(self, e):
         if not e.inaxes or self.line_data is None: return
